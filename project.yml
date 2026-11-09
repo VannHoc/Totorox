@@ -1,4 +1,4 @@
-name: Tororox
+name: Totorox
 options:
   bundleIdPrefix: com.apple.mobile
   deploymentTarget:
@@ -11,7 +11,7 @@ settings:
     GCC_C_LANGUAGE_STANDARD: gnu17
     CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
 targets:
-  Tororox:
+  Totorox:
     type: application
     platform: iOS
     deploymentTarget: "16.0"
@@ -19,7 +19,7 @@ targets:
       - path: Tororox
     settings:
       base:
-        PRODUCT_NAME: Tororox
+        PRODUCT_NAME: Totorox
         PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.MobileHouseArrest
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -51,12 +51,12 @@ targets:
     sources:
       - path: TororoxTests
     dependencies:
-      - target: Tororox
+      - target: Totorox
     settings:
       base:
         PRODUCT_NAME: TororoxTests
         PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.TororoxTests
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tororox.app/Tororox"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox"
         BUNDLE_LOADER: "$(TEST_HOST)"
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/Tororox"
@@ -64,10 +64,10 @@ targets:
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS: "-lz"
 schemes:
-  Tororox:
+  Totorox:
     build:
       targets:
-        Tororox: all
+        Totorox: all
     run:
       config: Debug
     test:
@@ -79,7 +79,7 @@ schemes:
   TororoxTests:
     build:
       targets:
-        Tororox: all
+        Totorox: all
         TororoxTests: all
     test:
       config: Debug

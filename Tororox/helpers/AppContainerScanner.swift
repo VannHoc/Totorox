@@ -182,150 +182,130 @@ final class AppContainerScanner: ObservableObject {
         return cacheByBundleID[bundleID]
     }
     
-    /// Scans all application containers via LaunchServices, MCM, and Filesystem
+    /// Scans all application containers via Filesystem metadata and LaunchServices
     func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
         if !forceRefresh && hasScanned && !apps.isEmpty {
             return apps
         }
         
-        isLoading = true
-        statusMessage = "Đang quét ứng dụng..."
+        await MainActor.run {
+            self.isLoading = true
+            self.statusMessage = "Đang quét danh sách ứng dụng..."
+        }
         
         let scanned = await Task.detached(priority: .userInitiated) { () -> [AppContainerInfo] in
             var results: [String: AppContainerInfo] = [:]
             
-            // 0. Build comprehensive UUID -> Bundle ID map from system
-            let uuidMap = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+            // 1. PRIMARY SOURCE: Scan /var/mobile/Containers/Data/Application directly
+            let roots = [
+                "/var/mobile/Containers/Data/Application",
+                "/private/var/mobile/Containers/Data/Application"
+            ]
             
-            // 1. Primary Source: LaunchServices & MobileInstallation
+            for root in roots {
+                let dirNames = ContainerStore.enumerateDirectoryNames(path: root)
+                for dirName in dirNames {
+                    guard UUID(uuidString: dirName) != nil else { continue }
+                    let dirPath = (root as NSString).appendingPathComponent(dirName)
+                    
+                    guard let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
+                          !meta.bundleID.isEmpty else {
+                        continue
+                    }
+                    
+                    let bundleID = meta.bundleID
+                    if results[bundleID] != nil { continue }
+                    
+                    // Query LSApplicationProxy for localizedName & icon
+                    let proxyInfo = appInfoForBundleID(bundleID) as? [String: Any] ?? [:]
+                    let lsName = proxyInfo["name"] as? String
+                    let resolvedName: String
+                    if let lsName = lsName, !lsName.isEmpty, lsName != bundleID {
+                        resolvedName = lsName
+                    } else if !meta.displayName.isEmpty {
+                        resolvedName = meta.displayName
+                    } else {
+                        resolvedName = bundleID
+                    }
+                    
+                    let icon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bundleID)
+                    let bPath = proxyInfo["bundlePath"] as? String
+                    
+                    let app = AppContainerInfo(
+                        appName: resolvedName,
+                        bundleID: bundleID,
+                        udid: dirName,
+                        dataPath: dirPath,
+                        bundlePath: bPath,
+                        appIcon: icon
+                    )
+                    results[bundleID] = app
+                }
+            }
+            
+            // 2. SUPPLEMENTARY SOURCE: Add any LaunchServices apps with containers not yet found
             let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
             for (bundleID, info) in lsInfo {
-                let name = info["name"] as? String ?? bundleID
+                if results[bundleID] != nil { continue }
                 var dataPath = info["container"] as? String ?? ""
-                let bundlePath = info["bundlePath"] as? String
-                let icon = info["icon"] as? UIImage ?? iconForBundleID(bundleID)
-                
-                // If container is missing from LSApplicationProxy, query MCM Class 2
                 if dataPath.isEmpty {
                     var lookupError: NSString?
                     if let mcmPath = MCMContainerPathForIdentifier(2, bundleID, false, &lookupError) ?? MCMActivateContainerPath(2, bundleID, false, &lookupError) {
                         dataPath = mcmPath
                     }
                 }
-                
                 guard !dataPath.isEmpty else { continue }
                 let udid = (dataPath as NSString).lastPathComponent
+                let name = info["name"] as? String ?? bundleID
+                let icon = info["icon"] as? UIImage ?? iconForBundleID(bundleID)
+                let bPath = info["bundlePath"] as? String
                 
-                let app = AppContainerInfo(
+                results[bundleID] = AppContainerInfo(
                     appName: name,
                     bundleID: bundleID,
                     udid: udid,
                     dataPath: dataPath,
-                    bundlePath: bundlePath,
+                    bundlePath: bPath,
                     appIcon: icon
                 )
-                results[bundleID] = app
             }
             
-            // 2. Secondary Source: Filesystem scan of /var/mobile/Containers/Data/Application
-            let roots = [
-                "/private/var/mobile/Containers/Data/Application",
-                "/var/mobile/Containers/Data/Application"
-            ]
-            
-            for root in roots {
-                let handle = ContainerStore.grantContainerAccess(root)
-                defer {
-                    if handle >= 0 { bad_query_release(handle) }
-                }
-                
-                let entries = ContainerStore.enumerateDirectories(path: root)
-                for dir in entries {
-                    let udid = (dir as NSString).lastPathComponent
-                    guard UUID(uuidString: udid) != nil else { continue }
-                    
-                    // Check if already resolved
-                    let alreadyFound = results.values.contains { $0.udid.caseInsensitiveCompare(udid) == .orderedSame }
-                    if alreadyFound { continue }
-                    
-                    var bundleID: String = ""
-                    var displayName: String = ""
-                    
-                    // A: Check UUID map
-                    if let mappedBid = uuidMap[udid.uppercased()] ?? uuidMap[udid.lowercased()] ?? uuidMap[udid] {
-                        bundleID = mappedBid
-                    }
-                    
-                    // B: Check metadata plist
-                    if bundleID.isEmpty {
-                        let metadataPath = (dir as NSString).appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
-                        if let meta = ContainerStore.readContainerMetadata(containerPath: dir), !meta.bundleID.isEmpty {
-                            bundleID = meta.bundleID
-                            displayName = meta.displayName
-                        } else if let data = try? Data(contentsOf: URL(fileURLWithPath: metadataPath)),
-                                  let plist = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
-                            bundleID = plist["MCMMetadataIdentifier"] as? String ?? ""
-                            if let info = plist["MCMMetadataInfo"] as? [String: Any] {
-                                displayName = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? ""
-                            }
-                        }
-                    }
-                    
-                    if !bundleID.isEmpty {
-                        let appProxyInfo = appInfoForBundleID(bundleID) as? [String: Any] ?? [:]
-                        let resolvedName = (appProxyInfo["name"] as? String) ?? (!displayName.isEmpty ? displayName : bundleID)
-                        let icon = (appProxyInfo["icon"] as? UIImage) ?? iconForBundleID(bundleID)
-                        let bundlePath = appProxyInfo["bundlePath"] as? String
-                        
-                        let app = AppContainerInfo(
-                            appName: resolvedName,
-                            bundleID: bundleID,
-                            udid: udid,
-                            dataPath: dir,
-                            bundlePath: bundlePath,
-                            appIcon: icon
-                        )
-                        results[bundleID] = app
-                    }
-                }
-            }
-            
-            // Sort by app name alphabetically (User apps first)
+            // Sort: non-system (user) apps first, then alphabetical by appName
             let sorted = Array(results.values).sorted { a, b in
                 let aIsSystem = a.bundleID.hasPrefix("com.apple.")
                 let bIsSystem = b.bundleID.hasPrefix("com.apple.")
                 if aIsSystem != bIsSystem {
-                    return !aIsSystem // Non-system user apps first
+                    return !aIsSystem
                 }
                 return a.appName.localizedCaseInsensitiveCompare(b.appName) == .orderedAscending
             }
             return sorted
         }.value
         
-        // Cache updates on MainActor
-        self.apps = scanned
-        for app in scanned {
-            cacheByBundleID[app.bundleID] = app
-            cacheByUDID[app.udid.uppercased()] = app
-            cacheByUDID[app.udid.lowercased()] = app
-            cacheByUDID[app.udid] = app
-            
-            // Sync with ContainerMetadataCache
-            let meta = AppContainerMetadata(
-                uuid: app.udid,
-                containerPath: app.dataPath,
-                bundleID: app.bundleID,
-                appName: app.appName,
-                icon: app.appIcon,
-                isUserApp: !app.bundleID.hasPrefix("com.apple."),
-                modificationDate: nil
-            )
-            ContainerMetadataCache.shared.store(app: meta)
+        await MainActor.run {
+            self.apps = scanned
+            for app in scanned {
+                self.cacheByBundleID[app.bundleID] = app
+                self.cacheByUDID[app.udid.uppercased()] = app
+                self.cacheByUDID[app.udid.lowercased()] = app
+                self.cacheByUDID[app.udid] = app
+                
+                // Sync with ContainerMetadataCache
+                let meta = AppContainerMetadata(
+                    uuid: app.udid,
+                    containerPath: app.dataPath,
+                    bundleID: app.bundleID,
+                    appName: app.appName,
+                    icon: app.appIcon,
+                    isUserApp: !app.bundleID.hasPrefix("com.apple."),
+                    modificationDate: nil
+                )
+                ContainerMetadataCache.shared.store(app: meta)
+            }
+            self.hasScanned = true
+            self.isLoading = false
+            self.statusMessage = "Đã tìm thấy \(scanned.count) ứng dụng."
         }
-        
-        hasScanned = true
-        isLoading = false
-        statusMessage = "Đã tìm thấy \(scanned.count) ứng dụng."
         return scanned
     }
     

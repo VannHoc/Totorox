@@ -381,10 +381,16 @@ struct FolderExplorerView: View {
 
                 // Info: Line 1 (Name in com.... format) & Line 2 (Metadata)
                 VStack(alignment: .leading, spacing: 3) {
-                    // Line 1: Primary Title (Bundle ID for app containers, format com....)
+                    // Line 1: Primary Title (appName if available, else bundleID, else UUID name)
                     let titleText: String = {
                         if entry.isAppContainer {
-                            return entry.bundleID ?? entry.name
+                            if let appName = entry.appName, !appName.isEmpty && appName != entry.bundleID {
+                                return appName
+                            }
+                            if let bundleID = entry.bundleID, !bundleID.isEmpty {
+                                return bundleID
+                            }
+                            return entry.name
                         }
                         return entry.name
                     }()
@@ -398,25 +404,29 @@ struct FolderExplorerView: View {
 
                     if entry.isAppContainer {
                         VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                if let appName = entry.appName, appName != entry.bundleID && appName != entry.name {
-                                    Text(appName)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                        .lineLimit(1)
-                                }
+                            // Line 2: Bundle ID (if Line 1 is appName)
+                            if let appName = entry.appName, let bundleID = entry.bundleID,
+                               !appName.isEmpty && !bundleID.isEmpty && appName != bundleID {
+                                Text(bundleID)
+                                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .lineLimit(1)
+                            }
+                            
+                            // Line 3: UDID: <UUID> và Data: <Đường dẫn>
+                            HStack(spacing: 8) {
                                 if let shortId = entry.shortUUID {
                                     Text("UDID: \(shortId)")
                                         .font(.system(size: 9.5, design: .monospaced))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                         .lineLimit(1)
                                 }
+                                Text("Data: \(entry.path)")
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                             }
-                            Text("Data: \(entry.path)")
-                                .font(.system(size: 9.5, design: .monospaced))
-                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
                         }
                     } else {
                         // Regular metadata HStack
@@ -711,15 +721,6 @@ struct FolderExplorerView: View {
         }
 
         Task.detached(priority: .userInitiated) {
-            if path.contains("Containers/Data/Application") {
-                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
-            }
-
-            let handle = ContainerStore.grantContainerAccess(path)
-            defer {
-                if handle >= 0 { bad_query_release(handle) }
-            }
-
             let loaded = ContainerStore.listFiles(at: path)
             ContainerMetadataCache.shared.storeList(loaded, for: path)
 

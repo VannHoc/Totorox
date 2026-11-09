@@ -1,4 +1,4 @@
-name: Tororox CI - Test & Build Unsigned IPA
+name: Totorox CI - Test & Build Unsigned IPA
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
       - name: Generate Xcode Project from project.yml
         run: |
           xcodegen generate
-          xcodebuild -list -project Tororox.xcodeproj
+          xcodebuild -list -project Totorox.xcodeproj
 
       - name: Run Unit Tests
         run: |
@@ -45,8 +45,8 @@ jobs:
           echo "Selected Destination: $DEST"
           
           xcodebuild test \
-            -project Tororox.xcodeproj \
-            -scheme Tororox \
+            -project Totorox.xcodeproj \
+            -scheme Totorox \
             -destination "$DEST" \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
@@ -56,11 +56,11 @@ jobs:
       - name: Build Application Archive (Unsigned)
         run: |
           xcodebuild archive \
-            -project Tororox.xcodeproj \
-            -scheme Tororox \
+            -project Totorox.xcodeproj \
+            -scheme Totorox \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath build/Tororox.xcarchive \
+            -archivePath build/Totorox.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO
@@ -68,17 +68,17 @@ jobs:
       - name: Package Unsigned IPA
         run: |
           mkdir -p build/ipa/Payload
-          cp -r build/Tororox.xcarchive/Products/Applications/Tororox.app build/ipa/Payload/
+          cp -r build/Totorox.xcarchive/Products/Applications/Totorox.app build/ipa/Payload/
           cd build/ipa
-          zip -r -9 ../../Tororox-1.0-unsigned.ipa Payload
+          zip -r -9 ../../Totorox-1.0-unsigned.ipa Payload
           cd ../..
-          ls -lh Tororox-1.0-unsigned.ipa
+          ls -lh Totorox-1.0-unsigned.ipa
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Tororox-1.0-unsigned-ipa
-          path: Tororox-1.0-unsigned.ipa
+          name: Totorox-1.0-unsigned-ipa
+          path: Totorox-1.0-unsigned.ipa
           if-no-files-found: error
 
       - name: Upload Test Results

@@ -156,6 +156,9 @@ struct OverwriteFileView: View {
                 HStack(spacing: 10) {
                     Button {
                         showInstalledAppsSheet = true
+                        Task {
+                            _ = await scanner.scanAllContainers(forceRefresh: false)
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.triangle.2.circlepath")
@@ -186,6 +189,9 @@ struct OverwriteFileView: View {
                 VStack(spacing: 12) {
                     Button {
                         showInstalledAppsSheet = true
+                        Task {
+                            _ = await scanner.scanAllContainers(forceRefresh: false)
+                        }
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "list.bullet")
@@ -583,12 +589,20 @@ struct OverwriteFileView: View {
                 if filteredApps.isEmpty {
                     VStack(spacing: 12) {
                         Spacer()
-                        Image(systemName: "app.badge.questionmark")
-                            .font(.system(size: 40))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                        Text(scanner.isLoading ? "Đang quét danh sách ứng dụng..." : "Không tìm thấy ứng dụng phù hợp")
-                            .font(.system(size: 14))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        if scanner.isLoading {
+                            ProgressView()
+                                .tint(TotoroxTheme.mintAccent)
+                            Text("Đang quét danh sách ứng dụng...")
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        } else {
+                            Image(systemName: "app.badge.questionmark")
+                                .font(.system(size: 40))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                            Text("Không tìm thấy ứng dụng phù hợp")
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
                         Spacer()
                     }
                 } else {
@@ -609,15 +623,24 @@ struct OverwriteFileView: View {
                                             .foregroundStyle(TotoroxTheme.textPrimary)
                                             .lineLimit(1)
                                         
-                                        Text(app.bundleID)
-                                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                            .foregroundStyle(TotoroxTheme.mintAccent)
-                                            .lineLimit(1)
+                                        if app.appName != app.bundleID {
+                                            Text(app.bundleID)
+                                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                                .lineLimit(1)
+                                        }
                                         
-                                        Text("UDID: \(app.shortUDID)")
-                                            .font(.system(size: 9.5, design: .monospaced))
-                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                            .lineLimit(1)
+                                        HStack(spacing: 6) {
+                                            Text("UDID: \(app.shortUDID)")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                                .lineLimit(1)
+                                            Text("Data: \(app.dataPath)")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.75))
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                        }
                                     }
                                     
                                     Spacer()
@@ -654,6 +677,13 @@ struct OverwriteFileView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(TotoroxTheme.mintAccent)
+                    }
+                }
+            }
+            .onAppear {
+                if scanner.apps.isEmpty {
+                    Task {
+                        _ = await scanner.scanAllContainers(forceRefresh: false)
                     }
                 }
             }

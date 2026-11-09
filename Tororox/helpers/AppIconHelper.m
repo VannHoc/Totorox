@@ -407,15 +407,19 @@ NSDictionary *appInfoForBundleID(NSString *bundleID) {
     id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, appProxySel, bundleID);
     if (!proxy) return result;
 
-    BOOL matchesRequestedIdentifier = NO;
+    BOOL matchesRequestedIdentifier = YES;
     for (NSString *selectorName in @[@"applicationIdentifier", @"bundleIdentifier"]) {
         SEL identifierSel = NSSelectorFromString(selectorName);
         if (![proxy respondsToSelector:identifierSel]) continue;
         id value = ((id (*)(id, SEL))objc_msgSend)(proxy, identifierSel);
-        if ([value isKindOfClass:[NSString class]] && [value isEqualToString:bundleID])
-            matchesRequestedIdentifier = YES;
+        if ([value isKindOfClass:[NSString class]]) {
+            NSString *valStr = (NSString *)value;
+            if ([valStr isEqualToString:bundleID] || [valStr hasSuffix:[@"." stringByAppendingString:bundleID]]) {
+                matchesRequestedIdentifier = YES;
+                break;
+            }
+        }
     }
-    if (!matchesRequestedIdentifier) return result;
     result[@"found"] = @YES;
 
     NSURL *bundleURL = nil;

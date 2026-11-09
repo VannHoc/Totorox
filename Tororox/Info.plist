@@ -53,10 +53,10 @@
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.vannhoc.tororox.patch-import</string>
+            <string>com.vannhoc.totorox.patch-import</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>tororox</string>
+                <string>totorox</string>
             </array>
         </dict>
     </array>

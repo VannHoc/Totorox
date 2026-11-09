@@ -1,18 +1,18 @@
 import os
 import re
 
-os.makedirs('Tororox.xcodeproj', exist_ok=True)
+os.makedirs('Totorox.xcodeproj', exist_ok=True)
 with open(os.path.join('3105_repo', 'ThreeOneOSFive.xcodeproj', 'project.pbxproj'), 'r', encoding='utf-8') as f:
     orig = f.read()
 
 # Replace product & directory names
 text = orig.replace('ThreeOneOSFive-Bridging-Header.h', 'Tororox-Bridging-Header.h')
-text = text.replace('ThreeOneOSFive', 'Tororox')
-text = text.replace('3105.app', 'Tororox.app')
+text = text.replace('ThreeOneOSFive', 'Totorox')
+text = text.replace('3105.app', 'Totorox.app')
 text = text.replace('MARKETING_VERSION = 2.0;', 'MARKETING_VERSION = 1.0;')
 text = text.replace('CURRENT_PROJECT_VERSION = 8;', 'CURRENT_PROJECT_VERSION = 1;')
-text = text.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = Tororox;')
-text = text.replace('PRODUCT_NAME = 3105;', 'PRODUCT_NAME = Tororox;')
+text = text.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = Totorox;')
+text = text.replace('PRODUCT_NAME = 3105;', 'PRODUCT_NAME = Totorox;')
 
 # Add build files in PBXBuildFile section
 build_files_to_add = """
