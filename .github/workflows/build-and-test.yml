@@ -14,14 +14,14 @@ concurrency:
 jobs:
   test-and-build:
     name: Run Unit Tests & Build Unsigned IPA
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.0.app || sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.1.app || sudo xcode-select -s /Applications/Xcode_16.0.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
       - name: Install XcodeGen
@@ -35,10 +35,13 @@ jobs:
       - name: Run Unit Tests
         run: |
           set -o pipefail
+          SIM_NAME=$(xcrun simctl list devices available | grep -E "iPhone (16|15|14)" | head -n 1 | sed -E 's/^[[:space:]]*([^(]+)\(.*/\1/' | xargs)
+          if [ -z "$SIM_NAME" ]; then SIM_NAME="iPhone 15"; fi
+          echo "Using Simulator: $SIM_NAME"
           xcodebuild test \
             -project Tororox.xcodeproj \
             -scheme TororoxTests \
-            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -destination "platform=iOS Simulator,name=$SIM_NAME" \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
