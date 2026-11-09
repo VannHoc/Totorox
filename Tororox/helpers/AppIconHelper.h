@@ -11,7 +11,7 @@ NSDictionary<NSString *, NSDictionary *> *installedAppInfo(void);
 UIImage * _Nullable iconForBundleID(NSString *bundleID);
 
 /// Returns @{ @"name": NSString, @"icon": UIImage } for a single bundle ID.
-NSDictionary * _Nullable appInfoForBundleID(NSString *bundleID);
+NSDictionary *appInfoForBundleID(NSString *bundleID);
 
 /// Opens an installed app using LaunchServices. Returns NO when the private
 /// selector is unavailable or the requested bundle cannot be opened.

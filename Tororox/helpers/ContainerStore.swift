@@ -912,7 +912,7 @@ enum ContainerStore {
                 } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
                     bundleID = meta.bundleID
                     let info = appInfoForBundleID(meta.bundleID)
-                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                    let resolvedName = (info?["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
                     appName = resolvedName
                     appIcon = iconForBundleID(meta.bundleID)
                     let containerMeta = AppContainerMetadata(
@@ -995,7 +995,7 @@ enum ContainerStore {
                     } else if let meta = readContainerMetadata(containerPath: dir), !meta.bundleID.isEmpty {
                         bundleID = meta.bundleID
                         let info = appInfoForBundleID(meta.bundleID)
-                        let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                        let resolvedName = (info?["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
                         appName = resolvedName
                         appIcon = iconForBundleID(meta.bundleID)
                         let containerMeta = AppContainerMetadata(
@@ -1106,7 +1106,7 @@ enum ContainerStore {
                 } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
                     bundleID = meta.bundleID
                     let info = appInfoForBundleID(meta.bundleID)
-                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                    let resolvedName = (info?["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
                     appName = resolvedName
                     appIcon = iconForBundleID(meta.bundleID)
                     let containerMeta = AppContainerMetadata(
