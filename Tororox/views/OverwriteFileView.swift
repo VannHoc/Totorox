@@ -797,14 +797,14 @@ struct OverwriteFileView: View {
                     try converter.convertPatch3105ToZip(inputURL: patchURL, outputZipURL: stagingDir.appendingPathComponent("extracted.zip"))
                     let unzippedDir = stagingDir.appendingPathComponent("payload", isDirectory: true)
                     try? FileManager.default.createDirectory(at: unzippedDir, withIntermediateDirectories: true)
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: stagingDir.appendingPathComponent("extracted.zip"), destinationURL: unzippedDir)
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: stagingDir.appendingPathComponent("extracted.zip"), into: unzippedDir)
                     sourceToCopy = unzippedDir
                 } catch {
                     updateLog("[LỖI] Giải mã gói .3105 thất bại: \(error.localizedDescription)")
                 }
             } else {
                 do {
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, destinationURL: stagingDir)
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, into: stagingDir)
                     sourceToCopy = stagingDir
                 } catch {
                     updateLog("[LỖI] Giải nén tệp ZIP thất bại: \(error.localizedDescription)")
