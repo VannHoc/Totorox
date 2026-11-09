@@ -974,6 +974,22 @@ enum ContainerStore {
 
     // MARK: File browsing
 
+    static func shallowChildCount(atPath path: String) -> Int? {
+        guard let dir = opendir(path) else { return nil }
+        defer { closedir(dir) }
+        var count = 0
+        while let dp = readdir(dir) {
+            let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+            }
+            if name == "." || name == ".." || name.hasPrefix(".") {
+                continue
+            }
+            count += 1
+        }
+        return count
+    }
+
     static func posixListDirectory(at path: String) -> [FileEntry]? {
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         guard let dir = opendir(clean) else {
@@ -1074,7 +1090,7 @@ enum ContainerStore {
                 }
             }
 
-            // childCount is nil: NEVER calculate directorySize during directory listing for 0ms delay!
+            let childrenCount = isDir ? shallowChildCount(atPath: full) : nil
             entries.append(
                 FileEntry(
                     name: name,
@@ -1085,7 +1101,7 @@ enum ContainerStore {
                     createdAt: createDate,
                     isSymlink: isSymlink,
                     posixPermissions: mode,
-                    childCount: nil,
+                    childCount: childrenCount,
                     appName: appName,
                     bundleID: bundleID,
                     appIcon: appIcon,
@@ -1214,7 +1230,7 @@ enum ContainerStore {
                 }
             }
 
-            // childCount is nil: NEVER calculate directorySize during directory listing for 0ms delay!
+            let childrenCount = isDirectory ? shallowChildCount(atPath: full) : nil
             entries.append(
                 FileEntry(
                     name: item,
@@ -1225,7 +1241,7 @@ enum ContainerStore {
                     createdAt: createDate,
                     isSymlink: (attributes?[.type] as? FileAttributeType) == .typeSymbolicLink,
                     posixPermissions: posixMode,
-                    childCount: nil,
+                    childCount: childrenCount,
                     appName: appName,
                     bundleID: bundleID,
                     appIcon: appIcon,

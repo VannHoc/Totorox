@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum FileIOConflictKind: Equatable, Sendable {
     case fileOverwritingFolder
@@ -105,7 +106,7 @@ public final class FileIOEngine {
             // Case A: Destination does not exist -> Create or copy directly
             if sourceIsDir {
                 do {
-                    try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                    try Self.createDirectoryIfNeeded(at: destination)
                     result.succeeded.append(destination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
@@ -120,11 +121,7 @@ public final class FileIOEngine {
                 )
             } else {
                 do {
-                    let parentDir = destination.deletingLastPathComponent()
-                    if !fileManager.fileExists(atPath: parentDir.path) {
-                        try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
-                    }
-                    try fileManager.copyItem(at: source, to: destination)
+                    try copySingleFile(from: source, to: destination)
                     result.succeeded.append(destination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
@@ -135,10 +132,7 @@ public final class FileIOEngine {
             if !sourceIsDir && !destIsDir.boolValue {
                 // Rule 1: File overwrites file. Direct overwrite without hash/diff check.
                 do {
-                    if fileManager.fileExists(atPath: destination.path) {
-                        try fileManager.removeItem(at: destination)
-                    }
-                    try fileManager.copyItem(at: source, to: destination)
+                    try copySingleFile(from: source, to: destination)
                     result.succeeded.append(destination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
@@ -164,9 +158,9 @@ public final class FileIOEngine {
                 case .replace:
                     // Remove conflicting destination and apply source
                     do {
-                        try fileManager.removeItem(at: destination)
+                        try removeExistingItem(at: destination)
                         if sourceIsDir {
-                            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                            try Self.createDirectoryIfNeeded(at: destination)
                             result.succeeded.append(destination)
                             await copyChildrenRecursively(
                                 from: source,
@@ -175,7 +169,7 @@ public final class FileIOEngine {
                                 conflictResolver: conflictResolver
                             )
                         } else {
-                            try fileManager.copyItem(at: source, to: destination)
+                            try copySingleFile(from: source, to: destination)
                             result.succeeded.append(destination)
                         }
                     } catch {
@@ -234,6 +228,124 @@ public final class FileIOEngine {
             if result.isCancelled {
                 // Break out of directory iteration if cancelled
                 break
+            }
+        }
+    }
+
+    /// Safely copies a single file using atomic staging + rename and POSIX direct write fallback.
+    /// This bypasses iOS container sandbox ACL/xattr inheritance failures that break standard `FileManager.copyItem`.
+    public func copySingleFile(
+        from source: URL,
+        to destination: URL
+    ) throws {
+        let parentDir = destination.deletingLastPathComponent()
+        try Self.createDirectoryIfNeeded(at: parentDir)
+
+        let stagingURL = parentDir.appendingPathComponent(".totorox-\(UUID().uuidString).tmp")
+        defer {
+            _ = unlink(stagingURL.path)
+            try? fileManager.removeItem(at: stagingURL)
+        }
+
+        var writeSuccess = false
+        // 1. Stream from source to staging using FileHandle
+        if let sourceHandle = try? FileHandle(forReadingFrom: source),
+           fileManager.createFile(atPath: stagingURL.path, contents: nil, attributes: nil),
+           let stagingHandle = try? FileHandle(forWritingTo: stagingURL) {
+            defer {
+                try? sourceHandle.close()
+                try? stagingHandle.close()
+            }
+            let chunkSize = 1_024 * 1_024
+            var ok = true
+            while let chunk = try? sourceHandle.read(upToCount: chunkSize), !chunk.isEmpty {
+                do {
+                    try stagingHandle.write(contentsOf: chunk)
+                } catch {
+                    ok = false
+                    break
+                }
+            }
+            try? stagingHandle.synchronize()
+            writeSuccess = ok
+        }
+
+        // 2. Direct Data fallback
+        if !writeSuccess {
+            if let data = (try? Data(contentsOf: source)) ?? ContainerStore.readDataDirectly(atPath: source.path) {
+                writeSuccess = posixWriteData(data, to: stagingURL.path)
+            }
+        }
+
+        guard writeSuccess else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path])
+        }
+
+        // 3. Atomic commit via POSIX rename within the same directory
+        if rename(stagingURL.path, destination.path) != 0 {
+            // Rename failed, try POSIX write directly to destination
+            if let data = (try? Data(contentsOf: source)) ?? ContainerStore.readDataDirectly(atPath: source.path) {
+                if !posixWriteData(data, to: destination.path) {
+                    if fileManager.fileExists(atPath: destination.path) {
+                        _ = unlink(destination.path)
+                        try? fileManager.removeItem(at: destination)
+                    }
+                    try fileManager.copyItem(at: source, to: destination)
+                }
+            } else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path])
+            }
+        }
+    }
+
+    private func posixWriteData(_ data: Data, to path: String) -> Bool {
+        let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        return data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return true }
+            var written = 0
+            let total = buffer.count
+            while written < total {
+                let bytes = write(fd, baseAddress.advanced(by: written), total - written)
+                if bytes <= 0 { return false }
+                written += bytes
+            }
+            return true
+        }
+    }
+
+    private func removeExistingItem(at url: URL) throws {
+        var isDir: ObjCBool = false
+        if fileManager.fileExists(atPath: url.path, isDirectory: &isDir) {
+            if isDir.boolValue {
+                try? fileManager.removeItem(at: url)
+                if fileManager.fileExists(atPath: url.path) {
+                    _ = rmdir(url.path)
+                }
+            } else {
+                _ = unlink(url.path)
+                try? fileManager.removeItem(at: url)
+            }
+        }
+    }
+
+    public static func createDirectoryIfNeeded(at url: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) { return }
+        do {
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            return
+        } catch {
+            var currentPath = "/"
+            for comp in url.pathComponents.filter({ $0 != "/" && !$0.isEmpty }) {
+                currentPath += (currentPath == "/" ? "" : "/") + comp
+                var st = stat()
+                if stat(currentPath, &st) != 0 {
+                    if mkdir(currentPath, 0o755) != 0 && errno != EEXIST {
+                        throw error
+                    }
+                }
             }
         }
     }

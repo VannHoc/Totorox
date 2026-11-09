@@ -863,7 +863,7 @@ struct OverwriteFileView: View {
             
             // Đảm bảo thư mục đích tồn tại
             do {
-                try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+                try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
             } catch {
                 await MainActor.run {
                     self.appendLog("[LỖI] Không thể tạo thư mục đích: \(error.localizedDescription)")

@@ -227,6 +227,14 @@ struct FolderExplorerView: View {
                                 fileEntryCard(entry)
                                     .id(entry.path)
                             }
+
+                            if !filteredEntries.isEmpty {
+                                Text("\(filteredEntries.count) mục")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 14)
+                            }
                         }
                     }
                     .padding(16)
@@ -414,13 +422,22 @@ struct FolderExplorerView: View {
                                     .lineLimit(1)
                             }
                             
-                            // Line 3: UDID: <UUID> và Data: <Đường dẫn>
+                            // Line 3: UDID: <UUID>, [X mục], và Data: <Đường dẫn>
                             HStack(spacing: 8) {
                                 if let shortId = entry.shortUUID {
                                     Text("UDID: \(shortId)")
                                         .font(.system(size: 9.5, design: .monospaced))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                         .lineLimit(1)
+                                }
+                                if let count = entry.childCount {
+                                    Text("\(count) mục")
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                        .clipShape(Capsule())
                                 }
                                 Text("Data: \(entry.path)")
                                     .font(.system(size: 9.5, design: .monospaced))
@@ -722,6 +739,11 @@ struct FolderExplorerView: View {
         }
 
         Task.detached(priority: .userInitiated) {
+            let grantHandle = ContainerStore.grantContainerAccess(path)
+            defer {
+                if grantHandle >= 0 { bad_query_release(grantHandle) }
+            }
+
             let loaded = ContainerStore.listFiles(at: path)
             ContainerMetadataCache.shared.storeList(loaded, for: path)
 
@@ -738,7 +760,11 @@ struct FolderExplorerView: View {
     private func createNewFolder() {
         guard !newFolderName.isEmpty else { return }
         let target = currentURL.appendingPathComponent(newFolderName)
-        try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        do {
+            try FileIOEngine.createDirectoryIfNeeded(at: target)
+        } catch {
+            try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        }
         ContainerMetadataCache.shared.invalidate(path: currentURL.path)
         loadCurrentDirectory(forceRefresh: true)
     }
@@ -747,7 +773,9 @@ struct FolderExplorerView: View {
         guard let item = itemToRename, !newRenameName.isEmpty else { return }
         let src = currentURL.appendingPathComponent(item.name)
         let dst = currentURL.appendingPathComponent(newRenameName)
-        try? FileManager.default.moveItem(at: src, to: dst)
+        if rename(src.path, dst.path) != 0 {
+            try? FileManager.default.moveItem(at: src, to: dst)
+        }
         ContainerMetadataCache.shared.invalidate(path: currentURL.path)
         loadCurrentDirectory(forceRefresh: true)
     }
@@ -755,7 +783,15 @@ struct FolderExplorerView: View {
     private func applyDelete() {
         guard let item = itemToDelete else { return }
         let src = currentURL.appendingPathComponent(item.name)
-        try? FileManager.default.removeItem(at: src)
+        if item.isDirectory {
+            try? FileManager.default.removeItem(at: src)
+            if FileManager.default.fileExists(atPath: src.path) {
+                _ = rmdir(src.path)
+            }
+        } else {
+            _ = unlink(src.path)
+            try? FileManager.default.removeItem(at: src)
+        }
         ContainerMetadataCache.shared.invalidate(path: currentURL.path)
         loadCurrentDirectory(forceRefresh: true)
     }
