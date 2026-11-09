@@ -58,7 +58,7 @@ struct OverwriteFileView: View {
     @State private var executionStatusText: String = ""
     
     // Outcome & Conflict Modals
-    @State private var outcomeResult: FileIOResult? = nil
+    @State private var outcomeResult: FileIOResultWrapper? = nil
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var showFilePicker = false
     
@@ -239,7 +239,7 @@ struct OverwriteFileView: View {
         .sheet(isPresented: $showExecutionSheet) {
             executionModalView
         }
-        .sheet(item: $outcomeResultIdentifiable) { wrapper in
+        .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
             }
@@ -256,11 +256,7 @@ struct OverwriteFileView: View {
         }
     }
 
-    private var outcomeResultIdentifiable: ResultWrapper? {
-        outcomeResult.map { ResultWrapper(result: $0) }
-    }
-
-    private struct ResultWrapper: Identifiable {
+    struct FileIOResultWrapper: Identifiable {
         let id = UUID()
         let result: FileIOResult
     }
@@ -468,7 +464,7 @@ struct OverwriteFileView: View {
                     try PatchZipConverter.shared.convertPatch3105ToZip(inputURL: source, outputZipURL: zipOut)
                     // Unzip to temp payload
                     let unzippedDir = tempDir.appendingPathComponent("unzipped")
-                    try ZIPArchiveExtractor.extract(zipFile: zipOut, destinationDirectory: unzippedDir)
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: zipOut, into: unzippedDir)
                     
                     // Search for target container directory inside unzipped
                     let payloadDir = unzippedDir.appendingPathComponent("payload")
@@ -512,7 +508,7 @@ struct OverwriteFileView: View {
             await MainActor.run {
                 self.isExecuting = false
                 self.showExecutionSheet = false
-                self.outcomeResult = result
+                self.outcomeResult = FileIOResultWrapper(result: result)
             }
         }
     }

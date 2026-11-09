@@ -381,7 +381,7 @@ public final class PatchZipConverter {
         return archive
     }
 
-    private func parseZipArchive(_ data: Data) throws -> [String: Data] {
+    public func parseZipArchive(_ data: Data) throws -> [String: Data] {
         guard data.count >= 22 else {
             throw PatchZipConverterError.corruptedArchive("Zip file too small to contain EOCD.")
         }

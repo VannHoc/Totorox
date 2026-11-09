@@ -30,7 +30,7 @@ struct FolderExplorerView: View {
     
     // Conflict & Outcome modals
     @State private var activeConflict: FileConflictInfo? = nil
-    @State private var outcomeResult: FileIOResult? = nil
+    @State private var outcomeResult: OverwriteFileView.FileIOResultWrapper? = nil
 
     init(initialURL: URL? = nil) {
         let baseDir: URL
@@ -228,7 +228,7 @@ struct FolderExplorerView: View {
                 importFileIntoCurrentDirectory(pickedURL)
             }
         }
-        .sheet(item: $outcomeResultIdentifiable) { wrapper in
+        .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
                 loadCurrentDirectory()
@@ -244,15 +244,6 @@ struct FolderExplorerView: View {
                 .transition(.opacity)
             }
         }
-    }
-
-    private var outcomeResultIdentifiable: ResultWrapper? {
-        outcomeResult.map { ResultWrapper(result: $0) }
-    }
-
-    private struct ResultWrapper: Identifiable {
-        let id = UUID()
-        let result: FileIOResult
     }
 
     // MARK: - File & Folder Card View
@@ -498,7 +489,7 @@ struct FolderExplorerView: View {
                 }
             }
             await MainActor.run {
-                self.outcomeResult = result
+                self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
             }
         }
     }
@@ -529,7 +520,7 @@ struct FolderExplorerView: View {
 
             await MainActor.run {
                 self.clipboardItem = nil
-                self.outcomeResult = result
+                self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
             }
         }
     }
