@@ -2,6 +2,7 @@ import Foundation
 import Darwin
 
 public enum FileIOConflictKind: Equatable, Sendable {
+    case fileExists
     case fileOverwritingFolder
     case folderOverwritingFile
 }
@@ -9,6 +10,7 @@ public enum FileIOConflictKind: Equatable, Sendable {
 public enum FileIOConflictResolution: Equatable, Sendable {
     case replace
     case skip
+    case replaceAll
     case cancel
 }
 
@@ -55,17 +57,22 @@ public final class FileIOEngine {
         self.fileManager = fileManager
     }
 
-    /// Recursively copies and merges source items into destination according to strict business rules:
-    /// 1. File overwriting file: destination overwritten without hash/diff comparison.
-    /// 2. Folder into folder: recursive merge. Matching files overwritten, non-conflicting files/folders preserved.
-    /// 3. File vs Folder conflict: MUST prompt user for Replace, Skip, or Cancel. Never delete destination silently.
-    /// 4. Cancellation & Failure: Safely aborts and reports exact succeeded, failed, and skipped items.
+    /// Recursively copies and merges source items into destination according to Windows Merge rules:
+    /// 1. Folder -> Folder: Recursive merge. Destination folder is never deleted; recurses inside.
+    /// 2. File not existing at destination: Standard copy.
+    /// 3. File already existing at destination:
+    ///    - If isReplaceAll == true: Overwrites directly without prompting.
+    ///    - If isReplaceAll == false: Pauses background execution (async/await) and invokes conflictResolver for prompt:
+    ///      - Replace: Overwrite current file, continue.
+    ///      - Skip: Do nothing for current file, continue.
+    ///      - Replace All: Set isReplaceAll = true, overwrite current and all future colliding files without asking.
     public func copyAndMerge(
         from sourceURL: URL,
         to destinationURL: URL,
         conflictResolver: FileIOConflictResolver
     ) async -> FileIOResult {
         var result = FileIOResult()
+        var isReplaceAll = false
         let standardizedSource = sourceURL.standardizedFileURL
         let standardizedDest = destinationURL.standardizedFileURL
 
@@ -79,6 +86,7 @@ public final class FileIOEngine {
             source: standardizedSource,
             sourceIsDir: isDir.boolValue,
             destination: standardizedDest,
+            isReplaceAll: &isReplaceAll,
             result: &result,
             conflictResolver: conflictResolver
         )
@@ -90,6 +98,7 @@ public final class FileIOEngine {
         source: URL,
         sourceIsDir: Bool,
         destination: URL,
+        isReplaceAll: inout Bool,
         result: inout FileIOResult,
         conflictResolver: FileIOConflictResolver
     ) async {
@@ -103,7 +112,7 @@ public final class FileIOEngine {
         let destExists = fileManager.fileExists(atPath: destination.path, isDirectory: &destIsDir)
 
         if !destExists {
-            // Case A: Destination does not exist -> Create or copy directly
+            // Mục CHƯA tồn tại ở đích
             if sourceIsDir {
                 do {
                     try Self.createDirectoryIfNeeded(at: destination)
@@ -116,6 +125,7 @@ public final class FileIOEngine {
                 await copyChildrenRecursively(
                     from: source,
                     to: destination,
+                    isReplaceAll: &isReplaceAll,
                     result: &result,
                     conflictResolver: conflictResolver
                 )
@@ -128,35 +138,65 @@ public final class FileIOEngine {
                 }
             }
         } else {
-            // Destination already exists -> check type alignment
-            if !sourceIsDir && !destIsDir.boolValue {
-                // Rule 1: File overwrites file. Direct overwrite without hash/diff check.
-                do {
-                    try copySingleFile(from: source, to: destination)
-                    result.succeeded.append(destination)
-                } catch {
-                    result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
-                }
-            } else if sourceIsDir && destIsDir.boolValue {
-                // Rule 2: Folder merges into folder recursively.
-                // Destination folder remains intact.
+            // Mục ĐÃ tồn tại ở đích
+            if sourceIsDir && destIsDir.boolValue {
+                // 1. Thư mục gộp vào Thư mục: Xử lý Merge. Tuyệt đối không xóa thư mục đích. Đệ quy đi sâu vào bên trong
                 result.succeeded.append(destination)
                 await copyChildrenRecursively(
                     from: source,
                     to: destination,
+                    isReplaceAll: &isReplaceAll,
                     result: &result,
                     conflictResolver: conflictResolver
                 )
+            } else if !sourceIsDir && !destIsDir.boolValue {
+                // 2. File và ĐÃ tồn tại ở đích (File trùng tên)
+                if isReplaceAll {
+                    // Check if isReplaceAll == true: Ghi đè file mới (không hỏi)
+                    do {
+                        try copySingleFile(from: source, to: destination)
+                        result.succeeded.append(destination)
+                    } catch {
+                        result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
+                    }
+                } else {
+                    // Check if isReplaceAll == false: Tạm dừng luồng xử lý nền (async/await) -> Gọi UI Prompt
+                    let userChoice = await conflictResolver(source, destination, .fileExists)
+                    switch userChoice {
+                    case .replace:
+                        do {
+                            try copySingleFile(from: source, to: destination)
+                            result.succeeded.append(destination)
+                        } catch {
+                            result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
+                        }
+                    case .skip:
+                        result.skipped.append(source)
+                    case .replaceAll:
+                        isReplaceAll = true
+                        do {
+                            try copySingleFile(from: source, to: destination)
+                            result.succeeded.append(destination)
+                        } catch {
+                            result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
+                        }
+                    case .cancel:
+                        result.isCancelled = true
+                        result.skipped.append(source)
+                    }
+                }
             } else {
-                // Rule 3: Type Conflict (File vs Folder or Folder vs File)
+                // 3. Xung đột kiểu (File vs Folder hoặc Folder vs File)
                 let conflictKind: FileIOConflictKind = (!sourceIsDir && destIsDir.boolValue)
                     ? .fileOverwritingFolder
                     : .folderOverwritingFile
 
                 let userChoice = await conflictResolver(source, destination, conflictKind)
                 switch userChoice {
-                case .replace:
-                    // Remove conflicting destination and apply source
+                case .replace, .replaceAll:
+                    if userChoice == .replaceAll {
+                        isReplaceAll = true
+                    }
                     do {
                         try removeExistingItem(at: destination)
                         if sourceIsDir {
@@ -165,6 +205,7 @@ public final class FileIOEngine {
                             await copyChildrenRecursively(
                                 from: source,
                                 to: destination,
+                                isReplaceAll: &isReplaceAll,
                                 result: &result,
                                 conflictResolver: conflictResolver
                             )
@@ -188,6 +229,7 @@ public final class FileIOEngine {
     private func copyChildrenRecursively(
         from sourceDir: URL,
         to destinationDir: URL,
+        isReplaceAll: inout Bool,
         result: inout FileIOResult,
         conflictResolver: FileIOConflictResolver
     ) async {
@@ -221,6 +263,7 @@ public final class FileIOEngine {
                 source: childSource,
                 sourceIsDir: isDir.boolValue,
                 destination: childDest,
+                isReplaceAll: &isReplaceAll,
                 result: &result,
                 conflictResolver: conflictResolver
             )

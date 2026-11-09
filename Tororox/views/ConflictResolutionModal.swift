@@ -18,6 +18,26 @@ struct FileIOResultWrapper: Identifiable {
 struct WindowsConflictDialog: View {
     let conflict: FileConflictInfo
 
+    private var dialogTitle: String {
+        switch conflict.conflictKind {
+        case .fileExists:
+            return "Trùng lặp tệp (File Collision)"
+        case .fileOverwritingFolder, .folderOverwritingFile:
+            return "Xung đột tệp & thư mục"
+        }
+    }
+
+    private var dialogSubtitle: String {
+        switch conflict.conflictKind {
+        case .fileExists:
+            return "Tệp '\(conflict.sourceURL.lastPathComponent)' đã tồn tại trong thư mục đích."
+        case .fileOverwritingFolder:
+            return "Nguồn là Tệp nhưng Đích là Thư mục cùng tên."
+        case .folderOverwritingFile:
+            return "Nguồn là Thư mục nhưng Đích là Tệp cùng tên."
+        }
+    }
+
     var body: some View {
         VStack(spacing: 20) {
             // Header with Icon
@@ -32,13 +52,11 @@ struct WindowsConflictDialog: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Xung đột tệp & thư mục")
+                    Text(dialogTitle)
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
 
-                    Text(conflict.conflictKind == .fileOverwritingFolder
-                         ? "Nguồn là Tệp nhưng Đích là Thư mục cùng tên."
-                         : "Nguồn là Thư mục nhưng Đích là Tệp cùng tên.")
+                    Text(dialogSubtitle)
                         .font(.system(size: 13))
                         .foregroundStyle(TotoroxTheme.textSecondary)
                 }
@@ -74,42 +92,58 @@ struct WindowsConflictDialog: View {
             .background(TotoroxTheme.searchBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            Text("Tuyệt đối không tự ý xóa mục đích nếu chưa có sự xác nhận của bạn.")
+            Text(conflict.conflictKind == .fileExists
+                 ? "Chọn thao tác bạn muốn thực hiện đối với tệp bị trùng lặp này."
+                 : "Tuyệt đối không tự ý xóa mục đích nếu chưa có sự xác nhận của bạn.")
                 .font(.system(size: 12))
                 .foregroundColor(TotoroxTheme.textSecondary)
                 .multilineTextAlignment(.center)
 
-            // 3 Windows-style options
-            VStack(spacing: 10) {
-                // 1. Replace (Ghi đè thay thế)
+            // Windows-style options
+            VStack(spacing: 9) {
+                // 1. Replace (Ghi đè)
                 Button(action: { conflict.continuation(.replace) }) {
                     HStack {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("Thay thế mục ở đích (Replace)")
+                        Text("Ghi đè tệp này (Replace)")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 46)
+                    .frame(height: 44)
                     .background(TotoroxTheme.mintAccent)
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // 2. Skip (Bỏ qua)
-                Button(action: { conflict.continuation(.skip) }) {
+                // 2. Replace All (Ghi đè tất cả)
+                Button(action: { conflict.continuation(.replaceAll) }) {
                     HStack {
-                        Image(systemName: "forward.fill")
-                        Text("Bỏ qua mục này (Skip)")
-                            .fontWeight(.medium)
+                        Image(systemName: "checkmark.circle.badge.questionmark.fill")
+                        Text("Ghi đè tất cả các tệp trùng (Replace All)")
+                            .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
+                    .background(Color(red: 0.15, green: 0.55, blue: 0.45))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                // 3. Skip (Bỏ qua)
+                Button(action: { conflict.continuation(.skip) }) {
+                    HStack {
+                        Image(systemName: "forward.fill")
+                        Text("Bỏ qua tệp này (Skip)")
+                            .fontWeight(.medium)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
                     .background(Color(red: 0.92, green: 0.93, blue: 0.96))
                     .foregroundColor(TotoroxTheme.textPrimary)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // 3. Cancel (Hủy toàn bộ)
+                // 4. Cancel (Hủy toàn bộ)
                 Button(action: { conflict.continuation(.cancel) }) {
                     HStack {
                         Image(systemName: "xmark")
@@ -117,7 +151,12 @@ struct WindowsConflictDialog: View {
                             .fontWeight(.medium)
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(height: 42)
+                    .background(Color.red.opacity(0.1))
+                    .foregroundColor(Color.red)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
                     .background(Color.red.opacity(0.1))
                     .foregroundColor(Color.red)
                     .clipShape(RoundedRectangle(cornerRadius: 12))

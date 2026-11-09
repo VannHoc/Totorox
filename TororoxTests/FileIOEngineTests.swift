@@ -259,4 +259,49 @@ final class FileIOEngineTests: XCTestCase {
         XCTAssertTrue(result.isCancelled, "Operation should be marked as cancelled")
         XCTAssertTrue(result.succeeded.count + result.failed.count + result.skipped.count > 0, "Reporting must track items accurately")
     }
+
+    // MARK: - 5. Test Windows Conflict Prompt: Replace All & Skip
+    func testWindowsFileCollision_WithReplaceAll_OverwritesAllSubsequentFiles() async throws {
+        let srcDir = tempDirectory.appendingPathComponent("Src5")
+        let destDir = tempDirectory.appendingPathComponent("Dest5")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        try "New 1".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("f1.txt"))
+        try "New 2".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("f2.txt"))
+
+        try "Old 1".data(using: .utf8)!.write(to: destDir.appendingPathComponent("f1.txt"))
+        try "Old 2".data(using: .utf8)!.write(to: destDir.appendingPathComponent("f2.txt"))
+
+        var promptCount = 0
+        let result = await engine.copyAndMerge(
+            from: srcDir,
+            to: destDir,
+            conflictResolver: { _, _, _ in
+                promptCount += 1
+                return .replaceAll
+            }
+        )
+
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertEqual(promptCount, 1, "ReplaceAll should only prompt once and auto-overwrite subsequent colliding files")
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("f1.txt")), "New 1")
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("f2.txt")), "New 2")
+    }
+
+    func testWindowsFileCollision_WithSkip_PreservesDestinationFile() async throws {
+        let srcFile = tempDirectory.appendingPathComponent("src_skip.txt")
+        let destFile = tempDirectory.appendingPathComponent("dst_skip.txt")
+        try "New Data".data(using: .utf8)!.write(to: srcFile)
+        try "Old Data".data(using: .utf8)!.write(to: destFile)
+
+        let result = await engine.copyAndMerge(
+            from: srcFile,
+            to: destFile,
+            conflictResolver: { _, _, _ in .skip }
+        )
+
+        XCTAssertTrue(result.skipped.contains(srcFile.standardizedFileURL))
+        XCTAssertEqual(try String(contentsOf: destFile), "Old Data", "Destination must remain untouched on Skip")
+    }
 }

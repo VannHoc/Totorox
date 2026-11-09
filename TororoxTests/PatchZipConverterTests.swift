@@ -162,22 +162,21 @@ final class PatchZipConverterTests: XCTestCase {
         }
     }
 
-    func testConvertZipMissingManifest_ThrowsError() throws {
-        let badZipURL = tempDirectory.appendingPathComponent("missing_manifest.zip")
+    func testConvertZipMissingManifest_AutoGeneratesManifestAndSucceeds() throws {
+        let zipURL = tempDirectory.appendingPathComponent("missing_manifest.zip")
         let dummyData = "dummy content without patch.json".data(using: .utf8)!
-        let zipData = try converter.buildZipArchive(entries: [("some_folder/dummy.txt", dummyData)])
-        try zipData.write(to: badZipURL)
+        let zipData = try converter.buildZipArchive(entries: [("Resources/dummy.txt", dummyData)])
+        try zipData.write(to: zipURL)
 
         let outputPatch = tempDirectory.appendingPathComponent("out_missing.3105")
-        XCTAssertThrowsError(try converter.convertZipToPatch(zipURL: badZipURL, destinationPatchURL: outputPatch)) { error in
-            guard let convError = error as? PatchZipConverterError else {
-                XCTFail("Expected PatchZipConverterError but got \(error)")
-                return
-            }
-            switch convError {
-            case .invalidManifest: break
-            default: XCTFail("Expected invalidManifest error, got \(convError)")
-            }
-        }
+        XCTAssertNoThrow(try converter.convertZipToPatch(zipURL: zipURL, destinationPatchURL: outputPatch))
+        XCTAssertTrue(fileManager.fileExists(atPath: outputPatch.path), "Output .3105 file must be generated even if patch.json was missing")
+
+        // Verify the generated patch can be decoded
+        let patchData = try Data(contentsOf: outputPatch)
+        let decoded = try PatchPackageCodec.decode(patchData, password: nil)
+        XCTAssertEqual(decoded.project.rules.count, 1)
+        XCTAssertEqual(decoded.project.rules[0].replacementFilename, "dummy.txt")
+        XCTAssertEqual(decoded.project.rules[0].replacementData, dummyData)
     }
 }

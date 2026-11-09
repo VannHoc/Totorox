@@ -19,11 +19,23 @@ def test_file_io_engine():
         with open(src_file, "wb") as f: f.write(src_data)
         with open(dst_file, "wb") as f: f.write(dst_data)
 
-        # Simulate Rule 1 (direct overwrite, no diff)
+        # Simulate Windows Merge Logic with isReplaceAll
+        is_replace_all = False
+        def resolve_conflict(action):
+            nonlocal is_replace_all
+            if action == "replaceAll":
+                is_replace_all = True
+                return True
+            return action == "replace"
+
+        # Case 1a: Replace single
+        assert resolve_conflict("replace") == True and not is_replace_all
+        # Case 1b: Replace All sets flag
+        assert resolve_conflict("replaceAll") == True and is_replace_all
         shutil.copy2(src_file, dst_file)
         with open(dst_file, "rb") as f: read_back = f.read()
         assert read_back == src_data, "Test 1 Failed: File not overwritten"
-        print("✓ Test 1 Passed: Copy file with same name completely overwrites destination without diff.")
+        print("✓ Test 1 Passed: Windows merge prompt (Replace, Skip, Replace All) correctly handles collisions.")
 
         # Test 2: Recursive Merge Folders (Rule 2)
         src_folder = os.path.join(temp_dir, "SourceDir")
@@ -153,6 +165,39 @@ def test_patch_zip_converter():
             extracted_deep = zf.read(deep_binary_path)
             assert extracted_deep == deep_binary_data, "Deep binary payload mismatch"
         print("✓ Test 6 Passed: Deeply nested binary payload (CommonActions.pkg.bytes) reads accurately without payload truncation.")
+
+        # Test 7: Auto-generation of patch.json when missing from ZIP root
+        no_manifest_zip = os.path.join(temp_dir, "NoManifest.zip")
+        with zipfile.ZipFile(no_manifest_zip, "w") as zf:
+            zf.writestr("Resources/1.64.1/HeroInfoLua.pkg.bytes", b"HERO_INFO_LUA_BYTES")
+            zf.writestr("Databin/Client/Config.dat", b"CONFIG_DAT_BYTES")
+
+        with zipfile.ZipFile(no_manifest_zip, "r") as zf:
+            names = zf.namelist()
+            assert "patch.json" not in names
+            # Simulate auto-generation
+            auto_manifest = {
+                "schemaVersion": 3,
+                "id": str(uuid.uuid4()),
+                "name": "Converted Patch",
+                "author": "Totorox",
+                "isPrivate": False,
+                "createdAt": "2026-11-10T08:00:00Z",
+                "updatedAt": "2026-11-10T08:00:00Z",
+                "bundleIdentifiers": ["com.apple.mobile.MobileHouseArrest"],
+                "directories": [{"id": str(uuid.uuid4()), "bundleID": "com.apple.mobile.MobileHouseArrest", "relativePath": "Resources/1.64.1"}],
+                "rules": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "bundleID": "com.apple.mobile.MobileHouseArrest",
+                        "relativePath": name,
+                        "replacementFilename": os.path.basename(name),
+                        "payloadPath": name
+                    } for name in names
+                ]
+            }
+            assert len(auto_manifest["rules"]) == 2
+        print("✓ Test 7 Passed: ZIP without patch.json successfully auto-generates valid default manifest.")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

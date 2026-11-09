@@ -244,10 +244,15 @@ public final class PatchZipConverter {
         _ zipData: Data,
         password: String? = nil
     ) throws -> Data {
-        let entries = try parseZipArchive(zipData)
+        var entries = try parseZipArchive(zipData)
 
-        guard let manifestData = entries["patch.json"] else {
-            throw PatchZipConverterError.invalidManifest("Missing 'patch.json' in archive root.")
+        let manifestData: Data
+        if let existingManifest = entries["patch.json"] {
+            manifestData = existingManifest
+        } else {
+            // Không tồn tại patch.json -> Tự động tạo file patch.json mặc định hợp lệ
+            manifestData = try generateDefaultManifest(from: entries)
+            entries["patch.json"] = manifestData
         }
 
         let decoder = JSONDecoder()
@@ -306,6 +311,189 @@ public final class PatchZipConverter {
         }
 
         return encoded.data
+    }
+
+    private func generateDefaultManifest(
+        from entries: [String: Data],
+        defaultName: String = "Converted Patch"
+    ) throws -> Data {
+        let validEntries = entries.filter { key, _ in
+            !key.hasPrefix("__MACOSX/") &&
+            !key.hasSuffix("/") &&
+            !key.contains(".DS_Store") &&
+            key != "patch.json"
+        }
+
+        guard !validEntries.isEmpty else {
+            throw PatchZipConverterError.invalidManifest("Tệp ZIP không chứa bất kỳ dữ liệu nào để đóng gói.")
+        }
+
+        var detectedBundleID: String? = nil
+        for path in validEntries.keys {
+            let parts = path.split(separator: "/")
+            for part in parts {
+                let str = String(part)
+                if (try? PatchPathValidator.canonicalBundleIdentifier(str)) == str {
+                    detectedBundleID = str
+                    break
+                }
+            }
+            if detectedBundleID != nil { break }
+        }
+
+        let bundleID = detectedBundleID
+            ?? AppContainerScanner.shared.scannedApps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
+            ?? "com.apple.mobile.MobileHouseArrest"
+
+        var ruleEntries: [PatchZipManifest.RuleEntry] = []
+        var dirEntries: [PatchZipManifest.DirectoryEntry] = []
+        var seenDirs = Set<String>()
+
+        for (path, _) in validEntries {
+            var rel = path
+            if rel.hasPrefix("payload/\(bundleID)/") {
+                rel = String(rel.dropFirst("payload/\(bundleID)/".count))
+            } else if rel.hasPrefix("\(bundleID)/") {
+                rel = String(rel.dropFirst("\(bundleID)/".count))
+            }
+            guard !rel.isEmpty else { continue }
+
+            let filename = (rel as NSString).lastPathComponent
+            let ruleID = UUID()
+            ruleEntries.append(
+                PatchZipManifest.RuleEntry(
+                    id: ruleID,
+                    bundleID: bundleID,
+                    relativePath: rel,
+                    replacementFilename: filename,
+                    payloadPath: path
+                )
+            )
+
+            let comps = rel.split(separator: "/").dropLast()
+            var currentSub = ""
+            for comp in comps {
+                currentSub += (currentSub.isEmpty ? "" : "/") + comp
+                if seenDirs.insert(currentSub).inserted {
+                    dirEntries.append(PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub))
+                }
+            }
+        }
+
+        let manifest = PatchZipManifest(
+            schemaVersion: 3,
+            id: UUID(),
+            name: defaultName,
+            author: "Totorox",
+            isPrivate: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            bundleIdentifiers: [bundleID],
+            directories: dirEntries,
+            rules: ruleEntries
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(manifest)
+    }
+
+    /// Đảm bảo thư mục tạm chứa file patch.json hợp lệ trước khi đóng gói thành .3105
+    public static func ensureManifestExists(in directoryURL: URL, defaultName: String = "Converted Patch") throws {
+        let manifestURL = directoryURL.appendingPathComponent("patch.json")
+        if FileManager.default.fileExists(atPath: manifestURL.path) {
+            return
+        }
+
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        var fileURLs: [URL] = []
+        for case let fileURL as URL in enumerator {
+            guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            if fileURL.lastPathComponent == "patch.json" || fileURL.lastPathComponent == ".DS_Store" { continue }
+            fileURLs.append(fileURL)
+        }
+
+        guard !fileURLs.isEmpty else { return }
+
+        let dirPrefix = directoryURL.standardizedFileURL.path + "/"
+        var detectedBundleID: String? = nil
+        for fileURL in fileURLs {
+            let rel = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
+            let parts = rel.split(separator: "/")
+            for part in parts {
+                let str = String(part)
+                if (try? PatchPathValidator.canonicalBundleIdentifier(str)) == str {
+                    detectedBundleID = str
+                    break
+                }
+            }
+            if detectedBundleID != nil { break }
+        }
+
+        let bundleID = detectedBundleID
+            ?? AppContainerScanner.shared.scannedApps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
+            ?? "com.apple.mobile.MobileHouseArrest"
+
+        var ruleEntries: [PatchZipManifest.RuleEntry] = []
+        var dirEntries: [PatchZipManifest.DirectoryEntry] = []
+        var seenDirs = Set<String>()
+
+        for fileURL in fileURLs {
+            var rel = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
+            if rel.hasPrefix("payload/\(bundleID)/") {
+                rel = String(rel.dropFirst("payload/\(bundleID)/".count))
+            } else if rel.hasPrefix("\(bundleID)/") {
+                rel = String(rel.dropFirst("\(bundleID)/".count))
+            }
+            guard !rel.isEmpty else { continue }
+
+            let filename = (rel as NSString).lastPathComponent
+            let payloadRelPath = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
+            ruleEntries.append(
+                PatchZipManifest.RuleEntry(
+                    id: UUID(),
+                    bundleID: bundleID,
+                    relativePath: rel,
+                    replacementFilename: filename,
+                    payloadPath: payloadRelPath
+                )
+            )
+
+            let comps = rel.split(separator: "/").dropLast()
+            var currentSub = ""
+            for comp in comps {
+                currentSub += (currentSub.isEmpty ? "" : "/") + comp
+                if seenDirs.insert(currentSub).inserted {
+                    dirEntries.append(PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub))
+                }
+            }
+        }
+
+        let manifest = PatchZipManifest(
+            schemaVersion: 3,
+            id: UUID(),
+            name: defaultName,
+            author: "Totorox",
+            isPrivate: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            bundleIdentifiers: [bundleID],
+            directories: dirEntries,
+            rules: ruleEntries
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(manifest)
+        try data.write(to: manifestURL, options: .atomic)
     }
 
     // MARK: - Internal Standard PKZIP Engine (Pure Swift, portable, zero external dependencies)
