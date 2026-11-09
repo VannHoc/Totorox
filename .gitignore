@@ -8,7 +8,9 @@ xcuserdata/
 
 # App Packages & Test Artifacts
 Tororox-*.ipa
+Totorox-*.ipa
 TestResults.xcresult
+analysis_3105/
 
 # System
 .DS_Store

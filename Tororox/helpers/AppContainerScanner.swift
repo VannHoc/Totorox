@@ -196,54 +196,37 @@ final class AppContainerScanner: ObservableObject {
         let scanned = await Task.detached(priority: .userInitiated) { () -> [AppContainerInfo] in
             var results: [String: AppContainerInfo] = [:]
             
-            // 1. PRIMARY SOURCE: Scan /var/mobile/Containers/Data/Application directly
-            let roots = [
-                "/var/mobile/Containers/Data/Application",
-                "/private/var/mobile/Containers/Data/Application"
-            ]
-            
-            for root in roots {
-                let dirNames = ContainerStore.enumerateDirectoryNames(path: root)
-                for dirName in dirNames {
-                    guard UUID(uuidString: dirName) != nil else { continue }
-                    let dirPath = (root as NSString).appendingPathComponent(dirName)
-                    
-                    guard let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
-                          !meta.bundleID.isEmpty else {
-                        continue
-                    }
-                    
-                    let bundleID = meta.bundleID
-                    if results[bundleID] != nil { continue }
-                    
-                    // Query LSApplicationProxy for localizedName & icon
+            // 1. PRIMARY SOURCE: Query MCM directly via MCMEnumerateIdentifiersForClass & MCMActivateContainerPath
+            var mcmError: NSString? = nil
+            let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmError)
+            for bundleID in mcmIDs {
+                guard !bundleID.isEmpty else { continue }
+                var actError: NSString? = nil
+                if let path = MCMActivateContainerPath(2, bundleID, false, &actError), !path.isEmpty {
+                    let udid = (path as NSString).lastPathComponent
                     let proxyInfo = appInfoForBundleID(bundleID) as? [String: Any] ?? [:]
                     let lsName = proxyInfo["name"] as? String
                     let resolvedName: String
                     if let lsName = lsName, !lsName.isEmpty, lsName != bundleID {
                         resolvedName = lsName
-                    } else if !meta.displayName.isEmpty {
-                        resolvedName = meta.displayName
                     } else {
                         resolvedName = bundleID
                     }
-                    
                     let icon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bundleID)
                     let bPath = proxyInfo["bundlePath"] as? String
                     
-                    let app = AppContainerInfo(
+                    results[bundleID] = AppContainerInfo(
                         appName: resolvedName,
                         bundleID: bundleID,
-                        udid: dirName,
-                        dataPath: dirPath,
+                        udid: udid,
+                        dataPath: path,
                         bundlePath: bPath,
                         appIcon: icon
                     )
-                    results[bundleID] = app
                 }
             }
             
-            // 2. SUPPLEMENTARY SOURCE: Add any LaunchServices apps with containers not yet found
+            // 2. SECONDARY SOURCE: Add any LaunchServices apps with containers (installedAppInfo)
             let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
             for (bundleID, info) in lsInfo {
                 if results[bundleID] != nil { continue }
@@ -268,6 +251,68 @@ final class AppContainerScanner: ObservableObject {
                     bundlePath: bPath,
                     appIcon: icon
                 )
+            }
+            
+            // 3. TERTIARY SOURCE: Filesystem scan on /var/mobile/Containers/Data/Application
+            let roots = [
+                "/var/mobile/Containers/Data/Application",
+                "/private/var/mobile/Containers/Data/Application"
+            ]
+            
+            for root in roots {
+                let dirNames = ContainerStore.enumerateDirectoryNames(path: root)
+                for dirName in dirNames {
+                    guard UUID(uuidString: dirName) != nil else { continue }
+                    let dirPath = (root as NSString).appendingPathComponent(dirName)
+                    
+                    // If already identified by UDID, skip
+                    if results.values.contains(where: { $0.udid.caseInsensitiveCompare(dirName) == .orderedSame }) {
+                        continue
+                    }
+                    
+                    if let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
+                       !meta.bundleID.isEmpty {
+                        let bundleID = meta.bundleID
+                        if results[bundleID] != nil { continue }
+                        
+                        let proxyInfo = appInfoForBundleID(bundleID) as? [String: Any] ?? [:]
+                        let lsName = proxyInfo["name"] as? String
+                        let resolvedName: String
+                        if let lsName = lsName, !lsName.isEmpty, lsName != bundleID {
+                            resolvedName = lsName
+                        } else if !meta.displayName.isEmpty {
+                            resolvedName = meta.displayName
+                        } else {
+                            resolvedName = bundleID
+                        }
+                        
+                        let icon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bundleID)
+                        let bPath = proxyInfo["bundlePath"] as? String
+                        
+                        let app = AppContainerInfo(
+                            appName: resolvedName,
+                            bundleID: bundleID,
+                            udid: dirName,
+                            dataPath: dirPath,
+                            bundlePath: bPath,
+                            appIcon: icon
+                        )
+                        results[bundleID] = app
+                    } else {
+                        // Fallback container entry so no container is ever lost
+                        let fallbackApp = AppContainerInfo(
+                            appName: "Container (\(dirName.prefix(6)))",
+                            bundleID: dirName,
+                            udid: dirName,
+                            dataPath: dirPath,
+                            bundlePath: nil,
+                            appIcon: nil
+                        )
+                        if results[dirName] == nil {
+                            results[dirName] = fallbackApp
+                        }
+                    }
+                }
             }
             
             // Sort: non-system (user) apps first, then alphabetical by appName
@@ -301,6 +346,7 @@ final class AppContainerScanner: ObservableObject {
                     modificationDate: nil
                 )
                 ContainerMetadataCache.shared.store(app: meta)
+                ContainerStore.setCachedMapping(uuid: app.udid, bundleID: app.bundleID)
             }
             self.hasScanned = true
             self.isLoading = false

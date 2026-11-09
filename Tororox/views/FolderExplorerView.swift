@@ -382,13 +382,14 @@ struct FolderExplorerView: View {
                 // Info: Line 1 (Name in com.... format) & Line 2 (Metadata)
                 VStack(alignment: .leading, spacing: 3) {
                     // Line 1: Primary Title (appName if available, else bundleID, else UUID name)
+                    let resolvedBID = entry.bundleID ?? ContainerStore.bundleID(forUUID: entry.name)
                     let titleText: String = {
                         if entry.isAppContainer {
-                            if let appName = entry.appName, !appName.isEmpty && appName != entry.bundleID {
+                            if let appName = entry.appName, !appName.isEmpty && appName != resolvedBID {
                                 return appName
                             }
-                            if let bundleID = entry.bundleID, !bundleID.isEmpty {
-                                return bundleID
+                            if let bid = resolvedBID, !bid.isEmpty {
+                                return bid
                             }
                             return entry.name
                         }
@@ -405,9 +406,9 @@ struct FolderExplorerView: View {
                     if entry.isAppContainer {
                         VStack(alignment: .leading, spacing: 2) {
                             // Line 2: Bundle ID (if Line 1 is appName)
-                            if let appName = entry.appName, let bundleID = entry.bundleID,
-                               !appName.isEmpty && !bundleID.isEmpty && appName != bundleID {
-                                Text(bundleID)
+                            if let appName = entry.appName, let bid = resolvedBID,
+                               !appName.isEmpty && !bid.isEmpty && appName != bid {
+                                Text(bid)
                                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                                     .foregroundStyle(TotoroxTheme.mintAccent)
                                     .lineLimit(1)

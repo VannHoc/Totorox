@@ -850,6 +850,14 @@ struct OverwriteFileView: View {
         appendLog("  - Gói bản vá: \(patchURL.lastPathComponent)")
         
         Task.detached(priority: .userInitiated) {
+            // 0. Activate container sandbox permissions via MCM & bad_query
+            var actError: NSString? = nil
+            _ = MCMActivateContainerPath(2, app.bundleID, false, &actError)
+            let grantHandle = ContainerStore.grantContainerAccess(app.dataPath)
+            defer {
+                if grantHandle >= 0 { bad_query_release(grantHandle) }
+            }
+
             let containerBase = URL(fileURLWithPath: app.dataPath)
             let destinationDir = containerBase.appendingPathComponent(self.selectedTargetFolder, isDirectory: true)
             

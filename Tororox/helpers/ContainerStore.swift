@@ -180,18 +180,60 @@ enum ContainerStore {
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
         if let m = _uuidMap, !m.isEmpty { return m }
-        let raw = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
-        _uuidMap = raw
-        return raw
+        var map = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        var mcmErr: NSString? = nil
+        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
+        for bid in mcmIDs {
+            var actErr: NSString? = nil
+            if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
+                let u = (p as NSString).lastPathComponent
+                map[u] = bid
+                map[u.uppercased()] = bid
+                map[u.lowercased()] = bid
+            }
+        }
+        _uuidMap = map
+        return map
     }
     static func refreshUUIDMap() {
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
-        _uuidMap = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        var map = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        var mcmErr: NSString? = nil
+        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
+        for bid in mcmIDs {
+            var actErr: NSString? = nil
+            if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
+                let u = (p as NSString).lastPathComponent
+                map[u] = bid
+                map[u.uppercased()] = bid
+                map[u.lowercased()] = bid
+            }
+        }
+        _uuidMap = map
+    }
+
+    static func bundleID(forUUID uuid: String) -> String? {
+        uuidMapLock.lock()
+        defer { uuidMapLock.unlock() }
+        let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return _uuidMap?[clean] ?? _uuidMap?[clean.uppercased()] ?? _uuidMap?[clean.lowercased()]
+    }
+
+    static func setCachedMapping(uuid: String, bundleID: String) {
+        uuidMapLock.lock()
+        defer { uuidMapLock.unlock() }
+        if _uuidMap == nil {
+            _uuidMap = [:]
+        }
+        let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        _uuidMap?[clean] = bundleID
+        _uuidMap?[clean.uppercased()] = bundleID
+        _uuidMap?[clean.lowercased()] = bundleID
     }
 
     private static var shouldUseBadQuery: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+        return true
     }
     private static let applicationBundleRoots: [(path: String, nested: Bool)] = [
         ("/var/containers/Bundle/Application", true),
@@ -686,20 +728,30 @@ enum ContainerStore {
 
     static func readContainerMetadata(containerPath: String) -> ContainerMetadata? {
         let metadataPath = metadataPath(for: containerPath)
+        let handle = grantContainerAccess(containerPath)
+        defer {
+            if handle >= 0 { bad_query_release(handle) }
+        }
         guard let data = readDataDirectly(atPath: metadataPath) else {
             return nil
         }
         guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
             return nil
         }
-        guard let bundleID = plist["MCMMetadataIdentifier"] as? String,
-              !bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let rawID = (plist["MCMMetadataIdentifier"] as? String) ??
+                    ((plist["MCMMetadataInfo"] as? [String: Any])?["CFBundleIdentifier"] as? String)
+        guard let bundleID = rawID, !bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
         let cleanBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         var displayName = ""
         if let info = plist["MCMMetadataInfo"] as? [String: Any] {
             if let name = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) {
+                displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if displayName.isEmpty {
+            if let name = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String) {
                 displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
@@ -735,7 +787,7 @@ enum ContainerStore {
     }
 
     static func grantContainerAccess(_ containerPath: String) -> Int64 {
-        guard shouldUseBadQuery else { return -1 }
+        guard !containerPath.isEmpty else { return -1 }
         let clean = containerPath.hasSuffix("/") ? String(containerPath.dropLast()) : containerPath
         var pathC = clean.utf8CString.map { Int8($0) }
         return bad_query(&pathC, true, nil, false)
@@ -979,7 +1031,13 @@ enum ContainerStore {
                 shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
 
                 // 1. Check in-memory caches first for instant response
-                if let app = AppContainerScanner.shared.getCachedInfo(forUDID: name) {
+                if let bid = ContainerStore.bundleID(forUUID: name) {
+                    bundleID = bid
+                    let proxyInfo = appInfoForBundleID(bid) as? [String: Any] ?? [:]
+                    let lsName = proxyInfo["name"] as? String
+                    appName = (lsName != nil && !lsName!.isEmpty && lsName != bid) ? lsName! : bid
+                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bid)
+                } else if let app = AppContainerScanner.shared.getCachedInfo(forUDID: name) {
                     bundleID = app.bundleID
                     appName = app.appName
                     appIcon = app.appIcon
@@ -1012,6 +1070,7 @@ enum ContainerStore {
                         modificationDate: modDate
                     )
                     ContainerMetadataCache.shared.store(app: containerMeta)
+                    ContainerStore.setCachedMapping(uuid: name, bundleID: meta.bundleID)
                 }
             }
 
@@ -1112,7 +1171,13 @@ enum ContainerStore {
                 shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
 
                 // 1. Check in-memory caches first
-                if let app = AppContainerScanner.shared.getCachedInfo(forUDID: item) {
+                if let bid = ContainerStore.bundleID(forUUID: item) {
+                    bundleID = bid
+                    let proxyInfo = appInfoForBundleID(bid) as? [String: Any] ?? [:]
+                    let lsName = proxyInfo["name"] as? String
+                    appName = (lsName != nil && !lsName!.isEmpty && lsName != bid) ? lsName! : bid
+                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bid)
+                } else if let app = AppContainerScanner.shared.getCachedInfo(forUDID: item) {
                     bundleID = app.bundleID
                     appName = app.appName
                     appIcon = app.appIcon
@@ -1145,6 +1210,7 @@ enum ContainerStore {
                         modificationDate: modDate
                     )
                     ContainerMetadataCache.shared.store(app: containerMeta)
+                    ContainerStore.setCachedMapping(uuid: item, bundleID: meta.bundleID)
                 }
             }
 

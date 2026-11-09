@@ -154,7 +154,6 @@ class AppState: ObservableObject {
         guard applicable else { return }
 
         refreshKernelExploitStatus()
-        maybeAutoRunKernelExploit()
     }
 
     private func maybeAutoRunKernelExploit() {
