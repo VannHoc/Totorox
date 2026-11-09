@@ -24,8 +24,13 @@ final class FileIOEngineTests: XCTestCase {
 
     // MARK: - 1. Test Copy File Trùng Tên (Ghi đè hoàn toàn, không diff/hash)
     func testCopyFileOverwritingSameName() async throws {
-        let srcFile = tempDirectory.appendingPathComponent("source_file.txt")
-        let destFile = tempDirectory.appendingPathComponent("dest_file.txt")
+        let srcDir = tempDirectory.appendingPathComponent("Src1")
+        let destDir = tempDirectory.appendingPathComponent("Dest1")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        let srcFile = srcDir.appendingPathComponent("test_file.txt")
+        let destFile = destDir.appendingPathComponent("test_file.txt")
 
         let sourceData = "BRAND_NEW_SOURCE_DATA_123456789".data(using: .utf8)!
         let oldDestData = "OLD_EXISTING_DEST_DATA_OLD".data(using: .utf8)!
@@ -39,7 +44,7 @@ final class FileIOEngineTests: XCTestCase {
             conflictResolver: { _, _, _ in .replace }
         )
 
-        XCTAssertTrue(result.failed.isEmpty, "Failed records should be empty")
+        XCTAssertTrue(result.failed.isEmpty, "Failed records should be empty: \(result.failed)")
         XCTAssertFalse(result.isCancelled, "Operation should not be cancelled")
         XCTAssertTrue(result.succeeded.contains(destFile.standardizedFileURL))
 
@@ -49,17 +54,9 @@ final class FileIOEngineTests: XCTestCase {
 
     // MARK: - 2. Test Copy Folder Trùng Tên (Merge đệ quy nhiều cấp)
     func testRecursiveFolderMerge() async throws {
-        let srcFolder = tempDirectory.appendingPathComponent("SourceDir")
-        let destFolder = tempDirectory.appendingPathComponent("DestDir")
+        let srcFolder = tempDirectory.appendingPathComponent("SourceDir2")
+        let destFolder = tempDirectory.appendingPathComponent("DestDir2")
 
-        // Setup source structure:
-        // SourceDir/
-        //   sub1/
-        //     shared.txt ("Source Shared")
-        //     source_only.txt ("Source Only")
-        //   sub2/
-        //     deep/
-        //       leaf.txt ("Deep Leaf")
         let srcSub1 = srcFolder.appendingPathComponent("sub1")
         let srcSub2Deep = srcFolder.appendingPathComponent("sub2/deep")
         try fileManager.createDirectory(at: srcSub1, withIntermediateDirectories: true)
@@ -69,13 +66,6 @@ final class FileIOEngineTests: XCTestCase {
         try "Source Only".data(using: .utf8)!.write(to: srcSub1.appendingPathComponent("source_only.txt"))
         try "Deep Leaf".data(using: .utf8)!.write(to: srcSub2Deep.appendingPathComponent("leaf.txt"))
 
-        // Setup destination structure:
-        // DestDir/
-        //   sub1/
-        //     shared.txt ("Old Dest Shared")
-        //     dest_only.txt ("Preserved Dest File")
-        //   preserved_folder/
-        //     untouched.txt ("Untouched")
         let destSub1 = destFolder.appendingPathComponent("sub1")
         let destPreserved = destFolder.appendingPathComponent("preserved_folder")
         try fileManager.createDirectory(at: destSub1, withIntermediateDirectories: true)
@@ -91,7 +81,7 @@ final class FileIOEngineTests: XCTestCase {
             conflictResolver: { _, _, _ in .replace }
         )
 
-        XCTAssertTrue(result.failed.isEmpty, "No errors expected during merge")
+        XCTAssertTrue(result.failed.isEmpty, "No errors expected during merge: \(result.failed)")
         XCTAssertFalse(result.isCancelled)
 
         // 1. Shared file overwritten
@@ -116,8 +106,13 @@ final class FileIOEngineTests: XCTestCase {
 
     // MARK: - 3. Test Xung Đột Loại (File vs Folder) - Mock 3 trạng thái Replace / Skip / Cancel
     func testTypeConflict_FileOverwritingFolder_Skip() async throws {
-        let srcFile = tempDirectory.appendingPathComponent("conflict_target")
-        let destFolder = tempDirectory.appendingPathComponent("conflict_target")
+        let srcDir = tempDirectory.appendingPathComponent("SrcSkip3")
+        let destDir = tempDirectory.appendingPathComponent("DestSkip3")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        let srcFile = srcDir.appendingPathComponent("conflict_target")
+        let destFolder = destDir.appendingPathComponent("conflict_target")
 
         try "File Data".data(using: .utf8)!.write(to: srcFile)
         try fileManager.createDirectory(at: destFolder, withIntermediateDirectories: true)
@@ -141,8 +136,13 @@ final class FileIOEngineTests: XCTestCase {
     }
 
     func testTypeConflict_FileOverwritingFolder_Cancel() async throws {
-        let srcFile = tempDirectory.appendingPathComponent("conflict_target_cancel")
-        let destFolder = tempDirectory.appendingPathComponent("conflict_target_cancel")
+        let srcDir = tempDirectory.appendingPathComponent("SrcCancel3")
+        let destDir = tempDirectory.appendingPathComponent("DestCancel3")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        let srcFile = srcDir.appendingPathComponent("conflict_target_cancel")
+        let destFolder = destDir.appendingPathComponent("conflict_target_cancel")
 
         try "File Data".data(using: .utf8)!.write(to: srcFile)
         try fileManager.createDirectory(at: destFolder, withIntermediateDirectories: true)
@@ -163,8 +163,13 @@ final class FileIOEngineTests: XCTestCase {
     }
 
     func testTypeConflict_FileOverwritingFolder_Replace() async throws {
-        let srcFile = tempDirectory.appendingPathComponent("conflict_replace_src")
-        let destFolder = tempDirectory.appendingPathComponent("conflict_replace_dst")
+        let srcDir = tempDirectory.appendingPathComponent("SrcReplace3")
+        let destDir = tempDirectory.appendingPathComponent("DestReplace3")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        let srcFile = srcDir.appendingPathComponent("conflict_replace")
+        let destFolder = destDir.appendingPathComponent("conflict_replace")
 
         try "Replacement File".data(using: .utf8)!.write(to: srcFile)
         try fileManager.createDirectory(at: destFolder, withIntermediateDirectories: true)
@@ -180,7 +185,7 @@ final class FileIOEngineTests: XCTestCase {
         )
 
         XCTAssertFalse(result.isCancelled)
-        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertTrue(result.failed.isEmpty, "Failed records should be empty: \(result.failed)")
         var isDir: ObjCBool = false
         XCTAssertTrue(fileManager.fileExists(atPath: destFolder.path, isDirectory: &isDir))
         XCTAssertFalse(isDir.boolValue, "Destination should now be a regular file after Replace")
@@ -189,8 +194,13 @@ final class FileIOEngineTests: XCTestCase {
     }
 
     func testTypeConflict_FolderOverwritingFile_SkipAndReplace() async throws {
-        let srcFolder = tempDirectory.appendingPathComponent("src_folder")
-        let destFile = tempDirectory.appendingPathComponent("dest_file")
+        let srcDir = tempDirectory.appendingPathComponent("SrcFolderConflict3")
+        let destDir = tempDirectory.appendingPathComponent("DestFolderConflict3")
+        try fileManager.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        let srcFolder = srcDir.appendingPathComponent("conflict_folder")
+        let destFile = destDir.appendingPathComponent("conflict_folder")
 
         try fileManager.createDirectory(at: srcFolder, withIntermediateDirectories: true)
         try "Nested in src".data(using: .utf8)!.write(to: srcFolder.appendingPathComponent("item.txt"))
@@ -220,7 +230,7 @@ final class FileIOEngineTests: XCTestCase {
             }
         )
         XCTAssertFalse(replaceResult.isCancelled)
-        XCTAssertTrue(replaceResult.failed.isEmpty)
+        XCTAssertTrue(replaceResult.failed.isEmpty, "Failed records should be empty: \(replaceResult.failed)")
         XCTAssertTrue(fileManager.fileExists(atPath: destFile.path, isDirectory: &isDir))
         XCTAssertTrue(isDir.boolValue, "Destination must now be a directory")
         XCTAssertTrue(fileManager.fileExists(atPath: destFile.appendingPathComponent("item.txt").path))
@@ -228,15 +238,14 @@ final class FileIOEngineTests: XCTestCase {
 
     // MARK: - 4. Test Hủy thao tác & Báo cáo kết quả I/O chính xác
     func testCancellationAndFailureReporting() async throws {
-        let srcFolder = tempDirectory.appendingPathComponent("CancelTestSrc")
-        let destFolder = tempDirectory.appendingPathComponent("CancelTestDst")
+        let srcFolder = tempDirectory.appendingPathComponent("CancelTestSrc4")
+        let destFolder = tempDirectory.appendingPathComponent("CancelTestDst4")
 
         try fileManager.createDirectory(at: srcFolder, withIntermediateDirectories: true)
         for i in 1...5 {
             try "Data \(i)".data(using: .utf8)!.write(to: srcFolder.appendingPathComponent("file\(i).txt"))
         }
 
-        // Simulating cancellation task
         let task = Task {
             await engine.copyAndMerge(
                 from: srcFolder,
@@ -248,7 +257,6 @@ final class FileIOEngineTests: XCTestCase {
         let result = await task.value
 
         XCTAssertTrue(result.isCancelled, "Operation should be marked as cancelled")
-        // Check that result accurately tracks items
         XCTAssertTrue(result.succeeded.count + result.failed.count + result.skipped.count > 0, "Reporting must track items accurately")
     }
 }

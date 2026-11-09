@@ -115,33 +115,27 @@ final class PatchZipConverterTests: XCTestCase {
             }
             switch convError {
             case .corruptedArchive: break
-            default: XCTFail("Expected corruptedArchive error")
+            default: XCTFail("Expected corruptedArchive error, got \(convError)")
             }
         }
     }
 
     func testConvertZipMissingManifest_ThrowsError() throws {
-        // Zip without patch.json
-        let emptyZipURL = tempDirectory.appendingPathComponent("no_manifest.zip")
-        let dummyData = "dummy content".data(using: .utf8)!
-        let emptyZipData = try converter.convertPatchDataToZipData(
-            try PatchPackageCodec.encodeNew(
-                project: PatchProject(name: "Dummy", author: "VannHoc", rules: [
-                    PatchRule(bundleID: "com.apple.mobile.MobileHouseArrest", relativePath: "a.txt", replacementFilename: "a.txt", replacementData: dummyData)
-                ]),
-                password: nil
-            ).data
-        )
+        let badZipURL = tempDirectory.appendingPathComponent("missing_manifest.zip")
+        let dummyData = "dummy content without patch.json".data(using: .utf8)!
+        let zipData = try converter.buildZipArchive(entries: [("some_folder/dummy.txt", dummyData)])
+        try zipData.write(to: badZipURL)
 
-        // Write a zip containing only some other file
-        let invalidZipURL = tempDirectory.appendingPathComponent("invalid.zip")
-        try emptyZipData.write(to: invalidZipURL)
-
-        // Try converting non-manifest data
-        let badZipURL = tempDirectory.appendingPathComponent("bad_manifest.zip")
-        try? "PK\u{05}\u{06}".data(using: .utf8)?.write(to: badZipURL)
-        let outputPatch = tempDirectory.appendingPathComponent("out2.3105")
-
-        XCTAssertThrowsError(try converter.convertZipToPatch(zipURL: badZipURL, destinationPatchURL: outputPatch))
+        let outputPatch = tempDirectory.appendingPathComponent("out_missing.3105")
+        XCTAssertThrowsError(try converter.convertZipToPatch(zipURL: badZipURL, destinationPatchURL: outputPatch)) { error in
+            guard let convError = error as? PatchZipConverterError else {
+                XCTFail("Expected PatchZipConverterError but got \(error)")
+                return
+            }
+            switch convError {
+            case .invalidManifest: break
+            default: XCTFail("Expected invalidManifest error, got \(convError)")
+            }
+        }
     }
 }

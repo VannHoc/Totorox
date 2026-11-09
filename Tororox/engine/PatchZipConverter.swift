@@ -301,7 +301,7 @@ public final class PatchZipConverter {
 
     // MARK: - Internal Standard PKZIP Engine (Pure Swift, portable, zero external dependencies)
 
-    private func buildZipArchive(entries: [(path: String, data: Data)]) throws -> Data {
+    func buildZipArchive(entries: [(path: String, data: Data)]) throws -> Data {
         var archive = Data()
         var centralDirectory = Data()
         var centralCount: UInt16 = 0
