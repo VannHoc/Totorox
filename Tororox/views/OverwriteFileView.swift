@@ -321,27 +321,26 @@ struct OverwriteFileView: View {
             // Asynchronously resolve icons in background without blocking launch
             Task.detached(priority: .background) {
                 for app in sorted.prefix(25) {
-                    if let icon = iconForBundleID(app.bundleID) {
-                        let uuid = (app.containerPath as NSString).lastPathComponent
-                        if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
-                            let updated = AppContainerMetadata(
-                                uuid: uuid,
-                                containerPath: cached.containerPath,
-                                bundleID: cached.bundleID,
-                                appName: cached.appName,
-                                icon: icon,
-                                isUserApp: true,
-                                modificationDate: cached.modificationDate
-                            )
-                            ContainerMetadataCache.shared.store(app: updated)
+                    guard let icon: UIImage = iconForBundleID(app.bundleID) else { continue }
+                    let uuid = (app.containerPath as NSString).lastPathComponent
+                    if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
+                        let updated = AppContainerMetadata(
+                            uuid: uuid,
+                            containerPath: cached.containerPath,
+                            bundleID: cached.bundleID,
+                            appName: cached.appName,
+                            icon: icon,
+                            isUserApp: true,
+                            modificationDate: cached.modificationDate
+                        )
+                        ContainerMetadataCache.shared.store(app: updated)
+                    }
+                    await MainActor.run {
+                        if let idx = self.installedApps.firstIndex(where: { $0.id == app.bundleID }) {
+                            self.installedApps[idx].iconImage = icon
                         }
-                        await MainActor.run {
-                            if let idx = self.installedApps.firstIndex(where: { $0.id == app.bundleID }) {
-                                self.installedApps[idx].iconImage = icon
-                            }
-                            if self.selectedApp?.id == app.bundleID {
-                                self.selectedApp?.iconImage = icon
-                            }
+                        if self.selectedApp?.id == app.bundleID {
+                            self.selectedApp?.iconImage = icon
                         }
                     }
                 }

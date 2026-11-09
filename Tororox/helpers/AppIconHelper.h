@@ -8,10 +8,10 @@ NS_ASSUME_NONNULL_BEGIN
 NSDictionary<NSString *, NSDictionary *> *installedAppInfo(void);
 
 /// Fetches an icon for a single bundle ID via LSApplicationProxy.
-UIImage *iconForBundleID(NSString *bundleID);
+UIImage * _Nullable iconForBundleID(NSString *bundleID);
 
 /// Returns @{ @"name": NSString, @"icon": UIImage } for a single bundle ID.
-NSDictionary *appInfoForBundleID(NSString *bundleID);
+NSDictionary * _Nullable appInfoForBundleID(NSString *bundleID);
 
 /// Opens an installed app using LaunchServices. Returns NO when the private
 /// selector is unavailable or the requested bundle cannot be opened.
