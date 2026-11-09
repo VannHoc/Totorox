@@ -793,7 +793,8 @@ struct OverwriteFileView: View {
             
             if is3105 {
                 do {
-                    _ = try PatchZipConverter.convert3105ToZip(input3105URL: patchURL, outputZipURL: stagingDir.appendingPathComponent("extracted.zip"))
+                    let converter = PatchZipConverter()
+                    try converter.convertPatch3105ToZip(inputURL: patchURL, outputZipURL: stagingDir.appendingPathComponent("extracted.zip"))
                     let unzippedDir = stagingDir.appendingPathComponent("payload", isDirectory: true)
                     try? FileManager.default.createDirectory(at: unzippedDir, withIntermediateDirectories: true)
                     _ = try ZIPArchiveExtractor.extract(archiveURL: stagingDir.appendingPathComponent("extracted.zip"), destinationURL: unzippedDir)
