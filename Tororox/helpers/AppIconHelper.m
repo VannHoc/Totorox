@@ -1,4 +1,5 @@
 #import "AppIconHelper.h"
+#import "../exploit/mcm_bridge.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dlfcn.h>
@@ -21,7 +22,7 @@ static NSData *iconDataFromProxy(id proxy) {
     if (![proxy respondsToSelector:iconSel]) return nil;
 
     // Variant availability differs between iOS releases and app types.
-    // Stop at the first usable image instead of assuming variant zero exists.
+    // 2: 60x60 iPhone, 0: 29x29, 1: 40x40, 3: 76x76 iPad, 4: 83.5x83.5 iPad Pro
     const int variants[] = {2, 0, 1, 3, 4, 5, 6, 7, 15};
     for (NSUInteger index = 0; index < sizeof(variants) / sizeof(variants[0]); index++) {
         id data = ((id (*)(id, SEL, int))objc_msgSend)(proxy, iconSel, variants[index]);
@@ -146,7 +147,7 @@ static NSDictionary *appsFromWorkspace(void) {
     }
     SEL defaultWorkspaceSel = NSSelectorFromString(@"defaultWorkspace");
     if (![workspaceClass respondsToSelector:defaultWorkspaceSel]) {
-        NSLog(@"[Totorox] ls: defaultWorkspace selector unavailable");
+        NSLog(@"[Totorox] ls: defaultWorkspace selector missing");
         return result;
     }
     id workspace = ((id (*)(id, SEL))objc_msgSend)(workspaceClass, defaultWorkspaceSel);
@@ -244,7 +245,97 @@ NSDictionary<NSString *, NSDictionary *> *installedAppInfo(void) {
     return mobileInstallation;
 }
 
-// Icon via LSApplicationProxy (per bundle ID)
+// Direct extraction of icon from application bundle (.app)
+UIImage *iconForBundlePath(NSString *bundlePath) {
+    if (!bundlePath || bundlePath.length == 0) return nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    
+    // 1. Try Info.plist
+    NSString *infoPlistPath = [bundlePath stringByAppendingPathComponent:@"Info.plist"];
+    NSDictionary *infoPlist = [NSDictionary dictionaryWithContentsOfFile:infoPlistPath];
+    if (infoPlist) {
+        NSDictionary *iconsDict = infoPlist[@"CFBundleIcons"];
+        if ([iconsDict isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *primaryIcon = iconsDict[@"CFBundlePrimaryIcon"];
+            if ([primaryIcon isKindOfClass:[NSDictionary class]]) {
+                NSArray *files = primaryIcon[@"CFBundleIconFiles"];
+                if ([files isKindOfClass:[NSArray class]] && files.count > 0) {
+                    for (NSInteger i = (NSInteger)files.count - 1; i >= 0; i--) {
+                        NSString *filename = files[i];
+                        if (![filename isKindOfClass:[NSString class]]) continue;
+                        NSArray *extensions = @[@"", @".png", @"@2x.png", @"@3x.png", @"~ipad.png", @"@2x~ipad.png"];
+                        for (NSString *ext in extensions) {
+                            NSString *candidate = [bundlePath stringByAppendingPathComponent:[filename stringByAppendingString:ext]];
+                            if ([fm fileExistsAtPath:candidate]) {
+                                UIImage *img = [UIImage imageWithContentsOfFile:candidate];
+                                if (img && img.size.width > 0) return img;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        NSString *iconFile = infoPlist[@"CFBundleIconFile"];
+        if ([iconFile isKindOfClass:[NSString class]] && iconFile.length > 0) {
+            NSArray *extensions = @[@"", @".png", @"@2x.png", @"@3x.png"];
+            for (NSString *ext in extensions) {
+                NSString *candidate = [bundlePath stringByAppendingPathComponent:[iconFile stringByAppendingString:ext]];
+                if ([fm fileExistsAtPath:candidate]) {
+                    UIImage *img = [UIImage imageWithContentsOfFile:candidate];
+                    if (img && img.size.width > 0) return img;
+                }
+            }
+        }
+    }
+    
+    // 2. Scan bundle directory for AppIcon*.png or *.png
+    NSArray *contents = [fm contentsOfDirectoryAtPath:bundlePath error:nil];
+    if (contents) {
+        for (NSString *filename in contents) {
+            if ([filename hasPrefix:@"AppIcon"] && [filename hasSuffix:@".png"]) {
+                NSString *full = [bundlePath stringByAppendingPathComponent:filename];
+                UIImage *img = [UIImage imageWithContentsOfFile:full];
+                if (img && img.size.width > 0) return img;
+            }
+        }
+    }
+    
+    // 3. Try CoreUI on Assets.car
+    NSString *carPath = [bundlePath stringByAppendingPathComponent:@"Assets.car"];
+    if ([fm fileExistsAtPath:carPath]) {
+        void *coreUI = dlopen("/System/Library/PrivateFrameworks/CoreUI.framework/CoreUI", RTLD_LAZY | RTLD_LOCAL);
+        if (coreUI) {
+            Class catalogClass = NSClassFromString(@"CUICatalog");
+            if (catalogClass) {
+                SEL initURL = NSSelectorFromString(@"initWithURL:error:");
+                if ([catalogClass instancesRespondToSelector:initURL]) {
+                    id catalog = ((id (*)(id, SEL, id, id*))objc_msgSend)([catalogClass alloc], initURL, [NSURL fileURLWithPath:carPath], NULL);
+                    if (catalog) {
+                        SEL imageWithName = NSSelectorFromString(@"imageWithName:scaleFactor:");
+                        if ([catalog respondsToSelector:imageWithName]) {
+                            NSArray *iconNames = @[@"AppIcon60x60", @"AppIcon76x76", @"AppIcon", @"AppIcon-1"];
+                            for (NSString *name in iconNames) {
+                                id cuiImage = ((id (*)(id, SEL, id, CGFloat))objc_msgSend)(catalog, imageWithName, name, 2.0);
+                                if (cuiImage) {
+                                    SEL cgImageSel = NSSelectorFromString(@"_CGImage");
+                                    if ([cuiImage respondsToSelector:cgImageSel]) {
+                                        CGImageRef cgImg = ((CGImageRef (*)(id, SEL))objc_msgSend)(cuiImage, cgImageSel);
+                                        if (cgImg) {
+                                            return [UIImage imageWithCGImage:cgImg];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return nil;
+}
+
+// Icon via LSApplicationProxy / CoreUI / Bundle PNG (per bundle ID)
 UIImage *iconForBundleID(NSString *bundleID) {
     if (!bundleID || bundleID.length == 0) return nil;
     static NSCache<NSString *, UIImage *> *cache;
@@ -260,24 +351,43 @@ UIImage *iconForBundleID(NSString *bundleID) {
     SEL privateIconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
     if ([UIImage respondsToSelector:privateIconSel]) {
         CGFloat scale = [UIScreen mainScreen].scale;
-        UIImage *img = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)([UIImage class], privateIconSel, bundleID, 2, scale);
-        if (img) {
-            [cache setObject:img forKey:bundleID];
-            return img;
+        int formats[] = {2, 0, 1, 3};
+        for (int i = 0; i < 4; i++) {
+            UIImage *img = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)([UIImage class], privateIconSel, bundleID, formats[i], scale);
+            if (img && img.size.width > 0 && img.size.height > 0) {
+                [cache setObject:img forKey:bundleID];
+                return img;
+            }
         }
     }
 
-    // 2. Try LSApplicationProxy iconDataForVariant:
+    // 2. Try LSApplicationProxy iconDataForVariant: and bundleURL
     Class proxyClass = NSClassFromString(@"LSApplicationProxy");
     if (proxyClass) {
         SEL appProxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
         if ([proxyClass respondsToSelector:appProxySel]) {
             id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, appProxySel, bundleID);
             if (proxy) {
-                UIImage *icon = iconFromData(iconDataFromProxy(proxy), 60.0);
-                if (icon) {
-                    [cache setObject:icon forKey:bundleID];
-                    return icon;
+                NSData *data = iconDataFromProxy(proxy);
+                if (data) {
+                    UIImage *icon = iconFromData(data, 60.0);
+                    if (icon) {
+                        [cache setObject:icon forKey:bundleID];
+                        return icon;
+                    }
+                }
+                
+                SEL bundleURLSel = NSSelectorFromString(@"bundleURL");
+                if ([proxy respondsToSelector:bundleURLSel]) {
+                    id bVal = ((id (*)(id, SEL))objc_msgSend)(proxy, bundleURLSel);
+                    NSString *bPath = [bVal isKindOfClass:[NSURL class]] ? [bVal path] : bVal;
+                    if ([bPath isKindOfClass:[NSString class]] && bPath.length > 0) {
+                        UIImage *bundleIcon = iconForBundlePath(bPath);
+                        if (bundleIcon) {
+                            [cache setObject:bundleIcon forKey:bundleID];
+                            return bundleIcon;
+                        }
+                    }
                 }
             }
         }
@@ -390,4 +500,80 @@ BOOL openApplicationForBundleID(NSString *bundleID) {
     SEL openSelector = NSSelectorFromString(@"openApplicationWithBundleID:");
     if (![workspace respondsToSelector:openSelector]) return NO;
     return ((BOOL (*)(id, SEL, id))objc_msgSend)(workspace, openSelector, bundleID);
+}
+
+// Builds a comprehensive dictionary mapping UUID (in lowercase, uppercase, and exact) to Bundle ID.
+NSDictionary<NSString *, NSString *> *containerUUIDToBundleIDMap(void) {
+    static NSMutableDictionary<NSString *, NSString *> *cachedMap;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cachedMap = [NSMutableDictionary dictionary];
+    });
+
+    // 1. From LaunchServices allApplications
+    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+    SEL defaultWorkspaceSel = NSSelectorFromString(@"defaultWorkspace");
+    if (workspaceClass && [workspaceClass respondsToSelector:defaultWorkspaceSel]) {
+        id workspace = ((id (*)(id, SEL))objc_msgSend)(workspaceClass, defaultWorkspaceSel);
+        if (workspace) {
+            for (NSString *selName in @[@"allApplications", @"allInstalledApplications"]) {
+                SEL allAppsSel = NSSelectorFromString(selName);
+                if (![workspace respondsToSelector:allAppsSel]) continue;
+                id apps = ((id (*)(id, SEL))objc_msgSend)(workspace, allAppsSel);
+                if ([apps isKindOfClass:[NSArray class]]) {
+                    for (id proxy in apps) {
+                        @autoreleasepool {
+                            NSString *bid = nil;
+                            for (NSString *bSel in @[@"bundleIdentifier", @"applicationIdentifier"]) {
+                                SEL s = NSSelectorFromString(bSel);
+                                if ([proxy respondsToSelector:s]) {
+                                    id v = ((id (*)(id, SEL))objc_msgSend)(proxy, s);
+                                    if ([v isKindOfClass:[NSString class]] && [v length] > 0) {
+                                        bid = v;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (bid.length == 0) continue;
+                            
+                            for (NSString *cSel in @[@"dataContainerURL", @"containerURL"]) {
+                                SEL s = NSSelectorFromString(cSel);
+                                if (![proxy respondsToSelector:s]) continue;
+                                id v = ((id (*)(id, SEL))objc_msgSend)(proxy, s);
+                                NSString *p = [v isKindOfClass:[NSURL class]] ? [v path] : v;
+                                if ([p isKindOfClass:[NSString class]] && p.length > 0) {
+                                    NSString *uuid = [p lastPathComponent];
+                                    if (uuid.length >= 8) {
+                                        cachedMap[uuid.uppercaseString] = bid;
+                                        cachedMap[uuid.lowercaseString] = bid;
+                                        cachedMap[uuid] = bid;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 2. From MCM Class 2 Enumeration & Direct Query
+    if (MCMBridgeAvailable()) {
+        NSString *err = nil;
+        NSArray<NSString *> *identifiers = MCMEnumerateIdentifiersForClass(2, 500, &err);
+        for (NSString *ident in identifiers) {
+            if (ident.length == 0) continue;
+            NSString *path = MCMContainerPathForIdentifier(2, ident, NO, nil);
+            if (path.length > 0) {
+                NSString *uuid = [path lastPathComponent];
+                if (uuid.length >= 8) {
+                    cachedMap[uuid.uppercaseString] = ident;
+                    cachedMap[uuid.lowercaseString] = ident;
+                    cachedMap[uuid] = ident;
+                }
+            }
+        }
+    }
+    
+    return [cachedMap copy];
 }

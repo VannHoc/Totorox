@@ -368,40 +368,28 @@ struct FolderExplorerView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                // Icon (App Container avatar or system icon)
-                if entry.isAppContainer {
-                    AppIconAvatarView(
-                        icon: entry.appIcon,
-                        title: entry.appName ?? entry.name,
-                        bundleID: entry.bundleID ?? "",
-                        size: 44
-                    )
-                } else if let appIcon = entry.appIcon {
-                    Image(uiImage: appIcon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+                // Icon: Uniform default icon (all folders identical mint squircle, matching original design)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(iconBackgroundColor(for: entry))
                         .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
-                        )
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(iconBackgroundColor(for: entry))
-                            .frame(width: 44, height: 44)
 
-                        Image(systemName: iconName(for: entry))
-                            .font(.system(size: 20))
-                            .foregroundStyle(iconForegroundColor(for: entry))
-                    }
+                    Image(systemName: iconName(for: entry))
+                        .font(.system(size: 20))
+                        .foregroundStyle(iconForegroundColor(for: entry))
                 }
 
-                // Info: Line 1 (Name) & Line 2 (Metadata)
+                // Info: Line 1 (Name in com.... format) & Line 2 (Metadata)
                 VStack(alignment: .leading, spacing: 3) {
-                    // Line 1: Primary Title with middle truncation
-                    Text(entry.appName ?? entry.name)
+                    // Line 1: Primary Title (Bundle ID for app containers, format com....)
+                    let titleText: String = {
+                        if entry.isAppContainer {
+                            return entry.bundleID ?? entry.name
+                        }
+                        return entry.name
+                    }()
+
+                    Text(titleText)
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
                         .lineLimit(1)
@@ -410,17 +398,19 @@ struct FolderExplorerView: View {
 
                     if entry.isAppContainer {
                         VStack(alignment: .leading, spacing: 2) {
-                            if let bid = entry.bundleID, !bid.isEmpty {
-                                Text(bid)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .lineLimit(1)
-                            }
-                            if let shortId = entry.shortUUID {
-                                Text("UDID: \(shortId)")
-                                    .font(.system(size: 9.5, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                    .lineLimit(1)
+                            HStack(spacing: 6) {
+                                if let appName = entry.appName, appName != entry.bundleID && appName != entry.name {
+                                    Text(appName)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .lineLimit(1)
+                                }
+                                if let shortId = entry.shortUUID {
+                                    Text("UDID: \(shortId)")
+                                        .font(.system(size: 9.5, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                        .lineLimit(1)
+                                }
                             }
                             Text("Data: \(entry.path)")
                                 .font(.system(size: 9.5, design: .monospaced))

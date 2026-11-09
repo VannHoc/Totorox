@@ -51,13 +51,21 @@ final class ContainerMetadataCache: @unchecked Sendable {
     func cachedApp(forUUID uuid: String) -> AppContainerMetadata? {
         lock.lock()
         defer { lock.unlock() }
-        return appMetadataCache[uuid]
+        return appMetadataCache[uuid] ?? appMetadataCache[uuid.uppercased()] ?? appMetadataCache[uuid.lowercased()]
+    }
+
+    func bundleID(forUUID uuid: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return (appMetadataCache[uuid] ?? appMetadataCache[uuid.uppercased()] ?? appMetadataCache[uuid.lowercased()])?.bundleID
     }
 
     func store(app: AppContainerMetadata) {
         lock.lock()
         defer { lock.unlock() }
         appMetadataCache[app.uuid] = app
+        appMetadataCache[app.uuid.uppercased()] = app
+        appMetadataCache[app.uuid.lowercased()] = app
         if let icon = app.icon {
             iconCache.setObject(icon, forKey: app.bundleID as NSString)
         }

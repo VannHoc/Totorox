@@ -39,5 +39,18 @@ struct ContentView: View {
             LogView()
                 .preferredColorScheme(.light)
         }
+        .onAppear {
+            Task.detached(priority: .userInitiated) {
+                // Pre-warm UUID to Bundle ID mappings
+                ContainerStore.refreshUUIDMap()
+                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
+
+                // Run sandbox escape on physical devices in background if needed
+                if !KernelExploit.hasSandboxAccess() {
+                    _ = KernelExploit.run()
+                    ContainerStore.refreshUUIDMap()
+                }
+            }
+        }
     }
 }

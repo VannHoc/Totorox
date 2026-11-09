@@ -173,6 +173,23 @@ struct FileEntry: Identifiable, Hashable {
 enum ContainerStore {
     static let appDataRoot = "/var/mobile/Containers/Data/Application"
     static let systemDataRoot = "/var/mobile/Containers/Data/System"
+
+    private static var _uuidMap: [String: String]? = nil
+    private static let uuidMapLock = NSLock()
+    static var uuidMap: [String: String] {
+        uuidMapLock.lock()
+        defer { uuidMapLock.unlock() }
+        if let m = _uuidMap, !m.isEmpty { return m }
+        let raw = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        _uuidMap = raw
+        return raw
+    }
+    static func refreshUUIDMap() {
+        uuidMapLock.lock()
+        defer { uuidMapLock.unlock() }
+        _uuidMap = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+    }
+
     private static var shouldUseBadQuery: Bool {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
     }
@@ -908,40 +925,50 @@ enum ContainerStore {
 
             if isDir && isAppContainerDirectory && UUID(uuidString: name) != nil {
                 isAppContainer = true
-                if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: name) {
-                    appName = cached.appName
+                let uuidUpper = name.uppercased()
+
+                // 1. Check system UUID map (LSApplicationWorkspace + MCM)
+                if let mappedBid = ContainerStore.uuidMap[uuidUpper] ?? ContainerStore.uuidMap[name] ?? ContainerStore.uuidMap[name.lowercased()] {
+                    bundleID = mappedBid
+                }
+
+                // 2. Check AppContainerScanner cache
+                if bundleID == nil, let app = AppContainerScanner.shared.getCachedInfo(forUDID: name) {
+                    bundleID = app.bundleID
+                    appName = app.appName
+                }
+
+                // 3. Check ContainerMetadataCache
+                if bundleID == nil, let cached = ContainerMetadataCache.shared.cachedApp(forUUID: name) {
                     bundleID = cached.bundleID
-                    appIcon = cached.icon
-                    shortUUID = cached.shortUUID
-                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
+                    appName = cached.appName
+                }
+
+                // 4. Read metadata plist
+                if bundleID == nil, let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
                     bundleID = meta.bundleID
-                    let info = appInfoForBundleID(meta.bundleID)
-                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
-                    appName = resolvedName
-                    appIcon = iconForBundleID(meta.bundleID)
+                    if !meta.displayName.isEmpty { appName = meta.displayName }
+                }
+
+                // 5. If bundleID found, resolve localized name
+                if let bid = bundleID, !bid.isEmpty {
+                    if appName == nil || appName == bid {
+                        let info = appInfoForBundleID(bid)
+                        appName = (info["name"] as? String) ?? bid
+                    }
                     let containerMeta = AppContainerMetadata(
                         uuid: name,
                         containerPath: full,
-                        bundleID: meta.bundleID,
-                        appName: resolvedName,
-                        icon: appIcon,
-                        isUserApp: true,
+                        bundleID: bid,
+                        appName: appName ?? bid,
+                        icon: nil,
+                        isUserApp: !bid.hasPrefix("com.apple."),
                         modificationDate: modDate
                     )
                     ContainerMetadataCache.shared.store(app: containerMeta)
-                    shortUUID = containerMeta.shortUUID
-                } else {
-                    shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
                 }
 
-                if appName == nil {
-                    if let bid = bundleID, !bid.isEmpty {
-                        appName = bid
-                    } else {
-                        let short = shortUUID ?? (name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name)
-                        appName = "Container (\(short))"
-                    }
-                }
+                shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
             } else if isDir {
                 childCount = DirectorySizeService.countImmediateChildren(at: full)
             }
@@ -1057,15 +1084,15 @@ enum ContainerStore {
 
     public static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
         entries.sorted { lhs, rhs in
-            // 1. User app containers first, sorted alphabetically by App Name
-            let lhsIsUserApp = lhs.isAppContainer && lhs.appName != nil
-            let rhsIsUserApp = rhs.isAppContainer && rhs.appName != nil
-            if lhsIsUserApp != rhsIsUserApp {
-                return lhsIsUserApp
-            }
-            if lhsIsUserApp && rhsIsUserApp {
-                let name1 = lhs.appName ?? lhs.name
-                let name2 = rhs.appName ?? rhs.name
+            // 1. App containers: non-system user apps first, sorted by bundleID
+            if lhs.isAppContainer || rhs.isAppContainer {
+                let lhsIsUserApp = lhs.isAppContainer && lhs.bundleID != nil && !lhs.bundleID!.hasPrefix("com.apple.")
+                let rhsIsUserApp = rhs.isAppContainer && rhs.bundleID != nil && !rhs.bundleID!.hasPrefix("com.apple.")
+                if lhsIsUserApp != rhsIsUserApp {
+                    return lhsIsUserApp
+                }
+                let name1 = lhs.bundleID ?? lhs.appName ?? lhs.name
+                let name2 = rhs.bundleID ?? rhs.appName ?? rhs.name
                 return name1.localizedCaseInsensitiveCompare(name2) == .orderedAscending
             }
 
@@ -1111,40 +1138,50 @@ enum ContainerStore {
 
             if isDirectory && isAppContainerDirectory && UUID(uuidString: item) != nil {
                 isAppContainer = true
-                if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: item) {
-                    appName = cached.appName
+                let uuidUpper = item.uppercased()
+
+                // 1. Check system UUID map (LSApplicationWorkspace + MCM)
+                if let mappedBid = ContainerStore.uuidMap[uuidUpper] ?? ContainerStore.uuidMap[item] ?? ContainerStore.uuidMap[item.lowercased()] {
+                    bundleID = mappedBid
+                }
+
+                // 2. Check AppContainerScanner cache
+                if bundleID == nil, let app = AppContainerScanner.shared.getCachedInfo(forUDID: item) {
+                    bundleID = app.bundleID
+                    appName = app.appName
+                }
+
+                // 3. Check ContainerMetadataCache
+                if bundleID == nil, let cached = ContainerMetadataCache.shared.cachedApp(forUUID: item) {
                     bundleID = cached.bundleID
-                    appIcon = cached.icon
-                    shortUUID = cached.shortUUID
-                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
+                    appName = cached.appName
+                }
+
+                // 4. Read metadata plist
+                if bundleID == nil, let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
                     bundleID = meta.bundleID
-                    let info = appInfoForBundleID(meta.bundleID)
-                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
-                    appName = resolvedName
-                    appIcon = iconForBundleID(meta.bundleID)
+                    if !meta.displayName.isEmpty { appName = meta.displayName }
+                }
+
+                // 5. If bundleID found, resolve localized name
+                if let bid = bundleID, !bid.isEmpty {
+                    if appName == nil || appName == bid {
+                        let info = appInfoForBundleID(bid)
+                        appName = (info["name"] as? String) ?? bid
+                    }
                     let containerMeta = AppContainerMetadata(
                         uuid: item,
                         containerPath: full,
-                        bundleID: meta.bundleID,
-                        appName: resolvedName,
-                        icon: appIcon,
-                        isUserApp: true,
+                        bundleID: bid,
+                        appName: appName ?? bid,
+                        icon: nil,
+                        isUserApp: !bid.hasPrefix("com.apple."),
                         modificationDate: modDate
                     )
                     ContainerMetadataCache.shared.store(app: containerMeta)
-                    shortUUID = containerMeta.shortUUID
-                } else {
-                    shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
                 }
 
-                if appName == nil {
-                    if let bid = bundleID, !bid.isEmpty {
-                        appName = bid
-                    } else {
-                        let short = shortUUID ?? (item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item)
-                        appName = "Container (\(short))"
-                    }
-                }
+                shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
             } else if isDirectory {
                 childCount = DirectorySizeService.countImmediateChildren(at: full)
             }
