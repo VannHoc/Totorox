@@ -18,7 +18,6 @@ struct TororoxApp: App {
     init() {
         setupLogCapture()
         log("app: Tororox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
-        AppState.runEarlyPrivilegeInit()
     }
 
     private var language: AppLanguage {

@@ -289,13 +289,12 @@ struct OverwriteFileView: View {
             for app in sorted {
                 let uuid = (app.containerPath as NSString).lastPathComponent
                 if UUID(uuidString: uuid) != nil {
-                    let icon = app.icon ?? iconForBundleID(app.bundleID)
                     let meta = AppContainerMetadata(
                         uuid: uuid,
                         containerPath: app.containerPath,
                         bundleID: app.bundleID,
                         appName: app.displayName.isEmpty ? app.bundleID : app.displayName,
-                        icon: icon,
+                        icon: app.icon,
                         isUserApp: true,
                         modificationDate: nil
                     )
@@ -311,11 +310,40 @@ struct OverwriteFileView: View {
                         bundleID: app.bundleID,
                         containerPath: app.containerPath,
                         iconName: "app.fill",
-                        iconImage: app.icon ?? iconForBundleID(app.bundleID)
+                        iconImage: app.icon
                     )
                 }
                 if self.selectedApp == nil || !self.installedApps.contains(where: { $0.id == self.selectedApp?.id }) {
                     self.selectedApp = self.installedApps.first
+                }
+            }
+
+            // Asynchronously resolve icons in background without blocking launch
+            Task.detached(priority: .background) {
+                for app in sorted.prefix(25) {
+                    if let icon = iconForBundleID(app.bundleID) {
+                        let uuid = (app.containerPath as NSString).lastPathComponent
+                        if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
+                            let updated = AppContainerMetadata(
+                                uuid: uuid,
+                                containerPath: cached.containerPath,
+                                bundleID: cached.bundleID,
+                                appName: cached.appName,
+                                icon: icon,
+                                isUserApp: true,
+                                modificationDate: cached.modificationDate
+                            )
+                            ContainerMetadataCache.shared.store(app: updated)
+                        }
+                        await MainActor.run {
+                            if let idx = self.installedApps.firstIndex(where: { $0.id == app.bundleID }) {
+                                self.installedApps[idx].iconImage = icon
+                            }
+                            if self.selectedApp?.id == app.bundleID {
+                                self.selectedApp?.iconImage = icon
+                            }
+                        }
+                    }
                 }
             }
         }
