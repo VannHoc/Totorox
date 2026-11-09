@@ -4,16 +4,16 @@ import SwiftUI
 
 // MARK: - App Container Info Model
 
-public struct AppContainerInfo: Identifiable, Hashable, Sendable {
-    public let id: String
-    public let appName: String
-    public let bundleID: String
-    public let udid: String
-    public let dataPath: String
-    public let bundlePath: String?
-    public let appIcon: UIImage?
+struct AppContainerInfo: Identifiable, Hashable, Sendable {
+    let id: String
+    let appName: String
+    let bundleID: String
+    let udid: String
+    let dataPath: String
+    let bundlePath: String?
+    let appIcon: UIImage?
     
-    public init(
+    init(
         appName: String,
         bundleID: String,
         udid: String,
@@ -30,14 +30,14 @@ public struct AppContainerInfo: Identifiable, Hashable, Sendable {
         self.appIcon = appIcon
     }
     
-    public var shortUDID: String {
+    var shortUDID: String {
         if udid.count >= 16 {
             return "\(udid.prefix(8))-\(udid.dropFirst(8).prefix(4))-...\(udid.suffix(4))"
         }
         return udid
     }
     
-    public var shortDataPath: String {
+    var shortDataPath: String {
         let prefix = "/private/v..."
         if udid.count >= 12 {
             return "\(prefix)\(udid.suffix(16))/"
@@ -45,7 +45,7 @@ public struct AppContainerInfo: Identifiable, Hashable, Sendable {
         return dataPath
     }
     
-    public var shortBundlePath: String? {
+    var shortBundlePath: String? {
         guard let b = bundlePath, !b.isEmpty else { return nil }
         if b.count > 36 {
             let last = (b as NSString).lastPathComponent
@@ -54,7 +54,7 @@ public struct AppContainerInfo: Identifiable, Hashable, Sendable {
         return b
     }
     
-    public var initialLetter: String {
+    var initialLetter: String {
         let clean = appName.trimmingCharacters(in: .whitespacesAndNewlines)
         if let first = clean.first, first.isLetter {
             return String(first).uppercased()
@@ -66,31 +66,31 @@ public struct AppContainerInfo: Identifiable, Hashable, Sendable {
         return "A"
     }
     
-    public static func == (lhs: AppContainerInfo, rhs: AppContainerInfo) -> Bool {
+    static func == (lhs: AppContainerInfo, rhs: AppContainerInfo) -> Bool {
         lhs.id == rhs.id
     }
     
-    public func hash(into hasher: inout Hasher) {
+    func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
 }
 
 // MARK: - App Icon Avatar View (Matches Original App UI)
 
-public struct AppIconAvatarView: View {
-    public let icon: UIImage?
-    public let title: String
-    public let bundleID: String
-    public var size: CGFloat
+struct AppIconAvatarView: View {
+    let icon: UIImage?
+    let title: String
+    let bundleID: String
+    var size: CGFloat
     
-    public init(info: AppContainerInfo, size: CGFloat = 48) {
+    init(info: AppContainerInfo, size: CGFloat = 48) {
         self.icon = info.appIcon
         self.title = info.appName
         self.bundleID = info.bundleID
         self.size = size
     }
     
-    public init(icon: UIImage?, title: String, bundleID: String = "", size: CGFloat = 48) {
+    init(icon: UIImage?, title: String, bundleID: String = "", size: CGFloat = 48) {
         self.icon = icon
         self.title = title
         self.bundleID = bundleID
@@ -136,7 +136,7 @@ public struct AppIconAvatarView: View {
         }
     }
     
-    public var body: some View {
+    var body: some View {
         if let uiIcon = icon {
             Image(uiImage: uiIcon)
                 .resizable()
@@ -177,12 +177,12 @@ public struct AppIconAvatarView: View {
 // MARK: - AppContainerScanner
 
 @MainActor
-public final class AppContainerScanner: ObservableObject {
-    public static let shared = AppContainerScanner()
+final class AppContainerScanner: ObservableObject {
+    static let shared = AppContainerScanner()
     
-    @Published public private(set) var apps: [AppContainerInfo] = []
-    @Published public private(set) var isLoading: Bool = false
-    @Published public private(set) var statusMessage: String = ""
+    @Published private(set) var apps: [AppContainerInfo] = []
+    @Published private(set) var isLoading: Bool = false
+    @Published private(set) var statusMessage: String = ""
     
     private var cacheByBundleID: [String: AppContainerInfo] = [:]
     private var cacheByUDID: [String: AppContainerInfo] = [:]
@@ -190,16 +190,16 @@ public final class AppContainerScanner: ObservableObject {
     
     private init() {}
     
-    public func getCachedInfo(forUDID udid: String) -> AppContainerInfo? {
+    func getCachedInfo(forUDID udid: String) -> AppContainerInfo? {
         return cacheByUDID[udid.uppercased()] ?? cacheByUDID[udid]
     }
     
-    public func getCachedInfo(forBundleID bundleID: String) -> AppContainerInfo? {
+    func getCachedInfo(forBundleID bundleID: String) -> AppContainerInfo? {
         return cacheByBundleID[bundleID]
     }
     
     /// Scans all application containers via LaunchServices, MCM, and Filesystem
-    public func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
+    func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
         if !forceRefresh && hasScanned && !apps.isEmpty {
             return apps
         }
@@ -347,7 +347,7 @@ public final class AppContainerScanner: ObservableObject {
     }
     
     /// Quickly resolves a container by Bundle ID (e.g. "com.garena.game.kgvn")
-    public func resolveContainer(bundleID: String) async -> AppContainerInfo? {
+    func resolveContainer(bundleID: String) async -> AppContainerInfo? {
         let clean = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return nil }
         

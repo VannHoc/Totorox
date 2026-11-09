@@ -30,7 +30,7 @@ struct OverwriteFileView: View {
     @State private var outcomeResult: FileIOResultWrapper? = nil
     
     // Live log tracking
-    @State private var latestLogMessage: String = "● [\(formattedCurrentTime())] [SẴN SÀNG] Đã khởi tạo hệ thống Patch dữ liệu."
+    @State private var latestLogMessage: String = "● [SẴN SÀNG] Đã khởi tạo hệ thống Patch dữ liệu."
     
     // Scanner
     @ObservedObject private var scanner = AppContainerScanner.shared
@@ -502,6 +502,7 @@ struct OverwriteFileView: View {
         }
         .background(TotoroxTheme.pageBackground)
         .onAppear {
+            latestLogMessage = "● [\(Self.formattedCurrentTime())] [SẴN SÀNG] Đã khởi tạo hệ thống Patch dữ liệu."
             loadPresetArchives()
             Task {
                 _ = await scanner.scanAllContainers(forceRefresh: false)
@@ -747,14 +748,14 @@ struct OverwriteFileView: View {
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
     
-    private func formattedCurrentTime() -> String {
+    private static func formattedCurrentTime() -> String {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
         return f.string(from: Date())
     }
     
     private func updateLog(_ msg: String) {
-        let timestamp = formattedCurrentTime()
+        let timestamp = Self.formattedCurrentTime()
         let formatted = "● [\(timestamp)] \(msg)"
         self.latestLogMessage = formatted
         log("patch: \(msg)")
