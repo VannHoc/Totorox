@@ -1,0 +1,526 @@
+import Foundation
+import CryptoKit
+
+public enum PatchZipConverterError: Error, LocalizedError, Equatable {
+    case corruptedArchive(String)
+    case unsupportedFormat(String)
+    case invalidManifest(String)
+    case missingPayloadFile(String)
+    case invalidProject(String)
+    case insufficientSpace
+    case ioFailure(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .corruptedArchive(let msg): return "Corrupted archive: \(msg)"
+        case .unsupportedFormat(let msg): return "Unsupported format: \(msg)"
+        case .invalidManifest(let msg): return "Invalid manifest: \(msg)"
+        case .missingPayloadFile(let msg): return "Missing payload file: \(msg)"
+        case .invalidProject(let msg): return "Invalid project: \(msg)"
+        case .insufficientSpace: return "Insufficient disk space."
+        case .ioFailure(let msg): return "I/O error: \(msg)"
+        }
+    }
+}
+
+public struct PatchZipManifest: Codable, Equatable {
+    public struct RuleEntry: Codable, Equatable {
+        public let id: UUID
+        public let bundleID: String
+        public let relativePath: String
+        public let replacementFilename: String
+        public let payloadPath: String
+
+        public init(
+            id: UUID,
+            bundleID: String,
+            relativePath: String,
+            replacementFilename: String,
+            payloadPath: String
+        ) {
+            self.id = id
+            self.bundleID = bundleID
+            self.relativePath = relativePath
+            self.replacementFilename = replacementFilename
+            self.payloadPath = payloadPath
+        }
+    }
+
+    public struct DirectoryEntry: Codable, Equatable {
+        public let id: UUID
+        public let bundleID: String
+        public let relativePath: String
+
+        public init(id: UUID, bundleID: String, relativePath: String) {
+            self.id = id
+            self.bundleID = bundleID
+            self.relativePath = relativePath
+        }
+    }
+
+    public let schemaVersion: Int
+    public let id: UUID
+    public let name: String
+    public let author: String
+    public let isPrivate: Bool
+    public let createdAt: Date
+    public let updatedAt: Date
+    public let bundleIdentifiers: [String]
+    public let directories: [DirectoryEntry]
+    public let rules: [RuleEntry]
+
+    public init(
+        schemaVersion: Int = 3,
+        id: UUID,
+        name: String,
+        author: String,
+        isPrivate: Bool,
+        createdAt: Date,
+        updatedAt: Date,
+        bundleIdentifiers: [String],
+        directories: [DirectoryEntry],
+        rules: [RuleEntry]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.name = name
+        self.author = author
+        self.isPrivate = isPrivate
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.bundleIdentifiers = bundleIdentifiers
+        self.directories = directories
+        self.rules = rules
+    }
+}
+
+public final class PatchZipConverter {
+    private let fileManager: FileManager
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    // MARK: - .3105 -> .zip Conversion
+
+    public func convertPatchToZip(
+        patchURL: URL,
+        destinationZipURL: URL,
+        password: String? = nil
+    ) throws {
+        guard fileManager.fileExists(atPath: patchURL.path) else {
+            throw PatchZipConverterError.ioFailure("Source .3105 patch file not found.")
+        }
+        let patchData: Data
+        do {
+            patchData = try Data(contentsOf: patchURL)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Cannot read .3105 patch: \(error.localizedDescription)")
+        }
+
+        let zipData = try convertPatchDataToZipData(patchData, password: password)
+
+        do {
+            let parent = destinationZipURL.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: parent.path) {
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+            }
+            if fileManager.fileExists(atPath: destinationZipURL.path) {
+                try fileManager.removeItem(at: destinationZipURL)
+            }
+            try zipData.write(to: destinationZipURL, options: .atomic)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Cannot write output .zip file: \(error.localizedDescription)")
+        }
+    }
+
+    public func convertPatchDataToZipData(
+        _ patchData: Data,
+        password: String? = nil
+    ) throws -> Data {
+        let decoded: DecodedPatchPackage
+        do {
+            decoded = try PatchPackageCodec.decode(patchData, password: password)
+        } catch {
+            throw PatchZipConverterError.corruptedArchive("Failed to decode .3105 patch package: \(error.localizedDescription)")
+        }
+
+        let project = decoded.project
+
+        // Construct Manifest
+        let directoryEntries = project.directories.map {
+            PatchZipManifest.DirectoryEntry(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
+        }
+
+        var ruleEntries: [PatchZipManifest.RuleEntry] = []
+        var zipEntries: [(path: String, data: Data)] = []
+
+        for rule in project.rules {
+            let payloadRelativePath = "payload/\(rule.bundleID)/\(rule.relativePath)"
+            ruleEntries.append(
+                PatchZipManifest.RuleEntry(
+                    id: rule.id,
+                    bundleID: rule.bundleID,
+                    relativePath: rule.relativePath,
+                    replacementFilename: rule.replacementFilename,
+                    payloadPath: payloadRelativePath
+                )
+            )
+            zipEntries.append((path: payloadRelativePath, data: rule.replacementData))
+        }
+
+        let manifest = PatchZipManifest(
+            schemaVersion: 3,
+            id: project.id,
+            name: project.name,
+            author: project.author,
+            isPrivate: project.isPrivate,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt,
+            bundleIdentifiers: project.bundleIdentifiers,
+            directories: directoryEntries,
+            rules: ruleEntries
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let manifestData: Data
+        do {
+            manifestData = try encoder.encode(manifest)
+        } catch {
+            throw PatchZipConverterError.invalidManifest("Failed to encode manifest JSON: \(error.localizedDescription)")
+        }
+
+        zipEntries.append((path: "patch.json", data: manifestData))
+
+        // Build standard uncompressed PKZIP archive
+        return try buildZipArchive(entries: zipEntries)
+    }
+
+    // MARK: - .zip -> .3105 Conversion
+
+    public func convertZipToPatch(
+        zipURL: URL,
+        destinationPatchURL: URL,
+        password: String? = nil
+    ) throws {
+        guard fileManager.fileExists(atPath: zipURL.path) else {
+            throw PatchZipConverterError.ioFailure("Source .zip archive not found.")
+        }
+        let zipData: Data
+        do {
+            zipData = try Data(contentsOf: zipURL)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Cannot read .zip file: \(error.localizedDescription)")
+        }
+
+        let patchData = try convertZipDataToPatchData(zipData, password: password)
+
+        do {
+            let parent = destinationPatchURL.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: parent.path) {
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+            }
+            if fileManager.fileExists(atPath: destinationPatchURL.path) {
+                try fileManager.removeItem(at: destinationPatchURL)
+            }
+            try patchData.write(to: destinationPatchURL, options: .atomic)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Cannot write output .3105 file: \(error.localizedDescription)")
+        }
+    }
+
+    public func convertZipDataToPatchData(
+        _ zipData: Data,
+        password: String? = nil
+    ) throws -> Data {
+        let entries = try parseZipArchive(zipData)
+
+        guard let manifestData = entries["patch.json"] else {
+            throw PatchZipConverterError.invalidManifest("Missing 'patch.json' in archive root.")
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest: PatchZipManifest
+        do {
+            manifest = try decoder.decode(PatchZipManifest.self, from: manifestData)
+        } catch {
+            throw PatchZipConverterError.invalidManifest("Failed to parse manifest JSON: \(error.localizedDescription)")
+        }
+
+        // Reconstruct PatchDirectories
+        let directories = manifest.directories.map {
+            PatchDirectory(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
+        }
+
+        // Reconstruct PatchRules with payload bytes
+        var rules: [PatchRule] = []
+        for ruleEntry in manifest.rules {
+            guard let payloadData = entries[ruleEntry.payloadPath] else {
+                throw PatchZipConverterError.missingPayloadFile("Payload file missing for rule at: \(ruleEntry.payloadPath)")
+            }
+            let rule = PatchRule(
+                id: ruleEntry.id,
+                bundleID: ruleEntry.bundleID,
+                relativePath: ruleEntry.relativePath,
+                replacementFilename: ruleEntry.replacementFilename,
+                replacementData: payloadData
+            )
+            rules.append(rule)
+        }
+
+        let project = PatchProject(
+            id: manifest.id,
+            name: manifest.name,
+            author: manifest.author,
+            isPrivate: manifest.isPrivate,
+            createdAt: manifest.createdAt,
+            updatedAt: manifest.updatedAt,
+            bundleIdentifiers: manifest.bundleIdentifiers,
+            directories: directories,
+            rules: rules
+        )
+
+        do {
+            try PatchPackageCodec.validate(project)
+        } catch {
+            throw PatchZipConverterError.invalidProject("Validation failed for reconstructed patch project: \(error.localizedDescription)")
+        }
+
+        let encoded: EncodedPatchPackage
+        do {
+            encoded = try PatchPackageCodec.encodeNew(project: project, password: password)
+        } catch {
+            throw PatchZipConverterError.corruptedArchive("Failed to encode .3105 patch package: \(error.localizedDescription)")
+        }
+
+        return encoded.data
+    }
+
+    // MARK: - Internal Standard PKZIP Engine (Pure Swift, portable, zero external dependencies)
+
+    private func buildZipArchive(entries: [(path: String, data: Data)]) throws -> Data {
+        var archive = Data()
+        var centralDirectory = Data()
+        var centralCount: UInt16 = 0
+
+        for entry in entries {
+            let pathBytes = Data(entry.path.utf8)
+            guard pathBytes.count <= UInt16.max else {
+                throw PatchZipConverterError.corruptedArchive("Filename too long in archive: \(entry.path)")
+            }
+
+            let localHeaderOffset = UInt32(archive.count)
+            let entryCRC = crc32Checksum(entry.data)
+            let size = UInt32(entry.data.count)
+
+            // 1. Local File Header
+            archive.appendUInt32(0x04034b50) // Local file header signature
+            archive.appendUInt16(20)         // Version needed to extract (2.0)
+            archive.appendUInt16(1 << 11)    // General purpose bit flag (UTF-8)
+            archive.appendUInt16(0)          // Compression method: 0 (Stored)
+            archive.appendUInt16(0)          // Last mod file time
+            archive.appendUInt16(0)          // Last mod file date
+            archive.appendUInt32(entryCRC)   // CRC-32
+            archive.appendUInt32(size)       // Compressed size
+            archive.appendUInt32(size)       // Uncompressed size
+            archive.appendUInt16(UInt16(pathBytes.count)) // File name length
+            archive.appendUInt16(0)          // Extra field length
+            archive.append(pathBytes)        // File name
+            archive.append(entry.data)       // Uncompressed file data
+
+            // 2. Central Directory Header
+            centralDirectory.appendUInt32(0x02014b50) // Central file header signature
+            centralDirectory.appendUInt16(20)         // Version made by
+            centralDirectory.appendUInt16(20)         // Version needed to extract
+            centralDirectory.appendUInt16(1 << 11)    // Bit flag (UTF-8)
+            centralDirectory.appendUInt16(0)          // Compression method (Stored)
+            centralDirectory.appendUInt16(0)          // Last mod time
+            centralDirectory.appendUInt16(0)          // Last mod date
+            centralDirectory.appendUInt32(entryCRC)   // CRC-32
+            centralDirectory.appendUInt32(size)       // Compressed size
+            centralDirectory.appendUInt32(size)       // Uncompressed size
+            centralDirectory.appendUInt16(UInt16(pathBytes.count)) // File name length
+            centralDirectory.appendUInt16(0)          // Extra field length
+            centralDirectory.appendUInt16(0)          // File comment length
+            centralDirectory.appendUInt16(0)          // Disk number start
+            centralDirectory.appendUInt16(0)          // Internal file attributes
+            centralDirectory.appendUInt32(0)          // External file attributes
+            centralDirectory.appendUInt32(localHeaderOffset) // Relative offset of local header
+            centralDirectory.append(pathBytes)        // File name
+
+            centralCount += 1
+        }
+
+        let centralOffset = UInt32(archive.count)
+        let centralSize = UInt32(centralDirectory.count)
+
+        archive.append(centralDirectory)
+
+        // 3. End of Central Directory Record
+        archive.appendUInt32(0x06054b50) // EOCD signature
+        archive.appendUInt16(0)          // Number of this disk
+        archive.appendUInt16(0)          // Disk where central directory starts
+        archive.appendUInt16(centralCount) // Number of central directory records on this disk
+        archive.appendUInt16(centralCount) // Total number of central directory records
+        archive.appendUInt32(centralSize)  // Size of central directory
+        archive.appendUInt32(centralOffset) // Offset of start of central directory
+        archive.appendUInt16(0)          // Comment length
+
+        return archive
+    }
+
+    private func parseZipArchive(_ data: Data) throws -> [String: Data] {
+        guard data.count >= 22 else {
+            throw PatchZipConverterError.corruptedArchive("Zip file too small to contain EOCD.")
+        }
+
+        // Search backward for End of Central Directory signature (0x06054b50)
+        let eocdSig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
+        var eocdOffset: Int?
+        let maxSearch = min(data.count, 65535 + 22)
+        let searchStart = data.count - maxSearch
+
+        for i in stride(from: data.count - 4, through: searchStart, by: -1) {
+            if data[i] == eocdSig[0] &&
+               data[i+1] == eocdSig[1] &&
+               data[i+2] == eocdSig[2] &&
+               data[i+3] == eocdSig[3] {
+                eocdOffset = i
+                break
+            }
+        }
+
+        guard let eocdPos = eocdOffset else {
+            throw PatchZipConverterError.corruptedArchive("End of Central Directory record not found.")
+        }
+
+        let cdTotalEntries = Int(data.readUInt16(at: eocdPos + 10))
+        let cdOffset = Int(data.readUInt32(at: eocdPos + 16))
+
+        guard cdOffset < data.count else {
+            throw PatchZipConverterError.corruptedArchive("Invalid central directory offset.")
+        }
+
+        var results: [String: Data] = [:]
+        var currentCDPos = cdOffset
+
+        for _ in 0..<cdTotalEntries {
+            guard currentCDPos + 46 <= data.count else {
+                throw PatchZipConverterError.corruptedArchive("Truncated central directory record.")
+            }
+            let sig = data.readUInt32(at: currentCDPos)
+            guard sig == 0x02014b50 else {
+                throw PatchZipConverterError.corruptedArchive("Invalid central directory header signature.")
+            }
+
+            let compressionMethod = data.readUInt16(at: currentCDPos + 10)
+            let uncompressedSize = Int(data.readUInt32(at: currentCDPos + 24))
+            let nameLen = Int(data.readUInt16(at: currentCDPos + 28))
+            let extraLen = Int(data.readUInt16(at: currentCDPos + 30))
+            let commentLen = Int(data.readUInt16(at: currentCDPos + 32))
+            let localHeaderOffset = Int(data.readUInt32(at: currentCDPos + 42))
+
+            let nameStart = currentCDPos + 46
+            guard nameStart + nameLen <= data.count else {
+                throw PatchZipConverterError.corruptedArchive("Truncated file name in central directory.")
+            }
+
+            let nameData = data.subdata(in: nameStart..<(nameStart + nameLen))
+            guard let filename = String(data: nameData, encoding: .utf8) else {
+                throw PatchZipConverterError.corruptedArchive("Invalid UTF-8 file name in archive.")
+            }
+
+            currentCDPos += 46 + nameLen + extraLen + commentLen
+
+            // Parse Local File Header
+            guard localHeaderOffset + 30 <= data.count else {
+                throw PatchZipConverterError.corruptedArchive("Truncated local file header.")
+            }
+            let localSig = data.readUInt32(at: localHeaderOffset)
+            guard localSig == 0x04034b50 else {
+                throw PatchZipConverterError.corruptedArchive("Invalid local header signature.")
+            }
+            let localNameLen = Int(data.readUInt16(at: localHeaderOffset + 26))
+            let localExtraLen = Int(data.readUInt16(at: localHeaderOffset + 28))
+            let dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen
+
+            guard dataStart + uncompressedSize <= data.count else {
+                throw PatchZipConverterError.corruptedArchive("Truncated file payload for: \(filename)")
+            }
+
+            if compressionMethod == 0 {
+                // Stored
+                let fileData = data.subdata(in: dataStart..<(dataStart + uncompressedSize))
+                results[filename] = fileData
+            } else if compressionMethod == 8 {
+                // Deflated -> Decompress raw deflate stream
+                let compressedSize = Int(data.readUInt32(at: localHeaderOffset + 18))
+                let compressedData = data.subdata(in: dataStart..<(dataStart + compressedSize))
+                let decompressedData = try decompressDeflate(compressedData, expectedSize: uncompressedSize)
+                results[filename] = decompressedData
+            } else {
+                throw PatchZipConverterError.unsupportedFormat("Unsupported compression method: \(compressionMethod)")
+            }
+        }
+
+        return results
+    }
+
+    private func decompressDeflate(_ compressed: Data, expectedSize: Int) throws -> Data {
+        // Wrap raw deflate in zlib header (RFC 1950) or decode directly
+        // When using Swift on Darwin/iOS/macOS, we can decompress via NSData compression:
+        let decompressed = try (compressed as NSData).decompressed(using: .zlib) as Data
+        return decompressed
+    }
+
+    private func crc32Checksum(_ data: Data) -> UInt32 {
+        var table = [UInt32](repeating: 0, count: 256)
+        for i in 0..<256 {
+            var c = UInt32(i)
+            for _ in 0..<8 {
+                if c & 1 != 0 {
+                    c = 0xEDB88320 ^ (c >> 1)
+                } else {
+                    c = c >> 1
+                }
+            }
+            table[i] = c
+        }
+
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data {
+            let index = Int((crc ^ UInt32(byte)) & 0xFF)
+            crc = (crc >> 8) ^ table[index]
+        }
+        return crc ^ 0xFFFFFFFF
+    }
+}
+
+// MARK: - Binary Data Helpers
+
+private extension Data {
+    mutating func appendUInt16(_ value: UInt16) {
+        var v = value.littleEndian
+        append(UnsafeBufferPointer(start: &v, count: 1))
+    }
+
+    mutating func appendUInt32(_ value: UInt32) {
+        var v = value.littleEndian
+        append(UnsafeBufferPointer(start: &v, count: 1))
+    }
+
+    func readUInt16(at offset: Int) -> UInt16 {
+        subdata(in: offset..<(offset + 2)).withUnsafeBytes {
+            $0.load(as: UInt16.self).littleEndian
+        }
+    }
+
+    func readUInt32(at offset: Int) -> UInt32 {
+        subdata(in: offset..<(offset + 4)).withUnsafeBytes {
+            $0.load(as: UInt32.self).littleEndian
+        }
+    }
+}

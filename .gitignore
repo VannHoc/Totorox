@@ -1,0 +1,15 @@
+# Xcode
+build/
+DerivedData/
+*.moved-aside
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# App Packages & Test Artifacts
+Tororox-*.ipa
+TestResults.xcresult
+
+# System
+.DS_Store
+Thumbs.db
