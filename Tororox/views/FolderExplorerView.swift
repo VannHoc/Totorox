@@ -70,6 +70,8 @@ struct FolderExplorerView: View {
                                 .font(.system(size: 14, weight: .bold))
                             Text("Lùi")
                                 .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .foregroundStyle(canGoBack ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
                         .padding(.horizontal, 10)
@@ -98,6 +100,8 @@ struct FolderExplorerView: View {
                             Text("Vị trí nhanh")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
@@ -137,12 +141,16 @@ struct FolderExplorerView: View {
 
                     // Refresh Button
                     Button {
-                        loadCurrentDirectory()
+                        loadCurrentDirectory(forceRefresh: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
                             .frame(width: 36, height: 36)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(Circle())
+                    }
+                }
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(Circle())
                     }
@@ -191,32 +199,44 @@ struct FolderExplorerView: View {
             .shadow(color: Color.black.opacity(0.02), radius: 4, x: 0, y: 2)
 
             // Content List
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    if filteredEntries.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 44))
-                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
-                            Text("Thư mục trống hoặc không có quyền đọc")
-                                .font(.system(size: 14))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 60)
-                    } else {
-                        ForEach(filteredEntries) { entry in
-                            fileEntryCard(entry)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        if filteredEntries.isEmpty {
+                            VStack(spacing: 12) {
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(1.2)
+                                        .padding(.bottom, 4)
+                                    Text("Đang tải nội dung...")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                } else {
+                                    Image(systemName: "folder")
+                                        .font(.system(size: 44))
+                                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                    Text("Thư mục trống hoặc không có quyền đọc")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                        } else {
+                            ForEach(filteredEntries) { entry in
+                                fileEntryCard(entry)
+                                    .id(entry.path)
+                            }
                         }
                     }
+                    .padding(16)
+                    .padding(.bottom, clipboardItem != nil ? 80 : 20)
                 }
-                .padding(16)
-                .padding(.bottom, clipboardItem != nil ? 80 : 20)
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: 80)
+                }
+                .background(TotoroxTheme.pageBackground)
             }
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 80)
-            }
-            .background(TotoroxTheme.pageBackground)
         }
         .gesture(
             DragGesture(minimumDistance: 25, coordinateSpace: .local)
@@ -299,7 +319,8 @@ struct FolderExplorerView: View {
         .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
-                loadCurrentDirectory()
+                ContainerMetadataCache.shared.invalidate(path: currentURL.path)
+                loadCurrentDirectory(forceRefresh: true)
             }
         }
         .overlay {
@@ -329,61 +350,117 @@ struct FolderExplorerView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                // Icon
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(iconBackgroundColor(for: entry))
+                // Icon (App Icon if available, else system icon)
+                if let appIcon = entry.appIcon {
+                    Image(uiImage: appIcon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
                         .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                        )
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(iconBackgroundColor(for: entry))
+                            .frame(width: 44, height: 44)
 
-                    Image(systemName: iconName(for: entry))
-                        .font(.system(size: 20))
-                        .foregroundStyle(iconForegroundColor(for: entry))
+                        Image(systemName: iconName(for: entry))
+                            .font(.system(size: 20))
+                            .foregroundStyle(iconForegroundColor(for: entry))
+                    }
                 }
 
-                // Info (Name, Size & Modified Date)
+                // Info: Line 1 (Name) & Line 2 (Metadata)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
+                    // Line 1: Primary Title with middle truncation
+                    Text(entry.appName ?? entry.name)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    HStack(spacing: 8) {
-                        if entry.isDirectory {
-                            Text("Thư mục")
+                    // Line 2: Single-line Metadata HStack
+                    HStack(spacing: 6) {
+                        if entry.isAppContainer {
+                            // Bundle ID badge
+                            if let bid = entry.bundleID, !bid.isEmpty {
+                                Text(bid)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                    .clipShape(Capsule())
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+
+                            // Short UUID
+                            if let shortId = entry.shortUUID {
+                                Text("•")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                    .fixedSize(horizontal: true, vertical: false)
+                                Text(shortId)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                        } else if entry.isDirectory {
+                            // Folder item count or badge
+                            Text(entry.childCountText)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(TotoroxTheme.mintAccent)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(TotoroxTheme.mintAccent.opacity(0.12))
                                 .clipShape(Capsule())
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         } else {
+                            // File size
                             Text(entry.sizeText)
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
 
-                            if let ext = entry.name.split(separator: ".").last {
-                                Text(".\(ext)")
-                                    .font(.system(size: 11, weight: .bold))
+                            // Extension badge
+                            if !entry.extensionBadge.isEmpty {
+                                Text(entry.extensionBadge)
+                                    .font(.system(size: 10, weight: .bold))
                                     .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
                                     .background(TotoroxTheme.mintAccent.opacity(0.12))
                                     .clipShape(Capsule())
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
 
+                        // Modification date
                         if let mod = entry.formattedModifiedDate {
                             Text("•")
-                                .font(.system(size: 10))
-                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
+                                .font(.system(size: 9))
+                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                .fixedSize(horizontal: true, vertical: false)
                             Text(mod)
                                 .font(.system(size: 11))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                     }
+                    .lineLimit(1)
                 }
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 // Info (i) Button
                 Button {
@@ -605,23 +682,29 @@ struct FolderExplorerView: View {
         self.breadcrumbs = crumbs
     }
 
-    private func loadCurrentDirectory() {
-        isLoading = true
-        Task {
-            let handle = ContainerStore.grantContainerAccess(currentURL.path)
+    private func loadCurrentDirectory(forceRefresh: Bool = false) {
+        let path = currentURL.path
+        if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: path) {
+            self.entries = cached
+            self.isLoading = false
+        } else {
+            self.isLoading = true
+        }
+
+        Task.detached(priority: .userInitiated) {
+            let handle = ContainerStore.grantContainerAccess(path)
             defer {
                 if handle >= 0 { bad_query_release(handle) }
             }
 
-            let loaded = ContainerStore.listFiles(at: currentURL.path)
+            let loaded = ContainerStore.listFiles(at: path)
+            ContainerMetadataCache.shared.storeList(loaded, for: path)
+
             await MainActor.run {
-                self.entries = loaded.sorted { lhs, rhs in
-                    if lhs.isDirectory != rhs.isDirectory {
-                        return lhs.isDirectory
-                    }
-                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                if self.currentURL.path == path {
+                    self.entries = loaded
+                    self.isLoading = false
                 }
-                self.isLoading = false
             }
         }
     }
@@ -631,7 +714,8 @@ struct FolderExplorerView: View {
         guard !newFolderName.isEmpty else { return }
         let target = currentURL.appendingPathComponent(newFolderName)
         try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        loadCurrentDirectory()
+        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
+        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func applyRename() {
@@ -639,14 +723,16 @@ struct FolderExplorerView: View {
         let src = currentURL.appendingPathComponent(item.name)
         let dst = currentURL.appendingPathComponent(newRenameName)
         try? FileManager.default.moveItem(at: src, to: dst)
-        loadCurrentDirectory()
+        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
+        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func applyDelete() {
         guard let item = itemToDelete else { return }
         let src = currentURL.appendingPathComponent(item.name)
         try? FileManager.default.removeItem(at: src)
-        loadCurrentDirectory()
+        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
+        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func importFileIntoCurrentDirectory(_ src: URL) {
@@ -669,6 +755,7 @@ struct FolderExplorerView: View {
                 }
             }
             await MainActor.run {
+                ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                 self.outcomeResult = FileIOResultWrapper(result: result)
             }
         }
@@ -696,10 +783,12 @@ struct FolderExplorerView: View {
 
             if clip.isCut && result.failed.isEmpty && !result.isCancelled {
                 try? FileManager.default.removeItem(at: clip.url)
+                ContainerMetadataCache.shared.invalidate(path: clip.url.deletingLastPathComponent().path)
             }
 
             await MainActor.run {
                 self.clipboardItem = nil
+                ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                 self.outcomeResult = FileIOResultWrapper(result: result)
             }
         }
@@ -767,8 +856,9 @@ struct FolderExplorerView: View {
                 await MainActor.run {
                     self.isLoading = false
                     self.selectedArchiveForExtraction = nil
+                    ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                     self.outcomeResult = FileIOResultWrapper(result: result)
-                    self.loadCurrentDirectory()
+                    self.loadCurrentDirectory(forceRefresh: true)
                 }
             } catch {
                 await MainActor.run {
@@ -823,6 +913,9 @@ struct FileInfoInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let entry: FileEntry
     @State private var copiedPath = false
+    @State private var directorySizeText: String? = nil
+    @State private var isCalculatingDirSize = false
+    @State private var dirCalculationTask: Task<Void, Never>? = nil
 
     var body: some View {
         NavigationStack {
@@ -830,24 +923,46 @@ struct FileInfoInspectorSheet: View {
                 VStack(spacing: 20) {
                     // Header Card
                     VStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                        if let appIcon = entry.appIcon {
+                            Image(uiImage: appIcon)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
                                 .frame(width: 64, height: 64)
-                            Image(systemName: entry.isDirectory ? "folder.fill" : (entry.isSymlink ? "link" : "doc.fill"))
-                                .font(.system(size: 32))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                                )
+                        } else {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                                    .frame(width: 64, height: 64)
+                                Image(systemName: entry.isDirectory ? "folder.fill" : (entry.isSymlink ? "link" : "doc.fill"))
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                            }
                         }
 
-                        Text(entry.name)
+                        Text(entry.appName ?? entry.name)
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
                             .multilineTextAlignment(.center)
                             .lineLimit(2)
 
-                        Text(entry.typeDescription)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        if entry.isAppContainer, let bid = entry.bundleID {
+                            Text(bid)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                .clipShape(Capsule())
+                        } else {
+                            Text(entry.typeDescription)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .totoroxCard()
@@ -892,7 +1007,37 @@ struct FileInfoInspectorSheet: View {
                         }
 
                         Divider()
-                        inspectorRow(label: "Kích thước chính xác", value: entry.exactBytesText)
+
+                        // Size row: for directories calculate recursively, for files show exact bytes
+                        if entry.isDirectory {
+                            HStack(alignment: .top) {
+                                Text("Dung lượng thư mục")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                Spacer()
+                                if isCalculatingDirSize {
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                        Text("Đang tính toán...")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                    }
+                                } else if let sizeText = directorySizeText {
+                                    Text(sizeText)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                        .multilineTextAlignment(.trailing)
+                                } else {
+                                    Text(entry.childCountText)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                }
+                            }
+                        } else {
+                            inspectorRow(label: "Kích thước chính xác", value: entry.exactBytesText)
+                        }
+
                         Divider()
                         inspectorRow(label: "Ngày tạo", value: entry.formattedCreatedDate ?? "Không có")
                         Divider()
@@ -915,6 +1060,26 @@ struct FileInfoInspectorSheet: View {
                     Button("Xong") { dismiss() }
                         .fontWeight(.bold)
                 }
+            }
+            .onAppear {
+                if entry.isDirectory {
+                    if let cached = ContainerMetadataCache.shared.cachedDirectorySize(for: entry.path) {
+                        self.directorySizeText = cached.formattedText
+                    } else {
+                        isCalculatingDirSize = true
+                        dirCalculationTask = Task.detached(priority: .userInitiated) {
+                            let result = await DirectorySizeService.calculateSize(at: entry.path)
+                            guard !Task.isCancelled else { return }
+                            await MainActor.run {
+                                self.directorySizeText = result.formattedText
+                                self.isCalculatingDirSize = false
+                            }
+                        }
+                    }
+                }
+            }
+            .onDisappear {
+                dirCalculationTask?.cancel()
             }
         }
     }

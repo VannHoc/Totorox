@@ -286,6 +286,23 @@ struct OverwriteFileView: View {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }
 
+            for app in sorted {
+                let uuid = (app.containerPath as NSString).lastPathComponent
+                if UUID(uuidString: uuid) != nil {
+                    let icon = app.icon ?? iconForBundleID(app.bundleID)
+                    let meta = AppContainerMetadata(
+                        uuid: uuid,
+                        containerPath: app.containerPath,
+                        bundleID: app.bundleID,
+                        appName: app.displayName.isEmpty ? app.bundleID : app.displayName,
+                        icon: icon,
+                        isUserApp: true,
+                        modificationDate: nil
+                    )
+                    ContainerMetadataCache.shared.store(app: meta)
+                }
+            }
+
             await MainActor.run {
                 self.installedApps = sorted.map { app in
                     TargetAppItem(

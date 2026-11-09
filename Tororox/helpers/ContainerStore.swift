@@ -31,10 +31,37 @@ struct FileEntry: Identifiable, Hashable {
     let posixPermissions: UInt16
     let childCount: Int?
 
+    // App Container resolution fields
+    let appName: String?
+    let bundleID: String?
+    let appIcon: UIImage?
+    let isAppContainer: Bool
+    let shortUUID: String?
+
     var id: String { path }
+
+    static func == (lhs: FileEntry, rhs: FileEntry) -> Bool { lhs.path == rhs.path }
+    func hash(into hasher: inout Hasher) { hasher.combine(path) }
+
     var sizeText: String {
         guard size >= 0 else { return "—" }
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+
+    var extensionBadge: String {
+        guard !isDirectory else { return "" }
+        let ext = (name as NSString).pathExtension
+        return ext.isEmpty ? "" : ".\(ext.lowercased())"
+    }
+
+    var childCountText: String {
+        if isDirectory {
+            if let count = childCount {
+                return count == 0 ? "Trống" : "\(count) mục"
+            }
+            return "Thư mục"
+        }
+        return sizeText
     }
 
     var formattedModifiedDate: String? {
@@ -78,7 +105,9 @@ struct FileEntry: Identifiable, Hashable {
     }
 
     var typeDescription: String {
-        if isDirectory {
+        if isAppContainer {
+            return "Thư mục Ứng dụng (App Container)"
+        } else if isDirectory {
             return "Thư mục (Directory)"
         } else if isSymlink {
             return "Liên kết tượng trưng (Symbolic Link)"
@@ -96,7 +125,12 @@ struct FileEntry: Identifiable, Hashable {
         createdAt: Date? = nil,
         isSymlink: Bool = false,
         posixPermissions: UInt16 = 0o644,
-        childCount: Int? = nil
+        childCount: Int? = nil,
+        appName: String? = nil,
+        bundleID: String? = nil,
+        appIcon: UIImage? = nil,
+        isAppContainer: Bool = false,
+        shortUUID: String? = nil
     ) {
         self.name = name
         self.path = path
@@ -107,6 +141,11 @@ struct FileEntry: Identifiable, Hashable {
         self.isSymlink = isSymlink
         self.posixPermissions = posixPermissions
         self.childCount = childCount
+        self.appName = appName
+        self.bundleID = bundleID
+        self.appIcon = appIcon
+        self.isAppContainer = isAppContainer
+        self.shortUUID = shortUUID
     }
 
     func withDirectorySummary(_ summary: FileBrowserDirectorySummary?) -> FileEntry {
@@ -119,7 +158,12 @@ struct FileEntry: Identifiable, Hashable {
             createdAt: createdAt,
             isSymlink: isSymlink,
             posixPermissions: posixPermissions,
-            childCount: summary?.childCount
+            childCount: summary?.childCount,
+            appName: appName,
+            bundleID: bundleID,
+            appIcon: appIcon,
+            isAppContainer: isAppContainer,
+            shortUUID: shortUUID
         )
     }
 }
@@ -813,6 +857,8 @@ enum ContainerStore {
         }
         defer { closedir(dir) }
 
+        let isAppContainerDirectory = clean.contains("Containers/Data/Application") || clean.contains("Bundle/Application")
+
         var entries: [FileEntry] = []
         while let dp = readdir(dir) {
             let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
@@ -849,25 +895,60 @@ enum ContainerStore {
                 createDate = nil
             }
 
-            var entryName = name
-            // If in Application root and entry is a container UUID, try resolving app display name from metadata plist
-            if isDir && UUID(uuidString: name) != nil {
-                if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
-                    let display = meta.displayName.isEmpty ? meta.bundleID : "\(meta.displayName) (\(meta.bundleID))"
-                    entryName = "\(display)"
+            var appName: String? = nil
+            var bundleID: String? = nil
+            var appIcon: UIImage? = nil
+            var isAppContainer = false
+            var shortUUID: String? = nil
+            var childCount: Int? = nil
+
+            if isDir && isAppContainerDirectory && UUID(uuidString: name) != nil {
+                isAppContainer = true
+                if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: name) {
+                    appName = cached.appName
+                    bundleID = cached.bundleID
+                    appIcon = cached.icon
+                    shortUUID = cached.shortUUID
+                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
+                    bundleID = meta.bundleID
+                    let info = appInfoForBundleID(meta.bundleID)
+                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                    appName = resolvedName
+                    appIcon = iconForBundleID(meta.bundleID)
+                    let containerMeta = AppContainerMetadata(
+                        uuid: name,
+                        containerPath: full,
+                        bundleID: meta.bundleID,
+                        appName: resolvedName,
+                        icon: appIcon,
+                        isUserApp: true,
+                        modificationDate: modDate
+                    )
+                    ContainerMetadataCache.shared.store(app: containerMeta)
+                    shortUUID = containerMeta.shortUUID
+                } else {
+                    shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
                 }
+            } else if isDir {
+                childCount = DirectorySizeService.countImmediateChildren(at: full)
             }
 
             entries.append(
                 FileEntry(
-                    name: entryName,
+                    name: name,
                     path: full,
                     isDirectory: isDir,
                     size: size,
                     modifiedAt: modDate,
                     createdAt: createDate,
                     isSymlink: isSymlink,
-                    posixPermissions: mode
+                    posixPermissions: mode,
+                    childCount: childCount,
+                    appName: appName,
+                    bundleID: bundleID,
+                    appIcon: appIcon,
+                    isAppContainer: isAppContainer,
+                    shortUUID: shortUUID
                 )
             )
         }
@@ -901,19 +982,49 @@ enum ContainerStore {
                 let entries = inodeDirs.compactMap { dir -> FileEntry? in
                     let uuid = (dir as NSString).lastPathComponent
                     guard UUID(uuidString: uuid) != nil else { return nil }
-                    let meta = readContainerMetadata(containerPath: dir)
-                    let displayName = (meta?.displayName.isEmpty == false) ? meta!.displayName : (meta?.bundleID ?? uuid)
-                    let bundleID = meta?.bundleID ?? ""
-                    let name = bundleID.isEmpty ? displayName : "\(displayName) (\(bundleID))"
+
+                    var appName: String? = nil
+                    var bundleID: String? = nil
+                    var appIcon: UIImage? = nil
+                    let shortUUID = uuid.count >= 8 ? "\(uuid.prefix(4))...\(uuid.suffix(4))" : uuid
+
+                    if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
+                        appName = cached.appName
+                        bundleID = cached.bundleID
+                        appIcon = cached.icon
+                    } else if let meta = readContainerMetadata(containerPath: dir), !meta.bundleID.isEmpty {
+                        bundleID = meta.bundleID
+                        let info = appInfoForBundleID(meta.bundleID)
+                        let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                        appName = resolvedName
+                        appIcon = iconForBundleID(meta.bundleID)
+                        let containerMeta = AppContainerMetadata(
+                            uuid: uuid,
+                            containerPath: dir,
+                            bundleID: meta.bundleID,
+                            appName: resolvedName,
+                            icon: appIcon,
+                            isUserApp: true,
+                            modificationDate: nil
+                        )
+                        ContainerMetadataCache.shared.store(app: containerMeta)
+                    }
+
                     return FileEntry(
-                        name: name,
+                        name: uuid,
                         path: dir,
                         isDirectory: true,
                         size: -1,
                         modifiedAt: nil,
                         createdAt: nil,
                         isSymlink: false,
-                        posixPermissions: 0o755
+                        posixPermissions: 0o755,
+                        childCount: nil,
+                        appName: appName,
+                        bundleID: bundleID,
+                        appIcon: appIcon,
+                        isAppContainer: true,
+                        shortUUID: shortUUID
                     )
                 }
                 if !entries.isEmpty {
@@ -931,10 +1042,29 @@ enum ContainerStore {
         return []
     }
 
-    private static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
-        entries.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+    public static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
+        entries.sorted { lhs, rhs in
+            // 1. User app containers first, sorted alphabetically by App Name
+            let lhsIsUserApp = lhs.isAppContainer && lhs.appName != nil
+            let rhsIsUserApp = rhs.isAppContainer && rhs.appName != nil
+            if lhsIsUserApp != rhsIsUserApp {
+                return lhsIsUserApp
+            }
+            if lhsIsUserApp && rhsIsUserApp {
+                let name1 = lhs.appName ?? lhs.name
+                let name2 = rhs.appName ?? rhs.name
+                return name1.localizedCaseInsensitiveCompare(name2) == .orderedAscending
+            }
+
+            // 2. Directories before regular files
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory
+            }
+
+            // 3. Alphabetical by display name / filename
+            let n1 = lhs.appName ?? lhs.name
+            let n2 = rhs.appName ?? rhs.name
+            return n1.localizedStandardCompare(n2) == .orderedAscending
         }
     }
 
@@ -943,6 +1073,7 @@ enum ContainerStore {
         guard let items = try? fm.contentsOfDirectory(atPath: path) else {
             return nil
         }
+        let isAppContainerDirectory = path.contains("Containers/Data/Application") || path.contains("Bundle/Application")
         var entries: [FileEntry] = []
         for item in items {
             if item.hasPrefix(".") { continue }
@@ -950,20 +1081,68 @@ enum ContainerStore {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: full, isDirectory: &isDir) else { continue }
             let attributes = try? fm.attributesOfItem(atPath: full)
-            let size = isDir.boolValue
+            let isDirectory = isDir.boolValue
+            let size = isDirectory
                 ? -1
                 : (attributes?[.size] as? NSNumber)?.int64Value ?? 0
             let posixMode = (attributes?[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o644
+            let modDate = attributes?[.modificationDate] as? Date
+            let createDate = attributes?[.creationDate] as? Date
+
+            var appName: String? = nil
+            var bundleID: String? = nil
+            var appIcon: UIImage? = nil
+            var isAppContainer = false
+            var shortUUID: String? = nil
+            var childCount: Int? = nil
+
+            if isDirectory && isAppContainerDirectory && UUID(uuidString: item) != nil {
+                isAppContainer = true
+                if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: item) {
+                    appName = cached.appName
+                    bundleID = cached.bundleID
+                    appIcon = cached.icon
+                    shortUUID = cached.shortUUID
+                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
+                    bundleID = meta.bundleID
+                    let info = appInfoForBundleID(meta.bundleID)
+                    let resolvedName = (info["name"] as? String) ?? (meta.displayName.isEmpty ? meta.bundleID : meta.displayName)
+                    appName = resolvedName
+                    appIcon = iconForBundleID(meta.bundleID)
+                    let containerMeta = AppContainerMetadata(
+                        uuid: item,
+                        containerPath: full,
+                        bundleID: meta.bundleID,
+                        appName: resolvedName,
+                        icon: appIcon,
+                        isUserApp: true,
+                        modificationDate: modDate
+                    )
+                    ContainerMetadataCache.shared.store(app: containerMeta)
+                    shortUUID = containerMeta.shortUUID
+                } else {
+                    shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
+                }
+            } else if isDirectory {
+                childCount = DirectorySizeService.countImmediateChildren(at: full)
+            }
+
             entries.append(
                 FileEntry(
                     name: item,
                     path: full,
-                    isDirectory: isDir.boolValue,
+                    isDirectory: isDirectory,
                     size: size,
-                    modifiedAt: attributes?[.modificationDate] as? Date,
-                    createdAt: attributes?[.creationDate] as? Date,
+                    modifiedAt: modDate,
+                    createdAt: createDate,
                     isSymlink: (attributes?[.type] as? FileAttributeType) == .typeSymbolicLink,
-                    posixPermissions: posixMode
+                    posixPermissions: posixMode,
+                    childCount: childCount,
+                    appName: appName,
+                    bundleID: bundleID,
+                    appIcon: appIcon,
+                    isAppContainer: isAppContainer,
+                    shortUUID: shortUUID
                 )
             )
         }
