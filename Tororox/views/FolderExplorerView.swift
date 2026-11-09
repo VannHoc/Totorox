@@ -476,8 +476,6 @@ struct FolderExplorerView: View {
                         .lineLimit(1)
                     }
                 }
-                    .lineLimit(1)
-                }
 
                 Spacer(minLength: 4)
 
