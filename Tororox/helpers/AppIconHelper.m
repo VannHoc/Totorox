@@ -204,6 +204,16 @@ static NSDictionary *appsFromWorkspace(void) {
 
             NSMutableDictionary *entry = [NSMutableDictionary dictionary];
             entry[@"name"] = name;
+            for (NSString *selectorName in @[@"bundleURL"]) {
+                SEL bSel = NSSelectorFromString(selectorName);
+                if (![app respondsToSelector:bSel]) continue;
+                id bVal = ((id (*)(id, SEL))objc_msgSend)(app, bSel);
+                NSString *bPath = [bVal isKindOfClass:[NSURL class]] ? [bVal path] : bVal;
+                if ([bPath isKindOfClass:[NSString class]] && bPath.length > 0) {
+                    entry[@"bundlePath"] = bPath;
+                    break;
+                }
+            }
             for (NSString *selectorName in @[@"dataContainerURL", @"containerURL"]) {
                 SEL containerSel = NSSelectorFromString(selectorName);
                 if (![app respondsToSelector:containerSel]) continue;
@@ -215,6 +225,8 @@ static NSDictionary *appsFromWorkspace(void) {
                     break;
                 }
             }
+            UIImage *appIcon = iconForBundleID(bundleID);
+            if (appIcon) entry[@"icon"] = appIcon;
             result[bundleID] = entry;
         }
     }
@@ -234,6 +246,7 @@ NSDictionary<NSString *, NSDictionary *> *installedAppInfo(void) {
 
 // Icon via LSApplicationProxy (per bundle ID)
 UIImage *iconForBundleID(NSString *bundleID) {
+    if (!bundleID || bundleID.length == 0) return nil;
     static NSCache<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -243,15 +256,33 @@ UIImage *iconForBundleID(NSString *bundleID) {
     UIImage *cached = [cache objectForKey:bundleID];
     if (cached) return cached;
 
+    // 1. Try private UIKit API _applicationIconImageForBundleIdentifier:format:scale:
+    SEL privateIconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([UIImage respondsToSelector:privateIconSel]) {
+        CGFloat scale = [UIScreen mainScreen].scale;
+        UIImage *img = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)([UIImage class], privateIconSel, bundleID, 2, scale);
+        if (img) {
+            [cache setObject:img forKey:bundleID];
+            return img;
+        }
+    }
+
+    // 2. Try LSApplicationProxy iconDataForVariant:
     Class proxyClass = NSClassFromString(@"LSApplicationProxy");
-    if (!proxyClass) return nil;
-    SEL appProxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
-    if (![proxyClass respondsToSelector:appProxySel]) return nil;
-    id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, appProxySel, bundleID);
-    if (!proxy) return nil;
-    UIImage *icon = iconFromData(iconDataFromProxy(proxy), 60.0);
-    if (icon) [cache setObject:icon forKey:bundleID];
-    return icon;
+    if (proxyClass) {
+        SEL appProxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        if ([proxyClass respondsToSelector:appProxySel]) {
+            id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, appProxySel, bundleID);
+            if (proxy) {
+                UIImage *icon = iconFromData(iconDataFromProxy(proxy), 60.0);
+                if (icon) {
+                    [cache setObject:icon forKey:bundleID];
+                    return icon;
+                }
+            }
+        }
+    }
+    return nil;
 }
 
 // Name + icon for a single bundle ID via LSApplicationProxy
@@ -323,6 +354,10 @@ NSDictionary *appInfoForBundleID(NSString *bundleID) {
         }
     }
 
+    if (bundleURL && [bundleURL path].length > 0) {
+        result[@"bundlePath"] = [bundleURL path];
+    }
+
     for (NSString *selectorName in @[@"dataContainerURL", @"containerURL"]) {
         SEL containerSel = NSSelectorFromString(selectorName);
         if (![proxy respondsToSelector:containerSel]) continue;
@@ -333,6 +368,9 @@ NSDictionary *appInfoForBundleID(NSString *bundleID) {
             break;
         }
     }
+
+    UIImage *icon = iconForBundleID(bundleID);
+    if (icon) result[@"icon"] = icon;
 
     return result;
 }

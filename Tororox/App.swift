@@ -17,7 +17,7 @@ struct TororoxApp: App {
 
     init() {
         setupLogCapture()
-        log("app: Tororox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
+        log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
     }
 
     private var language: AppLanguage {

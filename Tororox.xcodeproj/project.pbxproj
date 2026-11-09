@@ -11,6 +11,8 @@
 		TRXBLD02 /* PatchZipConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG02; };
 		TRXBLD03 /* ContainerMetadataCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG03; };
 		TRXBLD04 /* DirectorySizeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG04; };
+		TRXBLD05 /* AppContainerScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG05; };
+		TRXBLD06 /* AppNavigationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG06; };
 		TRXTBL01 /* FileIOEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST01; };
 		TRXTBL02 /* PatchZipConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST02; };
 
@@ -89,6 +91,8 @@
 		TRXENG02 /* PatchZipConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverter.swift; sourceTree = "<group>"; };
 		TRXENG03 /* ContainerMetadataCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContainerMetadataCache.swift; sourceTree = "<group>"; };
 		TRXENG04 /* DirectorySizeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectorySizeService.swift; sourceTree = "<group>"; };
+		TRXENG05 /* AppContainerScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainerScanner.swift; sourceTree = "<group>"; };
+		TRXENG06 /* AppNavigationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigationCoordinator.swift; sourceTree = "<group>"; };
 		TRXTST00 /* TororoxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TororoxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		TRXTST01 /* FileIOEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngineTests.swift; sourceTree = "<group>"; };
 		TRXTST02 /* PatchZipConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverterTests.swift; sourceTree = "<group>"; };
@@ -298,6 +302,8 @@
 				3105A104 /* ContainerStore.swift */,
 				TRXENG03 /* ContainerMetadataCache.swift */,
 				TRXENG04 /* DirectorySizeService.swift */,
+				TRXENG05 /* AppContainerScanner.swift */,
+				TRXENG06 /* AppNavigationCoordinator.swift */,
 				3105A108 /* ContainerIdentityResolver.swift */,
 				3105A109 /* ContainerBrowserLogic.swift */,
 				3105A110 /* FileReplacementService.swift */,
@@ -489,6 +495,8 @@
 				TRXBLD02 /* PatchZipConverter.swift in Sources */,
 				TRXBLD03 /* ContainerMetadataCache.swift in Sources */,
 				TRXBLD04 /* DirectorySizeService.swift in Sources */,
+				TRXBLD05 /* AppContainerScanner.swift in Sources */,
+				TRXBLD06 /* AppNavigationCoordinator.swift in Sources */,
 				3105A200, 3105A201, 3105A203, 3105A204,
 				3105A205, 3105A206, 3105A207, 3105A209,
 				3105A210, 3105A220, 3105A221, 3105A222, 3105A223,

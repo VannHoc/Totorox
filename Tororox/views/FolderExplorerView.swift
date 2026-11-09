@@ -16,6 +16,10 @@ struct FolderExplorerView: View {
     // Clipboard state
     @State private var clipboardItem: ClipboardItem? = nil
     
+    // Scroll restoration & indicators
+    @State private var savedScrollItemID: [String: String] = [:]
+    @State private var pendingScrollToID: String? = nil
+    
     // Dialogs & Modals
     @State private var showNewFolderDialog = false
     @State private var newFolderName: String = ""
@@ -196,7 +200,7 @@ struct FolderExplorerView: View {
 
             // Content List
             ScrollViewReader { scrollProxy in
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(spacing: 10) {
                         if filteredEntries.isEmpty {
                             VStack(spacing: 12) {
@@ -228,6 +232,17 @@ struct FolderExplorerView: View {
                     .padding(16)
                     .padding(.bottom, clipboardItem != nil ? 80 : 20)
                 }
+                .scrollIndicators(.visible)
+                .onChange(of: entries) { _ in
+                    if let targetID = pendingScrollToID {
+                        pendingScrollToID = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                scrollProxy.scrollTo(targetID, anchor: .center)
+                            }
+                        }
+                    }
+                }
                 .safeAreaInset(edge: .bottom) {
                     Color.clear.frame(height: 80)
                 }
@@ -256,6 +271,12 @@ struct FolderExplorerView: View {
         .onAppear {
             rebuildBreadcrumbs()
             loadCurrentDirectory()
+        }
+        .onReceive(AppNavigationCoordinator.shared.$folderExplorerTargetURL) { targetURL in
+            if let url = targetURL {
+                AppNavigationCoordinator.shared.folderExplorerTargetURL = nil
+                navigateTo(url)
+            }
         }
         .alert("Tạo thư mục mới", isPresented: $showNewFolderDialog) {
             TextField("Tên thư mục", text: $newFolderName)
@@ -336,6 +357,7 @@ struct FolderExplorerView: View {
     private func fileEntryCard(_ entry: FileEntry) -> some View {
         Button {
             if entry.isDirectory {
+                savedScrollItemID[currentURL.path] = entry.path
                 let nextURL = currentURL.appendingPathComponent(entry.name)
                 navigateTo(nextURL)
             } else {
@@ -346,8 +368,15 @@ struct FolderExplorerView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                // Icon (App Icon if available, else system icon)
-                if let appIcon = entry.appIcon {
+                // Icon (App Container avatar or system icon)
+                if entry.isAppContainer {
+                    AppIconAvatarView(
+                        icon: entry.appIcon,
+                        title: entry.appName ?? entry.name,
+                        bundleID: entry.bundleID ?? "",
+                        size: 44
+                    )
+                } else if let appIcon = entry.appIcon {
                     Image(uiImage: appIcon)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -373,86 +402,80 @@ struct FolderExplorerView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     // Line 1: Primary Title with middle truncation
                     Text(entry.appName ?? entry.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    // Line 2: Single-line Metadata HStack
-                    HStack(spacing: 6) {
-                        if entry.isAppContainer {
-                            // Bundle ID badge
+                    if entry.isAppContainer {
+                        VStack(alignment: .leading, spacing: 2) {
                             if let bid = entry.bundleID, !bid.isEmpty {
                                 Text(bid)
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .lineLimit(1)
+                            }
+                            if let shortId = entry.shortUUID {
+                                Text("UDID: \(shortId)")
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            Text("Data: \(entry.path)")
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    } else {
+                        // Regular metadata HStack
+                        HStack(spacing: 6) {
+                            if entry.isDirectory {
+                                Text(entry.childCountText)
+                                    .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(TotoroxTheme.mintAccent)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(TotoroxTheme.mintAccent.opacity(0.12))
                                     .clipShape(Capsule())
                                     .lineLimit(1)
-                                    .truncationMode(.tail)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            } else {
+                                Text(entry.sizeText)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+
+                                if !entry.extensionBadge.isEmpty {
+                                    Text(entry.extensionBadge)
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                        .clipShape(Capsule())
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
                             }
 
-                            // Short UUID
-                            if let shortId = entry.shortUUID {
+                            if let mod = entry.formattedModifiedDate {
                                 Text("•")
                                     .font(.system(size: 9))
                                     .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
                                     .fixedSize(horizontal: true, vertical: false)
-                                Text(shortId)
-                                    .font(.system(size: 10, design: .monospaced))
+                                Text(mod)
+                                    .font(.system(size: 11))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                     .lineLimit(1)
                                     .fixedSize(horizontal: true, vertical: false)
                             }
-                        } else if entry.isDirectory {
-                            // Folder item count or badge
-                            Text(entry.childCountText)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                .clipShape(Capsule())
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        } else {
-                            // File size
-                            Text(entry.sizeText)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-
-                            // Extension badge
-                            if !entry.extensionBadge.isEmpty {
-                                Text(entry.extensionBadge)
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1.5)
-                                    .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                    .clipShape(Capsule())
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }
                         }
-
-                        // Modification date
-                        if let mod = entry.formattedModifiedDate {
-                            Text("•")
-                                .font(.system(size: 9))
-                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
-                                .fixedSize(horizontal: true, vertical: false)
-                            Text(mod)
-                                .font(.system(size: 11))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
+                        .lineLimit(1)
                     }
+                }
                     .lineLimit(1)
                 }
 
@@ -662,6 +685,12 @@ struct FolderExplorerView: View {
     }
 
     private func navigateTo(_ url: URL) {
+        let destPath = url.path
+        if let savedID = savedScrollItemID[destPath] {
+            pendingScrollToID = savedID
+        } else {
+            pendingScrollToID = nil
+        }
         currentURL = url
         rebuildBreadcrumbs()
         loadCurrentDirectory()
@@ -683,11 +712,21 @@ struct FolderExplorerView: View {
         if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: path) {
             self.entries = cached
             self.isLoading = false
+            if let targetID = self.pendingScrollToID {
+                self.pendingScrollToID = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                    // Triggers change handler or direct scrollTo if needed
+                }
+            }
         } else {
             self.isLoading = true
         }
 
         Task.detached(priority: .userInitiated) {
+            if path.contains("Containers/Data/Application") {
+                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
+            }
+
             let handle = ContainerStore.grantContainerAccess(path)
             defer {
                 if handle >= 0 { bad_query_release(handle) }

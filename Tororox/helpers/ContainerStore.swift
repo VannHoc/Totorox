@@ -627,6 +627,10 @@ enum ContainerStore {
     }
 
     static func readContainerMetadata(containerPath: String) -> ContainerMetadata? {
+        let handle = grantContainerAccess(containerPath)
+        defer {
+            if handle >= 0 { bad_query_release(handle) }
+        }
         let metadataPath = metadataPath(for: containerPath)
 
         var data: Data?
@@ -929,6 +933,15 @@ enum ContainerStore {
                 } else {
                     shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
                 }
+
+                if appName == nil {
+                    if let bid = bundleID, !bid.isEmpty {
+                        appName = bid
+                    } else {
+                        let short = shortUUID ?? (name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name)
+                        appName = "Container (\(short))"
+                    }
+                }
             } else if isDir {
                 childCount = DirectorySizeService.countImmediateChildren(at: full)
             }
@@ -1122,6 +1135,15 @@ enum ContainerStore {
                     shortUUID = containerMeta.shortUUID
                 } else {
                     shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
+                }
+
+                if appName == nil {
+                    if let bid = bundleID, !bid.isEmpty {
+                        appName = bid
+                    } else {
+                        let short = shortUUID ?? (item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item)
+                        appName = "Container (\(short))"
+                    }
                 }
             } else if isDirectory {
                 childCount = DirectorySizeService.countImmediateChildren(at: full)

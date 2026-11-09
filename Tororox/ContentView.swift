@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
-    @State private var selectedTab: TotoroxTab = .overwrite
+    @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @State private var showSettings: Bool = false
     @State private var showLogs: Bool = false
 
@@ -15,7 +15,7 @@ struct ContentView: View {
 
             // Tab View Body
             ZStack {
-                switch selectedTab {
+                switch navCoordinator.selectedTab {
                 case .overwrite:
                     OverwriteFileView()
                 case .folders:
@@ -27,7 +27,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Custom Clean White TabBar with Indicator
-            TotoroxTabBar(selectedTab: $selectedTab)
+            TotoroxTabBar(selectedTab: $navCoordinator.selectedTab)
         }
         .background(TotoroxTheme.pageBackground)
         .preferredColorScheme(.light)

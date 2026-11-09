@@ -31,9 +31,9 @@
 "onboarding.language_title" = "Chọn ngôn ngữ";
 "onboarding.language_subtitle" = "Bạn có thể đổi lại trong Cài đặt.";
 "onboarding.language_hint" = "Đã chọn: %@";
-"onboarding.welcome_title" = "Chào mừng đến với Tororox";
+"onboarding.welcome_title" = "Chào mừng đến với Totorox";
 "onboarding.welcome_message" = "Ứng dụng được sáng lập và phát triển bởi VannHoc";
-"onboarding.welcome_badge" = "Định danh chính thức Tororox";
+"onboarding.welcome_badge" = "Định danh chính thức Totorox";
 "onboarding.versions_title" = "Phiên bản iOS được hỗ trợ";
 "onboarding.versions_subtitle" = "Totorox đã được xác minh trên các khoảng bên dưới. Build ngoài phạm vi sẽ bị chặn.";
 "onboarding.versions_footer" = "Thiết bị này: iOS %@ (%@)";

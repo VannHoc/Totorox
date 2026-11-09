@@ -1,243 +1,534 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct TargetAppItem: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let bundleID: String
-    let containerPath: String
-    let iconName: String
-    var iconImage: UIImage? = nil
-
-    static func == (lhs: TargetAppItem, rhs: TargetAppItem) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-}
-
-enum OverwriteFilterCategory: String, CaseIterable {
-    case all = "Tất cả"
-    case app = "App"
-    case patch3105 = "Gói .3105"
-}
+// MARK: - OverwriteFileView (Thiết lập bản vá - 3 bước cơ bản)
 
 struct OverwriteFileView: View {
-    @State private var searchText: String = ""
-    @State private var selectedFilter: OverwriteFilterCategory = .all
-    @State private var installedApps: [TargetAppItem] = []
-    @State private var selectedApp: TargetAppItem? = nil
+    // 3 Steps State
+    @State private var selectedApp: AppContainerInfo? = nil
+    @State private var targetBundleIDInput: String = ""
+    @State private var selectedTargetFolder: String = "Documents"
+    @State private var selectedPatchURL: URL? = nil
     
-    // File execution sheet & state
-    @State private var showExecutionSheet = false
-    @State private var selectedContainerTargetFolder: String = "Documents"
-    @State private var sourceURL: URL? = nil
+    // Modal Sheets
+    @State private var showInstalledAppsSheet: Bool = false
+    @State private var showFolderPicker: Bool = false
+    @State private var showFilePicker: Bool = false
+    @State private var showLogSheet: Bool = false
+    
+    // App search in modal sheet
+    @State private var appSearchQuery: String = ""
+    
+    // Quick presets
+    @State private var presetArchives: [URL] = []
+    
+    // Execution State
     @State private var isExecuting: Bool = false
     @State private var executionProgress: Double = 0.0
     @State private var executionStatusText: String = ""
-    
-    // Outcome & Conflict Modals
-    @State private var outcomeResult: FileIOResultWrapper? = nil
     @State private var activeConflict: FileConflictInfo? = nil
-    @State private var showFilePicker = false
+    @State private var outcomeResult: FileIOResultWrapper? = nil
     
-    // Container target directories
-    @State private var containerFolders: [(title: String, badge: String, isSuccess: Bool)] = [
-        ("Documents", "Read / Write", false),
-        ("Library", "Read / Write", false),
-        ("tmp", "Read / Write", false)
-    ]
-
+    // Live log tracking
+    @State private var latestLogMessage: String = "● [\(formattedCurrentTime())] [SẴN SÀNG] Đã khởi tạo hệ thống Patch dữ liệu."
+    
+    // Scanner
+    @ObservedObject private var scanner = AppContainerScanner.shared
+    
+    private var isStep1Ready: Bool { selectedApp != nil }
+    private var isStep2Ready: Bool { !selectedTargetFolder.isEmpty }
+    private var isStep3Ready: Bool { selectedPatchURL != nil }
+    private var areAllStepsReady: Bool { isStep1Ready && isStep2Ready && isStep3Ready }
+    
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 20) {
-                // Search bar
-                TotoroxSearchBar(text: $searchText, placeholder: "Tìm container hoặc tệp...") {
-                    // Filter action
-                }
-                .padding(.top, 4)
-
-                // Container gần đây Header
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Container gần đây")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                        .padding(.horizontal, 16)
-
-                    // Horizontal ScrollView for App Cards
-                    if filteredApps.isEmpty {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                                .tint(TotoroxTheme.mintAccent)
-                            Text("Đang quét danh sách container ứng dụng...")
-                                .font(.system(size: 13))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(TotoroxTheme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .padding(.horizontal, 16)
-                    } else {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(filteredApps) { app in
-                                    let isSelected = (selectedApp?.id == app.id)
-                                    Button {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            selectedApp = app
-                                        }
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            // App Icon
-                                            ZStack {
-                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                    .fill(TotoroxTheme.searchBackground)
-                                                    .frame(width: 54, height: 54)
-
-                                                if let uiImg = app.iconImage {
-                                                    Image(uiImage: uiImg)
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                        .frame(width: 54, height: 54)
-                                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                                } else {
-                                                    Image(systemName: app.iconName)
-                                                        .font(.system(size: 26))
-                                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                                }
-                                            }
-
-                                            // App title
-                                            Text(app.name)
-                                                .font(.system(size: 14, weight: .bold))
-                                                .foregroundStyle(TotoroxTheme.textPrimary)
-                                                .lineLimit(1)
-
-                                            // Bundle ID subline
-                                            Text(app.bundleID)
-                                                .font(.system(size: 11, design: .monospaced))
-                                                .foregroundStyle(TotoroxTheme.textSecondary)
-                                                .lineLimit(2)
-                                                .frame(maxWidth: 110, alignment: .leading)
-                                        }
-                                        .padding(14)
-                                        .frame(width: 140, height: 140, alignment: .topLeading)
-                                        .background(TotoroxTheme.cardBackground)
-                                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                .stroke(isSelected ? TotoroxTheme.mintAccent : Color.clear, lineWidth: 2)
-                                        )
-                                        .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.04), radius: 8, x: 0, y: 3)
-                                    }
-                                    .buttonStyle(.plain)
+            VStack(spacing: 16) {
+                // MARK: - Card "THIẾT LẬP BẢN VÁ" (3 bước cơ bản)
+                VStack(spacing: 16) {
+                    // Card Header
+                    HStack {
+                        Text("THIẾT LẬP BẢN VÁ")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        
+                        Spacer()
+                        
+                        Text("3 bước cơ bản")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(Capsule())
+                    }
+                    
+                    // MARK: Bước 1 - Ứng dụng mục tiêu
+                    VStack(spacing: 10) {
+                        HStack(alignment: .center, spacing: 12) {
+                            // Step Icon (1 or Checkmark)
+                            if let app = selectedApp {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.green)
+                                        .frame(width: 26, height: 26)
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(.white)
+                                }
+                                
+                                AppIconAvatarView(info: app, size: 40)
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Ứng dụng mục tiêu")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                    Text(app.appName)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                        .lineLimit(1)
+                                    Text(app.bundleID)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .lineLimit(1)
+                                }
+                            } else {
+                                ZStack {
+                                    Circle()
+                                        .fill(TotoroxTheme.searchBackground)
+                                        .frame(width: 26, height: 26)
+                                    Text("1")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Ứng dụng mục tiêu")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                    Text("Chưa chọn ứng dụng")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                    Text("Nhập Bundle ID hoặc duyệt danh sách app")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
                             }
-                            .padding(.horizontal, 16)
-                        }
-                    }
-                }
-
-                // Filter Pills
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(OverwriteFilterCategory.allCases, id: \.self) { cat in
-                            let isSelected = (selectedFilter == cat)
+                            
+                            Spacer()
+                            
+                            // Button Chọn / Đổi
                             Button {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    selectedFilter = cat
-                                }
+                                showInstalledAppsSheet = true
                             } label: {
-                                Text(cat.rawValue)
-                                    .font(.system(size: 14, weight: isSelected ? .bold : .medium))
-                                    .foregroundStyle(isSelected ? .white : TotoroxTheme.textSecondary)
-                                    .padding(.horizontal, 18)
-                                    .padding(.vertical, 8)
-                                    .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                Text(selectedApp == nil ? "Chọn" : "Đổi")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 7)
+                                    .background(Color(red: 0.16, green: 0.45, blue: 0.95))
                                     .clipShape(Capsule())
                             }
-                            .buttonStyle(.plain)
+                        }
+                        
+                        // Quick input field for Bundle ID
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                            
+                            TextField("Ví dụ: com.garena.game.kgvn", text: $targetBundleIDInput)
+                                .font(.system(size: 13, design: .monospaced))
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .onSubmit {
+                                    resolveTypedBundleID()
+                                }
+                            
+                            if !targetBundleIDInput.isEmpty {
+                                Button {
+                                    targetBundleIDInput = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    
+                    Divider()
+                        .background(TotoroxTheme.dividerColor)
+                    
+                    // MARK: Bước 2 - Thư mục đích
+                    HStack(alignment: .center, spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 26, height: 26)
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Thư mục đích")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                            Text(selectedTargetFolder)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                            Text("/\(selectedTargetFolder) (chuẩn ghi đè an toàn)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Menu {
+                            Button("Documents (/Documents)") {
+                                selectedTargetFolder = "Documents"
+                                updateLog("[ĐÍCH] Đã chọn thư mục đích: Documents")
+                            }
+                            Button("Library (/Library)") {
+                                selectedTargetFolder = "Library"
+                                updateLog("[ĐÍCH] Đã chọn thư mục đích: Library")
+                            }
+                            Button("tmp (/tmp)") {
+                                selectedTargetFolder = "tmp"
+                                updateLog("[ĐÍCH] Đã chọn thư mục đích: tmp")
+                            }
+                        } label: {
+                            Text("Đổi")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 7)
+                                .background(Color(red: 0.16, green: 0.45, blue: 0.95).opacity(0.12))
+                                .clipShape(Capsule())
                         }
                     }
-                    .padding(.horizontal, 16)
-                }
-
-                // Container directories list
-                VStack(spacing: 12) {
-                    ForEach(filteredFolders, id: \.title) { item in
-                        Button {
-                            selectedContainerTargetFolder = item.title
-                            showExecutionSheet = true
-                        } label: {
-                            HStack(spacing: 14) {
-                                // Teal Folder Icon
+                    
+                    Divider()
+                        .background(TotoroxTheme.dividerColor)
+                    
+                    // MARK: Bước 3 - Gói tệp bản vá
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .center, spacing: 12) {
+                            if let patch = selectedPatchURL {
                                 ZStack {
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(TotoroxTheme.mintAccent.opacity(0.12))
-                                        .frame(width: 44, height: 44)
-                                    Image(systemName: "folder.fill")
-                                        .font(.system(size: 22))
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                    Circle()
+                                        .fill(Color.green)
+                                        .frame(width: 26, height: 26)
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(.white)
                                 }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.title)
-                                        .font(.system(size: 16, weight: .semibold))
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Gói tệp bản vá")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                    Text(patch.lastPathComponent)
+                                        .font(.system(size: 14, weight: .bold))
                                         .foregroundStyle(TotoroxTheme.textPrimary)
-
-                                    TotoroxBadge(
-                                        title: item.badge,
-                                        isAccent: item.isSuccess
-                                    )
+                                        .lineLimit(1)
+                                    Text(formatFileSize(url: patch))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                            } else {
+                                ZStack {
+                                    Circle()
+                                        .fill(TotoroxTheme.searchBackground)
+                                        .frame(width: 26, height: 26)
+                                    Text("3")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Gói tệp bản vá")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                    Text("Chưa có tệp bản vá")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                    Text("Định dạng tệp .zip hoặc .3105")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
                             }
-                            .totoroxCard()
+                            
+                            Spacer()
+                            
+                            Button {
+                                showFilePicker = true
+                            } label: {
+                                Text(selectedPatchURL == nil ? "Chọn" : "Đổi")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 7)
+                                    .background(Color(red: 0.16, green: 0.45, blue: 0.95))
+                                    .clipShape(Capsule())
+                            }
                         }
-                        .buttonStyle(.plain)
+                        
+                        // Preset archive chips
+                        if !presetArchives.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(presetArchives, id: \.self) { archiveURL in
+                                        let isThis = (selectedPatchURL == archiveURL)
+                                        Button {
+                                            selectedPatchURL = archiveURL
+                                            updateLog("[ZIP] Đã chọn tệp: \(archiveURL.lastPathComponent)")
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                Image(systemName: "doc.zipper")
+                                                    .font(.system(size: 12))
+                                                Text(archiveURL.lastPathComponent)
+                                                    .font(.system(size: 12, weight: .medium))
+                                                    .lineLimit(1)
+                                            }
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(isThis ? TotoroxTheme.mintAccent.opacity(0.15) : TotoroxTheme.searchBackground)
+                                            .foregroundStyle(isThis ? TotoroxTheme.mintAccent : TotoroxTheme.textPrimary)
+                                            .clipShape(Capsule())
+                                            .overlay(
+                                                Capsule()
+                                                    .stroke(isThis ? TotoroxTheme.mintAccent : Color.clear, lineWidth: 1)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.top, 2)
+                        }
+                    }
+                }
+                .totoroxCard()
+                .padding(.horizontal, 16)
+                
+                // MARK: - Guidance / Warning Banner
+                VStack {
+                    if !isStep1Ready {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color(red: 0.95, green: 0.52, blue: 0.1))
+                            Text("Bước 1: Vui lòng chọn ứng dụng mục tiêu để bắt đầu.")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.8, green: 0.42, blue: 0.05))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color(red: 0.99, green: 0.95, blue: 0.91))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else if !isStep3Ready {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color(red: 0.95, green: 0.52, blue: 0.1))
+                            Text("Bước 3: Vui lòng chọn tệp ZIP bản vá để tiếp tục.")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.8, green: 0.42, blue: 0.05))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color(red: 0.99, green: 0.95, blue: 0.91))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                            Text("Tất cả 3 bước đã sẵn sàng! Bạn có thể nhấn Áp dụng bản vá ngay.")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
                 .padding(.horizontal, 16)
-
-                // Quick execute button
+                
+                // MARK: - Primary Action Button
+                VStack(spacing: 6) {
+                    if !isStep1Ready {
+                        Button {
+                            showInstalledAppsSheet = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "list.bullet.rectangle")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("Chọn ứng dụng mục tiêu")
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(TotoroxTheme.cardBackground)
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 2)
+                        }
+                        Text("Cần chọn ứng dụng trước khi áp dụng")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                    } else if !isStep3Ready {
+                        Button {
+                            showFilePicker = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus.rectangle.on.folder.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("Chọn tệp bản vá (.zip / .3105)")
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(TotoroxTheme.cardBackground)
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 2)
+                        }
+                        Text("Cần chọn tệp ZIP bản vá để áp dụng")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                    } else {
+                        Button {
+                            executePatchAction()
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isExecuting {
+                                    ProgressView()
+                                        .tint(.white)
+                                } else {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                }
+                                Text(isExecuting ? "Đang áp dụng bản vá..." : "Áp dụng bản vá ngay")
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(TotoroxTheme.mintAccent)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .shadow(color: TotoroxTheme.mintAccent.opacity(0.3), radius: 8, x: 0, y: 3)
+                        }
+                        .disabled(isExecuting)
+                        
+                        Text("Sẵn sàng ghi đè an toàn vào Container\nVui lòng giữ ứng dụng mở trong khi ghi đè dữ liệu")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                
+                // MARK: - Live Log Bar
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    
+                    Text(latestLogMessage)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    
+                    Spacer()
+                    
+                    Button {
+                        showLogSheet = true
+                    } label: {
+                        Text("Nhật ký >")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(TotoroxTheme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: Color.black.opacity(0.02), radius: 4, x: 0, y: 1)
+                .padding(.horizontal, 16)
+                
+                // MARK: - Direct Sandbox Tool Navigation Button
                 Button {
-                    showExecutionSheet = true
+                    let destPath: String
+                    if let app = selectedApp {
+                        destPath = app.dataPath
+                    } else {
+                        destPath = ContainerStore.appDataRoot
+                    }
+                    AppNavigationCoordinator.shared.navigateToFolder(url: URL(fileURLWithPath: destPath))
                 } label: {
                     HStack {
-                        Image(systemName: "bolt.fill")
-                        Text("Thực thi Đè File vào Container")
-                            .fontWeight(.bold)
+                        Text("Nâng cao: Công cụ Sandbox trực tiếp")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(TotoroxTheme.mintAccent)
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: TotoroxTheme.mintAccent.opacity(0.3), radius: 8, x: 0, y: 4)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .background(TotoroxTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.02), radius: 4, x: 0, y: 1)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                
+                Spacer(minLength: 40)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Color.clear.frame(height: 80)
+            .padding(.top, 12)
         }
         .background(TotoroxTheme.pageBackground)
         .onAppear {
-            loadDiscoveredApps()
+            loadPresetArchives()
+            Task {
+                _ = await scanner.scanAllContainers(forceRefresh: false)
+            }
         }
-        .sheet(isPresented: $showExecutionSheet) {
-            executionModalView
+        // Modal Sheet: Ứng dụng đã cài đặt
+        .sheet(isPresented: $showInstalledAppsSheet) {
+            installedAppsModalSheet
         }
+        // File picker for patch
+        .sheet(isPresented: $showFilePicker) {
+            DocumentPickerWrapper(allowedContentTypes: [.zip, UTType("com.vannhoc.tororox.patch") ?? .data]) { pickedURL in
+                selectedPatchURL = pickedURL
+                updateLog("[ZIP] Đã chọn tệp: \(pickedURL.lastPathComponent)")
+            }
+        }
+        // Full log sheet
+        .sheet(isPresented: $showLogSheet) {
+            LogView()
+        }
+        // Outcome View
         .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
             }
         }
+        // Conflict Dialog
         .overlay {
             if let conflict = activeConflict {
                 ZStack {
@@ -250,349 +541,304 @@ struct OverwriteFileView: View {
             }
         }
     }
-
-    private var filteredApps: [TargetAppItem] {
-        if searchText.isEmpty {
-            return installedApps
-        }
-        return installedApps.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText) ||
-            $0.bundleID.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    private var filteredFolders: [(title: String, badge: String, isSuccess: Bool)] {
-        if selectedFilter == .patch3105 {
-            return [("Gói .3105 Payload", "Sẵn sàng ghi đè", true)]
-        }
-        return containerFolders
-    }
-
-    private func loadDiscoveredApps() {
-        Task {
-            var discovered = ContainerStore.installedAppsFromAPI()
-            if discovered.isEmpty {
-                discovered = ContainerStore.installedAppsFromMCM()
-            }
-            if discovered.isEmpty {
-                discovered = ContainerStore.containersFromFilesystem()
-            }
-            let catalog = ContainerStore.applicationBundleMetadataCatalog()
-            if !catalog.isEmpty {
-                discovered = ContainerStore.applyingBundleMetadata(to: discovered, catalog: catalog)
-            }
-
-            let sorted = discovered.sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-            }
-
-            for app in sorted {
-                let uuid = (app.containerPath as NSString).lastPathComponent
-                if UUID(uuidString: uuid) != nil {
-                    let meta = AppContainerMetadata(
-                        uuid: uuid,
-                        containerPath: app.containerPath,
-                        bundleID: app.bundleID,
-                        appName: app.displayName.isEmpty ? app.bundleID : app.displayName,
-                        icon: app.icon,
-                        isUserApp: true,
-                        modificationDate: nil
-                    )
-                    ContainerMetadataCache.shared.store(app: meta)
+    
+    // MARK: - Modal Sheet "Ứng dụng đã cài đặt" (Matches Image 3)
+    private var installedAppsModalSheet: some View {
+        VStack(spacing: 0) {
+            // Header: Đóng / Tiêu đề / Reload
+            HStack {
+                Button {
+                    showInstalledAppsSheet = false
+                } label: {
+                    Text("Đóng")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(Capsule())
                 }
-            }
-
-            await MainActor.run {
-                self.installedApps = sorted.map { app in
-                    TargetAppItem(
-                        id: app.bundleID,
-                        name: app.displayName.isEmpty ? app.bundleID : app.displayName,
-                        bundleID: app.bundleID,
-                        containerPath: app.containerPath,
-                        iconName: "app.fill",
-                        iconImage: app.icon
-                    )
-                }
-                if self.selectedApp == nil || !self.installedApps.contains(where: { $0.id == self.selectedApp?.id }) {
-                    self.selectedApp = self.installedApps.first
-                }
-            }
-
-            // Asynchronously resolve icons in background without blocking launch
-            Task.detached(priority: .background) {
-                for app in sorted.prefix(25) {
-                    guard let icon: UIImage = iconForBundleID(app.bundleID) else { continue }
-                    let uuid = (app.containerPath as NSString).lastPathComponent
-                    if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
-                        let updated = AppContainerMetadata(
-                            uuid: uuid,
-                            containerPath: cached.containerPath,
-                            bundleID: cached.bundleID,
-                            appName: cached.appName,
-                            icon: icon,
-                            isUserApp: true,
-                            modificationDate: cached.modificationDate
-                        )
-                        ContainerMetadataCache.shared.store(app: updated)
-                    }
-                    await MainActor.run {
-                        if let idx = self.installedApps.firstIndex(where: { $0.id == app.bundleID }) {
-                            self.installedApps[idx].iconImage = icon
-                        }
-                        if self.selectedApp?.id == app.bundleID {
-                            self.selectedApp?.iconImage = icon
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Overwrite Execution Modal
-    private var executionModalView: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                // Target Info Card
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("ĐÍCH GHI ĐÈ:")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-
-                    HStack(spacing: 12) {
-                        Image(systemName: "app.badge.checkmark.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(selectedApp?.name ?? "Chưa chọn ứng dụng")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(TotoroxTheme.textPrimary)
-
-                            Text("\(selectedApp?.bundleID ?? "N/A") / \(selectedContainerTargetFolder)")
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-                        }
-                    }
-                }
-                .totoroxCard()
-
-                // Source Selection
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("NGUỒN DỮ LIỆU:")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-
-                    if let source = sourceURL {
-                        HStack {
-                            Image(systemName: "doc.fill")
-                                .font(.system(size: 20))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(source.lastPathComponent)
-                                    .font(.system(size: 14, weight: .semibold))
-                                Text(source.path)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Button("Đổi") { showFilePicker = true }
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                        }
-                    } else {
-                        Button {
-                            showFilePicker = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "plus.circle.fill")
-                                    .font(.system(size: 20))
-                                Text("Chọn tệp, thư mục hoặc gói .3105...")
-                                    .font(.system(size: 14, weight: .medium))
-                                Spacer()
-                            }
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-                .totoroxCard()
-
-                // Overwrite Rules Notice (Windows style)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Image(systemName: "info.circle.fill")
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                        Text("Quy tắc ghi đè chuẩn Windows:")
-                            .font(.system(size: 13, weight: .bold))
-                    }
-                    Text("• File trùng tên: Ghi đè trực tiếp (không hash check)\n• Folder trùng tên: Gộp (merge) đệ quy mọi cấp\n• Xung đột Tệp/Thư mục: Hỏi ý kiến (Replace / Skip / Cancel)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                }
-                .padding(12)
-                .background(TotoroxTheme.searchBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                if isExecuting {
-                    VStack(spacing: 8) {
-                        ProgressView()
-                            .tint(TotoroxTheme.mintAccent)
-                        Text(executionStatusText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                    }
-                    .padding()
-                }
-
-                Spacer()
-
-                // Execute Button
-                TotoroxPrimaryButton(
-                    title: "Thực thi Đè File",
-                    icon: "bolt.fill",
-                    isLoading: isExecuting,
-                    isEnabled: sourceURL != nil && !isExecuting
-                ) {
-                    executeOverwriteAction()
-                }
-            }
-            .padding(16)
-            .background(TotoroxTheme.pageBackground)
-            .navigationTitle("Đè File Container")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Đóng") { showExecutionSheet = false }
-                        .foregroundColor(TotoroxTheme.textPrimary)
-                }
-            }
-            .sheet(isPresented: $showFilePicker) {
-                DocumentPickerWrapper { pickedURL in
-                    self.sourceURL = pickedURL
-                }
-            }
-            .overlay {
-                if let conflict = activeConflict {
-                    ZStack {
-                        Color.black.opacity(0.45)
-                            .ignoresSafeArea()
-                        WindowsConflictDialog(conflict: conflict)
-                    }
-                    .zIndex(999)
-                    .transition(.opacity)
-                }
-            }
-        }
-    }
-
-    private func executeOverwriteAction() {
-        guard let source = sourceURL, let targetApp = selectedApp else { return }
-        isExecuting = true
-        executionStatusText = "Đang chuẩn bị container..."
-
-        Task {
-            // Determine target path
-            let destinationPath: String
-            if let resolved = ContainerStore.resolveAppContainerPath(bundleID: targetApp.bundleID) {
-                destinationPath = (resolved as NSString).appendingPathComponent(selectedContainerTargetFolder)
-            } else {
-                let tempBase = FileManager.default.temporaryDirectory.appendingPathComponent("Totorox_Containers/\(targetApp.bundleID)")
-                destinationPath = tempBase.appendingPathComponent(selectedContainerTargetFolder).path
-            }
-
-            let destinationURL = URL(fileURLWithPath: destinationPath)
-            try? FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
-
-            // If source is a .3105 patch, convert it to temporary payload first
-            var actualSourceURL = source
-            var tempCleanups: [URL] = []
-            
-            if source.pathExtension.lowercased() == "3105" {
-                await MainActor.run { executionStatusText = "Đang giải mã gói .3105..." }
-                let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                tempCleanups.append(tempDir)
                 
-                let zipOut = tempDir.appendingPathComponent("patch.zip")
-                do {
-                    try PatchZipConverter.shared.convertPatch3105ToZip(inputURL: source, outputZipURL: zipOut)
-                    // Unzip to temp payload
-                    let unzippedDir = tempDir.appendingPathComponent("unzipped")
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: zipOut, into: unzippedDir)
-                    
-                    // Search for target container directory inside unzipped
-                    let payloadDir = unzippedDir.appendingPathComponent("payload")
-                    if FileManager.default.fileExists(atPath: payloadDir.path) {
-                        actualSourceURL = payloadDir
-                    } else {
-                        actualSourceURL = unzippedDir
+                Spacer()
+                
+                Text("Ứng dụng đã cài đặt")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                
+                Spacer()
+                
+                Button {
+                    Task {
+                        _ = await scanner.scanAllContainers(forceRefresh: true)
                     }
-                } catch {
-                    log("patch convert failed: \(error)")
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(TotoroxTheme.searchBackground)
+                            .frame(width: 36, height: 36)
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.45, blue: 0.95))
+                    }
                 }
             }
-
-            await MainActor.run { executionStatusText = "Đang áp dụng ghi đè & gộp thư mục..." }
-
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+            
+            // App List
+            if scanner.isLoading && scanner.apps.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(TotoroxTheme.mintAccent)
+                        .scaleEffect(1.2)
+                    Text("Đang quét ứng dụng qua LaunchServices & MCM...")
+                        .font(.system(size: 14))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                let filtered = filteredInstalledApps
+                if filtered.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "questionmark.app.dashed")
+                            .font(.system(size: 40))
+                            .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                        Text("Không tìm thấy ứng dụng nào.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        Text("Hãy thử nhập Bundle ID thủ công ở màn hình chính.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        LazyVStack(spacing: 10) {
+                            ForEach(filtered) { app in
+                                Button {
+                                    selectedApp = app
+                                    targetBundleIDInput = app.bundleID
+                                    showInstalledAppsSheet = false
+                                    updateLog("[CHỌN] Đã chọn ứng dụng: \(app.appName) (\(app.bundleID))")
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        AppIconAvatarView(info: app, size: 48)
+                                        
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(app.appName)
+                                                .font(.system(size: 15, weight: .bold))
+                                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                                .lineLimit(1)
+                                            
+                                            Text(app.bundleID)
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                                .lineLimit(1)
+                                            
+                                            Text("UDID: \(app.shortUDID)")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
+                                                .lineLimit(1)
+                                            
+                                            Text("Data: \(app.shortDataPath)")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
+                                                .lineLimit(1)
+                                            
+                                            if let bundlePath = app.shortBundlePath {
+                                                Text("Bundle: \(bundlePath)")
+                                                    .font(.system(size: 9.5, design: .monospaced))
+                                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.75))
+                                                    .lineLimit(1)
+                                            }
+                                        }
+                                        
+                                        Spacer()
+                                        
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(TotoroxTheme.cardBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .shadow(color: Color.black.opacity(0.02), radius: 3, x: 0, y: 1)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 80)
+                    }
+                }
+            }
+            
+            // Bottom Floating Search Bar
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+                
+                TextField("Tìm theo tên app hoặc mã...", text: $appSearchQuery)
+                    .font(.system(size: 14))
+                    .autocorrectionDisabled()
+                
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.white)
+            .clipShape(Capsule())
+            .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 3)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+        .background(TotoroxTheme.pageBackground)
+    }
+    
+    private var filteredInstalledApps: [AppContainerInfo] {
+        if appSearchQuery.isEmpty { return scanner.apps }
+        let q = appSearchQuery.lowercased()
+        return scanner.apps.filter {
+            $0.appName.lowercased().contains(q) ||
+            $0.bundleID.lowercased().contains(q) ||
+            $0.udid.lowercased().contains(q)
+        }
+    }
+    
+    // MARK: - Actions & Helpers
+    
+    private func resolveTypedBundleID() {
+        let clean = targetBundleIDInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        updateLog("[TÌM KIẾM] Đang tìm kiếm container cho: \(clean)")
+        Task {
+            if let found = await scanner.resolveContainer(bundleID: clean) {
+                self.selectedApp = found
+                updateLog("[THÀNH CÔNG] Đã tìm thấy: \(found.appName) (\(found.bundleID))")
+            } else {
+                updateLog("[CẢNH BÁO] Không tìm thấy container cho '\(clean)'")
+            }
+        }
+    }
+    
+    private func loadPresetArchives() {
+        var presets: [URL] = []
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        if let files = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil) {
+            for f in files {
+                let ext = f.pathExtension.lowercased()
+                if ext == "zip" || ext == "3105" {
+                    presets.append(f)
+                }
+            }
+        }
+        self.presetArchives = presets
+    }
+    
+    private func formatFileSize(url: URL) -> String {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int64 else { return "—" }
+        return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+    
+    private func formattedCurrentTime() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f.string(from: Date())
+    }
+    
+    private func updateLog(_ msg: String) {
+        let timestamp = formattedCurrentTime()
+        let formatted = "● [\(timestamp)] \(msg)"
+        self.latestLogMessage = formatted
+        log("patch: \(msg)")
+    }
+    
+    private func executePatchAction() {
+        guard let app = selectedApp, let patchURL = selectedPatchURL else { return }
+        
+        isExecuting = true
+        executionStatusText = "Đang chuẩn bị gói bản vá..."
+        updateLog("[BẢN VÁ] Bắt đầu quá trình áp dụng bản vá cho: \(app.appName)")
+        
+        let destinationDir = URL(fileURLWithPath: app.dataPath)
+            .appendingPathComponent(selectedTargetFolder, isDirectory: true)
+        
+        updateLog("[BẢN VÁ] Điểm đích: \(destinationDir.path)")
+        
+        Task {
+            let handle = ContainerStore.grantContainerAccess(app.dataPath)
+            defer {
+                if handle >= 0 { bad_query_release(handle) }
+            }
+            
+            // 1. Stage archive to temp directory
+            let stagingDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("PatchStage_\(UUID().uuidString)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+            
+            defer {
+                try? FileManager.default.removeItem(at: stagingDir)
+            }
+            
+            let is3105 = patchURL.pathExtension.lowercased() == "3105"
+            var sourceToCopy: URL = stagingDir
+            
+            if is3105 {
+                do {
+                    _ = try PatchZipConverter.convert3105ToZip(input3105URL: patchURL, outputZipURL: stagingDir.appendingPathComponent("extracted.zip"))
+                    let unzippedDir = stagingDir.appendingPathComponent("payload", isDirectory: true)
+                    try? FileManager.default.createDirectory(at: unzippedDir, withIntermediateDirectories: true)
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: stagingDir.appendingPathComponent("extracted.zip"), destinationURL: unzippedDir)
+                    sourceToCopy = unzippedDir
+                } catch {
+                    updateLog("[LỖI] Giải mã gói .3105 thất bại: \(error.localizedDescription)")
+                }
+            } else {
+                do {
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, destinationURL: stagingDir)
+                    sourceToCopy = stagingDir
+                } catch {
+                    updateLog("[LỖI] Giải nén tệp ZIP thất bại: \(error.localizedDescription)")
+                }
+            }
+            
+            // 2. Execute Copy & Merge via FileIOEngine
             let engine = FileIOEngine()
-            let result = await engine.copyAndMerge(
-                from: actualSourceURL,
-                to: destinationURL
-            ) { src, dest, kind in
-                await withCheckedContinuation { continuation in
+            let result = await engine.copyAndMerge(from: sourceToCopy, to: destinationDir) { s, d, k in
+                await withCheckedContinuation { cont in
                     Task { @MainActor in
                         self.activeConflict = FileConflictInfo(
-                            sourceURL: src,
-                            destinationURL: dest,
-                            conflictKind: kind,
-                            continuation: { res in
+                            sourceURL: s,
+                            destinationURL: d,
+                            conflictKind: k,
+                            continuation: { r in
                                 self.activeConflict = nil
-                                continuation.resume(returning: res)
+                                cont.resume(returning: r)
                             }
                         )
                     }
                 }
             }
-
-            // Cleanup temp resources
-            for cleanup in tempCleanups {
-                try? FileManager.default.removeItem(at: cleanup)
-            }
-
+            
             await MainActor.run {
                 self.isExecuting = false
-                self.showExecutionSheet = false
+                ContainerMetadataCache.shared.invalidate(path: app.dataPath)
                 self.outcomeResult = FileIOResultWrapper(result: result)
+                if result.succeeded.count > 0 {
+                    self.updateLog("[THÀNH CÔNG] Đã áp dụng trọn vẹn \(result.succeeded.count) tệp vào ứng dụng.")
+                } else if result.isCancelled {
+                    self.updateLog("[HỦY BỎ] Người dùng đã hủy quá trình áp dụng bản vá.")
+                } else {
+                    self.updateLog("[CẢNH BÁO] Quá trình hoàn tất: \(result.failed.count) lỗi.")
+                }
             }
-        }
-    }
-}
-
-// MARK: - Document Picker Helper
-
-struct DocumentPickerWrapper: UIViewControllerRepresentable {
-    let onPick: (URL) -> Void
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item, .folder, .data], asCopy: true)
-        picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let parent: DocumentPickerWrapper
-        init(_ parent: DocumentPickerWrapper) { self.parent = parent }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
-            _ = url.startAccessingSecurityScopedResource()
-            parent.onPick(url)
         }
     }
 }

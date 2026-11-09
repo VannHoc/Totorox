@@ -54,7 +54,7 @@ struct SettingsView: View {
 
                         settingsRow(label: "Người sáng lập", value: "VannHoc", icon: "person.crop.circle.fill", isAccent: true)
                         Divider()
-                        settingsRow(label: "Tên ứng dụng", value: "Tororox", icon: "app.badge.fill")
+                        settingsRow(label: "Tên ứng dụng", value: "Totorox", icon: "app.badge.fill")
                         Divider()
                         settingsRow(label: "Bundle Identifier", value: "com.apple.mobile.MobileHouseArrest", icon: "barcode")
                         Divider()

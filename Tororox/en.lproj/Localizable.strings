@@ -31,9 +31,9 @@
 "onboarding.language_title" = "Choose your language";
 "onboarding.language_subtitle" = "You can change this later in Settings.";
 "onboarding.language_hint" = "Selected: %@";
-"onboarding.welcome_title" = "Welcome to Tororox";
+"onboarding.welcome_title" = "Welcome to Totorox";
 "onboarding.welcome_message" = "Developed by VannHoc";
-"onboarding.welcome_badge" = "Official Tororox identity";
+"onboarding.welcome_badge" = "Official Totorox identity";
 "onboarding.versions_title" = "Supported iOS versions";
 "onboarding.versions_subtitle" = "Totorox is verified on the ranges below. Unsupported builds are blocked.";
 "onboarding.versions_footer" = "This device: iOS %@ (%@)";
