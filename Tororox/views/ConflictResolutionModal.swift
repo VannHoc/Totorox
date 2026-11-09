@@ -7,7 +7,12 @@ struct FileConflictInfo: Identifiable {
     let sourceURL: URL
     let destinationURL: URL
     let conflictKind: FileIOConflictKind
-    let continuation: (FileIOConflictResolution) -> Void
+    let continuation: @Sendable (FileIOConflictResolution) -> Void
+}
+
+struct FileIOResultWrapper: Identifiable {
+    let id = UUID()
+    let result: FileIOResult
 }
 
 struct WindowsConflictDialog: View {
@@ -234,7 +239,7 @@ struct OverwriteOutcomeView: View {
             .navigationTitle("Kết quả thao tác")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Xong", action: onDismiss)
                         .fontWeight(.semibold)
                         .foregroundColor(TotoroxTheme.mintAccent)

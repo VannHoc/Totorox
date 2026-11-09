@@ -8,6 +8,9 @@ struct TargetAppItem: Identifiable, Hashable {
     let containerPath: String
     let iconName: String
     var iconImage: UIImage? = nil
+
+    static func == (lhs: TargetAppItem, rhs: TargetAppItem) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 enum OverwriteFilterCategory: String, CaseIterable {
@@ -248,11 +251,6 @@ struct OverwriteFileView: View {
         }
     }
 
-    struct FileIOResultWrapper: Identifiable {
-        let id = UUID()
-        let result: FileIOResult
-    }
-
     private var filteredApps: [TargetAppItem] {
         if searchText.isEmpty {
             return installedApps
@@ -296,7 +294,7 @@ struct OverwriteFileView: View {
                         bundleID: app.bundleID,
                         containerPath: app.containerPath,
                         iconName: "app.fill",
-                        iconImage: app.icon ?? iconForBundleID(app.bundleID as NSString)
+                        iconImage: app.icon ?? iconForBundleID(app.bundleID)
                     )
                 }
                 if self.selectedApp == nil || !self.installedApps.contains(where: { $0.id == self.selectedApp?.id }) {
@@ -420,7 +418,7 @@ struct OverwriteFileView: View {
             .navigationTitle("Đè File Container")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Đóng") { showExecutionSheet = false }
                         .foregroundColor(TotoroxTheme.textPrimary)
                 }

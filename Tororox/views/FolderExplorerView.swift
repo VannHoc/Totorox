@@ -34,7 +34,7 @@ struct FolderExplorerView: View {
     
     // Conflict & Outcome modals
     @State private var activeConflict: FileConflictInfo? = nil
-    @State private var outcomeResult: OverwriteFileView.FileIOResultWrapper? = nil
+    @State private var outcomeResult: FileIOResultWrapper? = nil
 
     private var canGoBack: Bool {
         currentURL.path != "/" && breadcrumbs.count > 1
@@ -669,7 +669,7 @@ struct FolderExplorerView: View {
                 }
             }
             await MainActor.run {
-                self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
+                self.outcomeResult = FileIOResultWrapper(result: result)
             }
         }
     }
@@ -700,7 +700,7 @@ struct FolderExplorerView: View {
 
             await MainActor.run {
                 self.clipboardItem = nil
-                self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
+                self.outcomeResult = FileIOResultWrapper(result: result)
             }
         }
     }
@@ -767,7 +767,7 @@ struct FolderExplorerView: View {
                 await MainActor.run {
                     self.isLoading = false
                     self.selectedArchiveForExtraction = nil
-                    self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
+                    self.outcomeResult = FileIOResultWrapper(result: result)
                     self.loadCurrentDirectory()
                 }
             } catch {
@@ -911,7 +911,7 @@ struct FileInfoInspectorSheet: View {
             .navigationTitle("Thông tin chi tiết")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Xong") { dismiss() }
                         .fontWeight(.bold)
                 }

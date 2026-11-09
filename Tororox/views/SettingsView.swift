@@ -162,7 +162,7 @@ struct SettingsView: View {
             .navigationTitle("Cài đặt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Xong") { dismiss() }
                         .fontWeight(.bold)
                         .foregroundColor(TotoroxTheme.mintAccent)
