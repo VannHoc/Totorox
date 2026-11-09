@@ -63,19 +63,16 @@ struct OverwriteFileView: View {
             
             // MARK: - Lớp Conflict Dialog (Nổi trên cùng, không bị che khuất)
             if let conflict = activeConflict {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-                
-                FileConflictDialog(
-                    conflict: conflict,
-                    onResolution: { resolution in
-                        conflict.continuation(resolution)
-                    }
-                )
-                .padding(.horizontal, 24)
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
-                .zIndex(100)
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { }
+
+                    WindowsConflictDialog(conflict: conflict)
+                        .padding(.horizontal, 24)
+                }
+                .zIndex(999)
+                .transition(.opacity)
             }
         }
         .sheet(isPresented: $showInstalledAppsSheet) {
