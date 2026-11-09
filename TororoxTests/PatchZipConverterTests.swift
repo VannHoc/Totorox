@@ -102,6 +102,48 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(reconRule2?.replacementData, rule2Payload, "Rule 2 byte payload must be 100% identical")
     }
 
+    func testConvertDeepBinaryPayload_WithoutTruncationError() throws {
+        let bundleID = "com.apple.mobile.MobileHouseArrest"
+        let deepRelativePath = "files/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"
+        let binaryPayload = Data(repeating: 0x5A, count: 64 * 1024)
+
+        let rule = PatchRule(
+            id: UUID(),
+            bundleID: bundleID,
+            relativePath: deepRelativePath,
+            replacementFilename: "CommonActions.pkg.bytes",
+            replacementData: binaryPayload
+        )
+
+        let project = PatchProject(
+            id: UUID(),
+            name: "Deep Resource Mod",
+            author: "VannHoc",
+            isPrivate: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            bundleIdentifiers: [bundleID],
+            directories: [],
+            rules: [rule]
+        )
+
+        let initialPatch = try PatchPackageCodec.encodeNew(project: project, password: nil)
+        let patchURL = tempDirectory.appendingPathComponent("deep.3105")
+        try initialPatch.data.write(to: patchURL)
+
+        let zipURL = tempDirectory.appendingPathComponent("deep.zip")
+        try converter.convertPatchToZip(patchURL: patchURL, destinationZipURL: zipURL)
+
+        let reconPatchURL = tempDirectory.appendingPathComponent("deep_recon.3105")
+        XCTAssertNoThrow(try converter.convertZipToPatch(zipURL: zipURL, destinationPatchURL: reconPatchURL))
+
+        let reconData = try Data(contentsOf: reconPatchURL)
+        let decoded = try PatchPackageCodec.decode(reconData, password: nil)
+        let reconRule = decoded.project.rules.first { $0.relativePath == deepRelativePath }
+        XCTAssertNotNil(reconRule)
+        XCTAssertEqual(reconRule?.replacementData, binaryPayload)
+    }
+
     // MARK: - Error Handling Tests
     func testConvertCorruptedZip_ThrowsError() {
         let badZipURL = tempDirectory.appendingPathComponent("corrupted.zip")

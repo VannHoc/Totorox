@@ -142,6 +142,18 @@ def test_patch_zip_converter():
         assert read_payload == payload_data
         print("✓ Test 5 Passed: Round-trip conversion preserves 100% of metadata, file structure, and byte payloads.")
 
+        # Test 6: Deep path with binary payload (Resources.zip simulation with CommonActions.pkg.bytes)
+        deep_binary_path = "files/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"
+        deep_binary_data = b"\x00\x01\x02\x03PKG_BYTES_DATA" * 5000  # large binary payload
+        deep_zip_path = os.path.join(temp_dir, "Resources.zip")
+        with zipfile.ZipFile(deep_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(deep_binary_path, deep_binary_data)
+
+        with zipfile.ZipFile(deep_zip_path, "r") as zf:
+            extracted_deep = zf.read(deep_binary_path)
+            assert extracted_deep == deep_binary_data, "Deep binary payload mismatch"
+        print("✓ Test 6 Passed: Deeply nested binary payload (CommonActions.pkg.bytes) reads accurately without payload truncation.")
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

@@ -385,9 +385,9 @@ struct CleanerView: View {
             let samples = [
                 CleanerAppRecord(
                     app: InstalledApp(
-                        bundleID: "com.lemon.lvoverseas",
-                        name: "CapCut",
-                        containerPath: "/tmp/CapCut",
+                        bundleID: "com.apple.mobilesafari",
+                        name: "Safari",
+                        containerPath: "/tmp/Safari",
                         version: "",
                         icon: nil
                     ),

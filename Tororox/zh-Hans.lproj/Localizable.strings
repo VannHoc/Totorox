@@ -15,12 +15,12 @@
 "common.finish" = "完成";
 
 "update.title" = "发现新版本";
-"update.message" = "GitHub 上已发布 3105 %@。";
+"update.message" = "GitHub 上已发布 Totorox %@。";
 "update.agree" = "同意";
 "update.dismiss" = "不再显示";
 "patch.error.wrong_password" = "密码错误。";
 
-"attribution.title" = "关于 3105";
+"attribution.title" = "关于 Totorox";
 "attribution.subtitle" = "项目信息";
 "attribution.link_section" = "项目链接";
 "attribution.url" = "URL";
@@ -35,16 +35,16 @@
 "onboarding.welcome_message" = "由 VannHoc 创立与开发";
 "onboarding.welcome_badge" = "官方 Tororox 标识";
 "onboarding.versions_title" = "支持的 iOS 版本";
-"onboarding.versions_subtitle" = "3105 已在下列范围内验证。不支持的版本会被阻止。";
+"onboarding.versions_subtitle" = "Totorox 已在下列范围内验证。不支持的版本会被阻止。";
 "onboarding.versions_footer" = "本设备：iOS %@（%@）";
 "onboarding.beta" = "Beta";
 "onboarding.developer_beta" = "开发者 Beta %@";
 "onboarding.public_beta" = "公开 Beta %@";
 "onboarding.install_title" = "证书要求";
-"onboarding.install_message" = "3105 需要受支持的签名方式才能访问设备功能。";
+"onboarding.install_message" = "Totorox 需要受支持的签名方式才能访问设备功能。";
 "onboarding.install_ok" = "支持企业证书，包括 eSign 和类似的企业安装方式。";
 "onboarding.install_bad" = "不支持 SideStore、AltStore、3uTools 或 LiveContainer。";
-"onboarding.install_jailbreak" = "在 iOS 17 至 iOS 18.7.1 上，如果设备已越狱，3105 将无法运行。";
+"onboarding.install_jailbreak" = "在 iOS 17 至 iOS 18.7.1 上，如果设备已越狱，Totorox 将无法运行。";
 "onboarding.install_footer" = "继续前，请在未越狱的设备上使用受支持的证书。";
 
 "dashboard.exploit_access" = "漏洞利用权限";
@@ -73,7 +73,7 @@
 "dashboard.kernel_running" = "正在激活…";
 "dashboard.kernel_active" = "已激活";
 "dashboard.kernel_inactive" = "未激活";
-"dashboard.enterprise_signing" = "3105 仅在使用企业证书签名时运行。不支持 SideStore、AltStore、3uTools 或 LiveContainer。";
+"dashboard.enterprise_signing" = "Totorox 仅在使用企业证书签名时运行。不支持 SideStore、AltStore、3uTools 或 LiveContainer。";
 "dashboard.features" = "功能";
 "dashboard.features_footer" = "开启清理或壁纸后，该功能才会显示在应用导航中。";
 "tab.home" = "主页";
@@ -101,7 +101,7 @@
 "cleaner.clean_button" = "清理 %@";
 "cleaner.cleaning" = "正在清理…";
 "cleaner.confirm_title" = "删除临时数据？";
-"cleaner.confirm_message" = "3105 将永久删除所选 %lld 个应用的 Library/Caches 和 tmp（%@）。请先关闭这些应用。下次打开时，重建缓存可能会使启动变慢。此操作无法撤销。";
+"cleaner.confirm_message" = "Totorox 将永久删除所选 %lld 个应用的 Library/Caches 和 tmp（%@）。请先关闭这些应用。下次打开时，重建缓存可能会使启动变慢。此操作无法撤销。";
 "cleaner.confirm_action" = "立即清理";
 "cleaner.result_title" = "清理完成";
 "cleaner.result_message" = "已释放 %@，删除 %lld 个文件。有 %lld 个项目或应用无法清理。";
@@ -144,13 +144,13 @@
 "patch.private_hidden_title" = "私密补丁";
 "patch.private_hidden_message" = "作者已隐藏此补丁的文件和目标路径。你仍可在不查看内容的情况下应用或恢复。";
 "patch.target_bundle" = "目标 Bundle";
-"patch.workspace_bundle_footer" = "3105 会在可编辑的补丁工作区中创建此 Bundle 文件夹，且不会保存容器 UUID。";
+"patch.workspace_bundle_footer" = "Totorox 会在可编辑的补丁工作区中创建此 Bundle 文件夹，且不会保存容器 UUID。";
 "patch.captured_content" = "已获取内容";
-"patch.workspace_edit_footer" = "创建后，可在“文件”中的 3105 工作区管理完整的 Bundle 目录树。";
+"patch.workspace_edit_footer" = "创建后，可在“文件”中的 Totorox 工作区管理完整的 Bundle 目录树。";
 "patch.workspace" = "工作区";
 "patch.open_workspace" = "打开补丁文件";
 "patch.workspace_detail_footer" = "可直接编辑此 Bundle 目录树。应用或导出时会自动同步到加密的 .3105 软件包。";
-"patch.legacy_footer" = "旧版 v1 补丁，当前版本的 3105 仍可完整使用。";
+"patch.legacy_footer" = "旧版 v1 补丁，当前版本的 Totorox 仍可完整使用。";
 "patch.files" = "文件";
 "patch.folders" = "文件夹";
 "patch.rules" = "规则";
@@ -197,8 +197,8 @@
 "patch.restore_confirm_title" = "要恢复原始文件吗？";
 "patch.restore_confirm_message" = "请先关闭目标应用或游戏。文件将恢复到应用补丁前的状态；由补丁新建的文件将被删除。";
 "patch.restore_changed_title" = "部分文件已更改";
-"patch.restore_changed_message" = "应用补丁后有 %lld 个文件发生更改：\n%@\n\n3105 会先保存当前状态；若恢复失败，将回滚所有文件。";
-"patch.restore_changed_private_message" = "应用后有 %lld 个私密补丁文件发生更改。路径仍会隐藏。3105 将在恢复前保存当前状态。";
+"patch.restore_changed_message" = "应用补丁后有 %lld 个文件发生更改：\n%@\n\nTotorox 会先保存当前状态；若恢复失败，将回滚所有文件。";
+"patch.restore_changed_private_message" = "应用后有 %lld 个私密补丁文件发生更改。路径仍会隐藏。Totorox 将在恢复前保存当前状态。";
 "patch.restore_changed_action" = "仍要恢复";
 "patch.reset_confirm_title" = "重置为软件包内容吗？";
 "patch.reset_confirm_message" = "请先关闭目标应用或游戏。当前运行时更改将替换为此 .3105 软件包最初应用的内容。";
@@ -211,7 +211,7 @@
 "patch.restored_message" = "原始文件已恢复。";
 "patch.reset_message" = "所有补丁文件已重置为应用时的软件包状态。";
 "patch.error.unsupported_format" = "这不是有效的 .3105 补丁软件包。";
-"patch.error.unsupported_version" = "此补丁需要更高版本的 3105。请更新应用后再导入。";
+"patch.error.unsupported_version" = "此补丁需要更高版本的 Totorox。请更新应用后再导入。";
 "patch.error.password_or_corrupt" = "密码不正确，或软件包已被修改。";
 "patch.error.invalid_bundle" = "请输入有效的应用 bundle identifier，而不是容器 UUID。";
 "patch.error.unsafe_path" = "目标必须是应用数据容器内的安全相对路径。";
@@ -240,7 +240,7 @@
 "accessibility.requesting_access" = "正在请求漏洞利用权限";
 "accessibility.open_editor_hint" = "打开 MobileGestalt 功能编辑器";
 "accessibility.run_exploit_hint" = "请求 Gestalt 编辑器所需的写入权限";
-"accessibility.open_github" = "在 GitHub 上打开 3105";
+"accessibility.open_github" = "在 GitHub 上打开 Totorox";
 "accessibility.open_profile" = "打开 %@ 的个人资料";
 "accessibility.log_entry" = "日志条目 %lld：%@";
 
@@ -279,10 +279,10 @@
 "settings.token_footer" = "成功获得漏洞利用权限后可用。";
 "settings.credits" = "致谢";
 "settings.social_media" = "社交媒体";
-"social.github_role" = "3105 源代码";
+"social.github_role" = "Totorox 源代码";
 "social.iosvn_role" = "iOSVN 社区";
 "credit.founder" = "创始人与主开发者";
-"credit.yangjiii" = "开发者与设计者";
+"credit.totorox" = "开发者与设计者";
 "credit.forcequit" = "bad_query 漏洞利用";
 "credit.filzaslop" = "FilzaSlop — MHA-C2 与应用发现";
 "credit.pocket_poster" = "Pocket Poster、Nugget 与 .tendies 格式";
@@ -357,7 +357,7 @@
 "logs.empty_message" = "本次会话中的漏洞利用和编辑器活动将显示在这里。";
 
 "browser.title" = "应用数据浏览器";
-"browser.workspace" = "3105 工作区";
+"browser.workspace" = "Totorox 工作区";
 "browser.workspace_subtitle" = "可在“我的 iPhone”中访问补丁和文件";
 "browser.loading" = "正在加载…";
 "browser.empty" = "无法解析任何应用 bundle。轻点“重试”再次扫描。";
@@ -559,7 +559,7 @@
 "repository.download_package" = "下载";
 "repository.downloading_elapsed" = "正在下载 · %@";
 "repository.update_package" = "更新";
-"repository.install_footer" = "导入前，3105 会验证 HTTPS、SHA-256、软件包内容和 iOS 兼容性。";
+"repository.install_footer" = "导入前，Totorox 会验证 HTTPS、SHA-256、软件包内容和 iOS 兼容性。";
 "repository.wallpaper_imported" = "壁纸包已通过验证并添加到“已安装”。请在那里打开、查看并应用。";
 "repository.by_version" = "%@ · 版本 %@";
 "repository.version_source" = "版本 %@ · %@";
@@ -567,7 +567,7 @@
 "repository.source_url_footer" = "输入指向版本 1 JSON 清单的完整 HTTPS URL。";
 "repository.add" = "添加";
 "repository.error.insecure_url" = "请使用公开的 HTTPS 软件源 URL，且不得包含凭据、本地主机或 IP 地址。";
-"repository.error.unsupported_schema" = "此软件源需要更新版本的 3105。";
+"repository.error.unsupported_schema" = "此软件源需要更新版本的 Totorox。";
 "repository.error.invalid_manifest" = "软件源清单无效或过大。";
 "repository.error.invalid_package" = "软件源包含无效的软件包元数据。";
 "repository.error.duplicate_package" = "软件源包含重复的软件包标识符或 UUID。";
@@ -601,16 +601,16 @@
 "wallpaper.recovery_summary" = "已安装 %lld 个描述符";
 "wallpaper.restore" = "恢复";
 "wallpaper.restored" = "已恢复";
-"wallpaper.recovery_footer" = "恢复只会删除对应 3105 安装创建的描述符目录，不会删除原有壁纸。";
+"wallpaper.recovery_footer" = "恢复只会删除对应 Totorox 安装创建的描述符目录，不会删除原有壁纸。";
 "wallpaper.safety" = "安全";
 "wallpaper.additive_only" = "仅添加新描述符，不替换 Collections";
 "wallpaper.uuid_dynamic" = "动态解析 com.apple.PosterBoard";
 "wallpaper.archive_validation" = "安装前检查 ZIP 路径、大小、符号链接和 CRC";
-"wallpaper.ios27_footer" = "PosterBoard 会随系统 build 改变。3105 会检测实时存储结构，而不是假定 generation 61；部分依赖插件的壁纸仍可能与 iOS 27 不兼容。";
+"wallpaper.ios27_footer" = "PosterBoard 会随系统 build 改变。Totorox 会检测实时存储结构，而不是假定 generation 61；部分依赖插件的壁纸仍可能与 iOS 27 不兼容。";
 "wallpaper.install" = "应用";
 "wallpaper.install_warning_title" = "安装此壁纸包？";
 "wallpaper.install_warning_message" = "应用“%@”中的 %lld 张壁纸（iOS %@，%@）？现有壁纸不会改变。";
-"wallpaper.installed_by_3105" = "3105 添加的壁纸";
+"wallpaper.installed_by_Totorox" = "Totorox 添加的壁纸";
 "wallpaper.custom_count" = "已添加的壁纸";
 "wallpaper.reset" = "重置精选集";
 "wallpaper.reset_footer" = "移除自定义精选集，包括其他工具添加的内容。Apple 默认精选集会保留。";
@@ -622,9 +622,9 @@
 "wallpaper.no_custom_title" = "没有自定义精选集";
 "wallpaper.no_custom_message" = "目前没有需要重置的自定义壁纸。";
 "wallpaper.restore_title" = "恢复此次安装？";
-"wallpaper.restore_message" = "这将删除之前由 3105 添加的 %lld 个描述符目录。安装前已有的壁纸会保留。";
+"wallpaper.restore_message" = "这将删除之前由 Totorox 添加的 %lld 个描述符目录。安装前已有的壁纸会保留。";
 "wallpaper.delete_title" = "移除已导入的软件包？";
-"wallpaper.delete_message" = "“%@”将从 3105 暂存区移除，不影响已安装的壁纸。";
+"wallpaper.delete_message" = "“%@”将从 Totorox 暂存区移除，不影响已安装的壁纸。";
 "wallpaper.importing" = "正在验证 .tendies 软件包…";
 "wallpaper.installing" = "正在安全安装描述符…";
 "wallpaper.restoring" = "正在重置壁纸…";
@@ -635,7 +635,7 @@
 "wallpaper.install_done_opened" = "已打开 PosterBoard 以刷新集合。请从应用切换器中关闭它，然后检查锁定屏幕壁纸选择器。";
 "wallpaper.install_done_manual" = "请打开锁定屏幕壁纸选择器来刷新 PosterBoard。如果壁纸未出现，请从应用切换器关闭 PosterBoard 后重试。";
 "wallpaper.restore_done_title" = "安装已恢复";
-"wallpaper.restore_done_message" = "3105 添加的描述符已移除，并已请求 PosterBoard 刷新。";
+"wallpaper.restore_done_message" = "Totorox 添加的描述符已移除，并已请求 PosterBoard 刷新。";
 "wallpaper.operation_failed" = "壁纸操作失败";
 "wallpaper.error.unsafe_container" = "PosterBoard 返回了不安全或异常的容器路径。";
 "wallpaper.error.store_unavailable" = "此 build 上无法访问 PosterBoard 扩展存储。";
@@ -643,12 +643,12 @@
 "wallpaper.error.package" = "这不是受支持的 .tendies 软件包。";
 "wallpaper.error.archive" = "压缩包格式错误或包含不安全路径。";
 "wallpaper.error.symlink" = "壁纸包和目标目录不能包含符号链接。";
-"wallpaper.error.size" = "壁纸包超过 3105 的安全大小或项目数限制。";
+"wallpaper.error.size" = "壁纸包超过 Totorox 的安全大小或项目数限制。";
 "wallpaper.error.no_descriptors" = "此软件包中没有找到受支持的壁纸描述符。";
-"wallpaper.error.access" = "3105 无法获得 com.apple.PosterBoard 的已验证读写权限。";
+"wallpaper.error.access" = "Totorox 无法获得 com.apple.PosterBoard 的已验证读写权限。";
 "wallpaper.error.backup" = "无法写入恢复日志，因此已停止安装。";
 "wallpaper.error.install" = "安装失败，本次尝试添加的描述符已回滚。";
-"wallpaper.error.restore" = "3105 无法安全移除此安装中的全部描述符。";
+"wallpaper.error.restore" = "Totorox 无法安全移除此安装中的全部描述符。";
 "wallpaper.error.unknown" = "发生意外错误。请查看会话日志了解详情。";
 "repository.for_you" = "为你推荐";
 "repository.new" = "最新";
@@ -657,7 +657,7 @@
 "repository.published" = "发布日期";
 "repository.more_patches" = "更多软件包";
 "repository.utilities" = "实用工具";
-"repository.home_no_sources_message" = "添加软件源后，主页会显示带图片的 3105 补丁。";
+"repository.home_no_sources_message" = "添加软件源后，主页会显示带图片的 Totorox 补丁。";
 "repository.home_package_meta" = "%@ · %@";
 "repository.sources_hierarchy_footer" = "打开软件源可浏览标签及其中的软件包。请只添加你信任的软件源。";
 "repository.disable_source" = "停用软件源";

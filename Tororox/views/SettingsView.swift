@@ -13,25 +13,12 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     // Header Card with Totoro Logo & Title
                     VStack(spacing: 12) {
-                        ZStack {
-                            Circle()
-                                .fill(TotoroxTheme.searchBackground)
-                                .frame(width: 80, height: 80)
-
-                            if let avatarImg = UIImage(named: "AppAvatar") ?? UIImage(named: "avatar") ?? UIImage(named: "AppIcon") {
-                                Image(uiImage: avatarImg)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 80, height: 80)
-                                    .clipShape(Circle())
-                            } else {
-                                Image(systemName: "app.fill")
-                                    .font(.system(size: 40))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                            }
-                        }
-                        .overlay(Circle().stroke(Color.white, lineWidth: 3))
-                        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+                        AppLogo(size: 80)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 80 * 0.22, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
 
                         VStack(spacing: 4) {
                             Text("Totorox")
@@ -46,7 +33,7 @@ struct SettingsView: View {
                                 Circle()
                                     .fill(TotoroxTheme.mintAccent)
                                     .frame(width: 8, height: 8)
-                                Text("Engine: 3105 Ready")
+                                Text("Engine: Totorox Ready")
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.mintAccent)
                             }
@@ -163,7 +150,7 @@ struct SettingsView: View {
 
                         Divider()
 
-                        Text("© 2026 Totorox. Mọi quyền được bảo lưu.\nĐược phát triển độc lập dựa trên kiến trúc 3105 & OPA334.")
+                        Text("© 2026 Totorox. Mọi quyền được bảo lưu.\nĐược phát triển bởi VannHoc & Totorox Team.")
                             .font(.system(size: 11))
                             .foregroundStyle(TotoroxTheme.textSecondary)
                     }

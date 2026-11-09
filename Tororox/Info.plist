@@ -26,26 +26,26 @@
     <array>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>3105 Patch Package</string>
+            <string>Totorox Patch Package (.3105)</string>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Owner</string>
             <key>LSItemContentTypes</key>
             <array>
-                <string>com.yangjiii.3105.patch-package</string>
+                <string>com.totorox.patch-package</string>
             </array>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>3105 Dialer Theme</string>
+            <string>Dialer Theme (.3105pass)</string>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Owner</string>
             <key>LSItemContentTypes</key>
             <array>
-                <string>com.yangjiii.3105.dialer-theme</string>
+                <string>com.totorox.dialer-theme</string>
             </array>
         </dict>
     </array>
@@ -57,7 +57,6 @@
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>tororox</string>
-                <string>threeoneosfive</string>
             </array>
         </dict>
     </array>
@@ -69,9 +68,9 @@
                 <string>public.data</string>
             </array>
             <key>UTTypeDescription</key>
-            <string>3105 Patch Package</string>
+            <string>Totorox Patch Package (.3105)</string>
             <key>UTTypeIdentifier</key>
-            <string>com.yangjiii.3105.patch-package</string>
+            <string>com.totorox.patch-package</string>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>
@@ -79,7 +78,7 @@
                     <string>3105</string>
                 </array>
                 <key>public.mime-type</key>
-                <string>application/x-3105-patch</string>
+                <string>application/x-totorox-patch</string>
             </dict>
         </dict>
         <dict>
@@ -89,9 +88,9 @@
                 <string>public.archive</string>
             </array>
             <key>UTTypeDescription</key>
-            <string>3105 Dialer Theme</string>
+            <string>Dialer Theme (.3105pass)</string>
             <key>UTTypeIdentifier</key>
-            <string>com.yangjiii.3105.dialer-theme</string>
+            <string>com.totorox.dialer-theme</string>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>
@@ -99,7 +98,7 @@
                     <string>3105pass</string>
                 </array>
                 <key>public.mime-type</key>
-                <string>application/x-3105-dialer-theme</string>
+                <string>application/x-totorox-dialer-theme</string>
             </dict>
         </dict>
     </array>

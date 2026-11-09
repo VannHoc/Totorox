@@ -49,35 +49,16 @@ struct TotoroxTopHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            // Circular Avatar
-            ZStack {
-                Circle()
-                    .fill(TotoroxTheme.searchBackground)
-                    .frame(width: 44, height: 44)
-                
-                if let avatarImg = UIImage(named: "AppAvatar") ?? UIImage(named: "avatar") ?? UIImage(named: "AppIcon") {
-                    Image(uiImage: avatarImg)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 44, height: 44)
-                        .clipShape(Circle())
-                } else {
-                    Image(systemName: "person.crop.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 40, height: 40)
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                }
-            }
-            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
+            // Official App Logo with standard iOS squircle corner radius
+            AppLogo(size: 42)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 42 * 0.22, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
 
-            // Title and Engine status
+            // App Title
             VStack(alignment: .leading, spacing: 2) {
-                Text("Engine: 3105 Ready")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-
                 Text("Totorox")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)

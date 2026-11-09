@@ -26,6 +26,9 @@ struct FileEntry: Identifiable, Hashable {
     let isDirectory: Bool
     let size: Int64
     let modifiedAt: Date?
+    let createdAt: Date?
+    let isSymlink: Bool
+    let posixPermissions: UInt16
     let childCount: Int?
 
     var id: String { path }
@@ -34,12 +37,65 @@ struct FileEntry: Identifiable, Hashable {
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
 
+    var formattedModifiedDate: String? {
+        guard let d = modifiedAt else { return nil }
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM/yyyy HH:mm"
+        return f.string(from: d)
+    }
+
+    var formattedCreatedDate: String? {
+        guard let d = createdAt else { return nil }
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM/yyyy HH:mm"
+        return f.string(from: d)
+    }
+
+    var octalPermissions: String {
+        String(format: "%04o", posixPermissions & 0o7777)
+    }
+
+    var symbolicPermissions: String {
+        let r1 = (posixPermissions & UInt16(S_IRUSR)) != 0 ? "r" : "-"
+        let w1 = (posixPermissions & UInt16(S_IWUSR)) != 0 ? "w" : "-"
+        let x1 = (posixPermissions & UInt16(S_IXUSR)) != 0 ? "x" : "-"
+        let r2 = (posixPermissions & UInt16(S_IRGRP)) != 0 ? "r" : "-"
+        let w2 = (posixPermissions & UInt16(S_IWGRP)) != 0 ? "w" : "-"
+        let x2 = (posixPermissions & UInt16(S_IXGRP)) != 0 ? "x" : "-"
+        let r3 = (posixPermissions & UInt16(S_IROTH)) != 0 ? "r" : "-"
+        let w3 = (posixPermissions & UInt16(S_IWOTH)) != 0 ? "w" : "-"
+        let x3 = (posixPermissions & UInt16(S_IXOTH)) != 0 ? "x" : "-"
+        return "\(r1)\(w1)\(x1)\(r2)\(w2)\(x2)\(r3)\(w3)\(x3)"
+    }
+
+    var exactBytesText: String {
+        if isDirectory { return "Thư mục" }
+        guard size >= 0 else { return "—" }
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        let formatted = nf.string(from: NSNumber(value: size)) ?? "\(size)"
+        return "\(formatted) bytes (\(sizeText))"
+    }
+
+    var typeDescription: String {
+        if isDirectory {
+            return "Thư mục (Directory)"
+        } else if isSymlink {
+            return "Liên kết tượng trưng (Symbolic Link)"
+        } else {
+            return "Tệp tin (File)"
+        }
+    }
+
     init(
         name: String,
         path: String,
         isDirectory: Bool,
         size: Int64,
         modifiedAt: Date? = nil,
+        createdAt: Date? = nil,
+        isSymlink: Bool = false,
+        posixPermissions: UInt16 = 0o644,
         childCount: Int? = nil
     ) {
         self.name = name
@@ -47,6 +103,9 @@ struct FileEntry: Identifiable, Hashable {
         self.isDirectory = isDirectory
         self.size = size
         self.modifiedAt = modifiedAt
+        self.createdAt = createdAt
+        self.isSymlink = isSymlink
+        self.posixPermissions = posixPermissions
         self.childCount = childCount
     }
 
@@ -57,6 +116,9 @@ struct FileEntry: Identifiable, Hashable {
             isDirectory: isDirectory,
             size: summary?.byteCount ?? -2,
             modifiedAt: modifiedAt,
+            createdAt: createdAt,
+            isSymlink: isSymlink,
+            posixPermissions: posixPermissions,
             childCount: summary?.childCount
         )
     }
@@ -302,7 +364,12 @@ enum ContainerStore {
         }
 
         let fileManager = FileManager.default
-        guard let rootEntries = try? fileManager.contentsOfDirectory(atPath: rootPath) else {
+        let rootEntries: [String]
+        if let posixEntries = posixListDirectory(at: rootPath), !posixEntries.isEmpty {
+            rootEntries = posixEntries.map { ($0.path as NSString).lastPathComponent }
+        } else if let fmEntries = try? fileManager.contentsOfDirectory(atPath: rootPath) {
+            rootEntries = fmEntries
+        } else {
             log("browser: app-bundle metadata unavailable root=\(rootPath) grant=\(handle)")
             return []
         }
@@ -446,10 +513,36 @@ enum ContainerStore {
         let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
         guard clean.hasPrefix("/") else { return [] }
 
+        // 1. Try low-level POSIX opendir/readdir
+        if let dir = opendir(clean) {
+            defer { closedir(dir) }
+            var subdirs: [String] = []
+            while let dp = readdir(dir) {
+                let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                    String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+                }
+                if name == "." || name == ".." { continue }
+                let full = (clean as NSString).appendingPathComponent(name)
+                var st = stat()
+                if lstat(full, &st) == 0 {
+                    if (st.st_mode & S_IFMT) == S_IFDIR {
+                        subdirs.append(full)
+                    }
+                } else if dp.pointee.d_type == DT_DIR {
+                    subdirs.append(full)
+                }
+            }
+            if !subdirs.isEmpty {
+                return subdirs
+            }
+        }
+
+        // 2. Try standard FileManager
         if let names = try? FileManager.default.contentsOfDirectory(atPath: clean), !names.isEmpty {
             return names.map { (clean as NSString).appendingPathComponent($0) }
         }
 
+        // 3. Fallback to bad_query inode enumeration
         var pathC = clean.utf8CString.map { Int8($0) }
         guard let result = bad_query_list(&pathC, maxInode) else {
             log("enumerate: NULL for \(clean)")
@@ -466,16 +559,19 @@ enum ContainerStore {
     }
 
     static func enumerateDirectoriesWithTraversalGrant(path: String) -> [String] {
-        if !shouldUseBadQuery {
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: path), !names.isEmpty {
-                return names.map { (path as NSString).appendingPathComponent($0) }
-            }
-            return enumerateDirectories(path: path)
-        }
-
         let handle = grantContainerAccess(path)
         if handle >= 0 {
             defer { bad_query_release(handle) }
+            if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
+                return posixEntries.filter { $0.isDirectory }.map { $0.path }
+            }
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: path), !names.isEmpty {
+                return names.map { (path as NSString).appendingPathComponent($0) }
+            }
+        } else if !shouldUseBadQuery {
+            if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
+                return posixEntries.filter { $0.isDirectory }.map { $0.path }
+            }
             if let names = try? FileManager.default.contentsOfDirectory(atPath: path), !names.isEmpty {
                 return names.map { (path as NSString).appendingPathComponent($0) }
             }
@@ -710,11 +806,142 @@ enum ContainerStore {
 
     // MARK: File browsing
 
+    static func posixListDirectory(at path: String) -> [FileEntry]? {
+        let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+        guard let dir = opendir(clean) else {
+            return nil
+        }
+        defer { closedir(dir) }
+
+        var entries: [FileEntry] = []
+        while let dp = readdir(dir) {
+            let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+            }
+            if name == "." || name == ".." || name.hasPrefix(".") {
+                continue
+            }
+
+            let full = (clean as NSString).appendingPathComponent(name)
+            var st = stat()
+            let statRes = lstat(full, &st)
+
+            let isDir: Bool
+            let isSymlink: Bool
+            let size: Int64
+            let modDate: Date?
+            let createDate: Date?
+            let mode: UInt16
+
+            if statRes == 0 {
+                mode = UInt16(st.st_mode)
+                isDir = (st.st_mode & S_IFMT) == S_IFDIR
+                isSymlink = (st.st_mode & S_IFMT) == S_IFLNK
+                size = isDir ? -1 : Int64(st.st_size)
+                modDate = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
+                createDate = Date(timeIntervalSince1970: TimeInterval(st.st_birthtimespec.tv_sec))
+            } else {
+                mode = 0
+                isDir = (dp.pointee.d_type == DT_DIR)
+                isSymlink = (dp.pointee.d_type == DT_LNK)
+                size = isDir ? -1 : 0
+                modDate = nil
+                createDate = nil
+            }
+
+            var entryName = name
+            // If in Application root and entry is a container UUID, try resolving app display name from metadata plist
+            if isDir && UUID(uuidString: name) != nil {
+                if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
+                    let display = meta.displayName.isEmpty ? meta.bundleID : "\(meta.displayName) (\(meta.bundleID))"
+                    entryName = "\(display)"
+                }
+            }
+
+            entries.append(
+                FileEntry(
+                    name: entryName,
+                    path: full,
+                    isDirectory: isDir,
+                    size: size,
+                    modifiedAt: modDate,
+                    createdAt: createDate,
+                    isSymlink: isSymlink,
+                    posixPermissions: mode
+                )
+            )
+        }
+        return entries
+    }
+
     static func listFiles(at path: String) -> [FileEntry] {
+        // 1. Try POSIX opendir/readdir first
+        if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
+            return sortedEntries(posixEntries)
+        }
+
+        // 2. Try with bad_query traversal grant
+        let handle = grantContainerAccess(path)
+        if handle >= 0 {
+            defer { bad_query_release(handle) }
+            if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
+                return sortedEntries(posixEntries)
+            }
+            if let fmEntries = fileManagerListFiles(at: path), !fmEntries.isEmpty {
+                return sortedEntries(fmEntries)
+            }
+        }
+
+        // 3. Fallback for /var/mobile/Containers/Data/Application via inode walk
+        let canonicalRoot = ContainerDiscoveryMerger.canonicalPath(appDataRoot)
+        let canonicalPath = ContainerDiscoveryMerger.canonicalPath(path)
+        if canonicalPath == canonicalRoot {
+            let inodeDirs = enumerateDirectories(path: appDataRoot)
+            if !inodeDirs.isEmpty {
+                let entries = inodeDirs.compactMap { dir -> FileEntry? in
+                    let uuid = (dir as NSString).lastPathComponent
+                    guard UUID(uuidString: uuid) != nil else { return nil }
+                    let meta = readContainerMetadata(containerPath: dir)
+                    let displayName = (meta?.displayName.isEmpty == false) ? meta!.displayName : (meta?.bundleID ?? uuid)
+                    let bundleID = meta?.bundleID ?? ""
+                    let name = bundleID.isEmpty ? displayName : "\(displayName) (\(bundleID))"
+                    return FileEntry(
+                        name: name,
+                        path: dir,
+                        isDirectory: true,
+                        size: -1,
+                        modifiedAt: nil,
+                        createdAt: nil,
+                        isSymlink: false,
+                        posixPermissions: 0o755
+                    )
+                }
+                if !entries.isEmpty {
+                    return sortedEntries(entries)
+                }
+            }
+        }
+
+        // 4. Default to FileManager
+        if let fallback = fileManagerListFiles(at: path) {
+            return sortedEntries(fallback)
+        }
+
+        log("listFiles: FAILED for \(path) errno=\(errno)")
+        return []
+    }
+
+    private static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
+        entries.sorted {
+            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private static func fileManagerListFiles(at path: String) -> [FileEntry]? {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(atPath: path) else {
-            log("listFiles: FAILED for \(path) errno=\(errno)")
-            return []
+            return nil
         }
         var entries: [FileEntry] = []
         for item in items {
@@ -726,20 +953,21 @@ enum ContainerStore {
             let size = isDir.boolValue
                 ? -1
                 : (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let posixMode = (attributes?[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o644
             entries.append(
                 FileEntry(
                     name: item,
                     path: full,
                     isDirectory: isDir.boolValue,
                     size: size,
-                    modifiedAt: attributes?[.modificationDate] as? Date
+                    modifiedAt: attributes?[.modificationDate] as? Date,
+                    createdAt: attributes?[.creationDate] as? Date,
+                    isSymlink: (attributes?[.type] as? FileAttributeType) == .typeSymbolicLink,
+                    posixPermissions: posixMode
                 )
             )
         }
-        return entries.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        return entries
     }
 
     static func readTextFile(at path: String, limit: Int = 200_000) -> String {

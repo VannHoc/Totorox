@@ -292,6 +292,9 @@ struct PatchConverterView: View {
             }
             .padding(.bottom, 24)
         }
+        .safeAreaInset(edge: .bottom) {
+            Color.clear.frame(height: 80)
+        }
         .background(TotoroxTheme.pageBackground)
         .sheet(isPresented: $showFilePicker) {
             DocumentPickerWrapper { picked in

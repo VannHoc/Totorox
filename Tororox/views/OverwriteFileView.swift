@@ -8,33 +8,6 @@ struct TargetAppItem: Identifiable, Hashable {
     let containerPath: String
     let iconName: String
     var iconImage: UIImage? = nil
-
-    static let presets: [TargetAppItem] = [
-        TargetAppItem(
-            id: "com.riotgames.league.wildrift",
-            name: "com.riotgames",
-            bundleID: "com.riotgames.league.wildrift",
-            containerPath: "/var/mobile/Containers/Data/Application/WildRift",
-            iconName: "gamecontroller.fill",
-            iconImage: UIImage(named: "App_WildRift")
-        ),
-        TargetAppItem(
-            id: "com.tft.mobile",
-            name: "com.tft.mobile",
-            bundleID: "com.tft.mobile",
-            containerPath: "/var/mobile/Containers/Data/Application/TFTMobile",
-            iconName: "crown.fill",
-            iconImage: UIImage(named: "App_TFT")
-        ),
-        TargetAppItem(
-            id: "com.garena.game.kgvn",
-            name: "com.garena.kgvn",
-            bundleID: "com.garena.game.kgvn",
-            containerPath: "/var/mobile/Containers/Data/Application/AOV",
-            iconName: "flame.fill",
-            iconImage: nil
-        )
-    ]
 }
 
 enum OverwriteFilterCategory: String, CaseIterable {
@@ -46,8 +19,8 @@ enum OverwriteFilterCategory: String, CaseIterable {
 struct OverwriteFileView: View {
     @State private var searchText: String = ""
     @State private var selectedFilter: OverwriteFilterCategory = .all
-    @State private var installedApps: [TargetAppItem] = TargetAppItem.presets
-    @State private var selectedApp: TargetAppItem = TargetAppItem.presets[0]
+    @State private var installedApps: [TargetAppItem] = []
+    @State private var selectedApp: TargetAppItem? = nil
     
     // File execution sheet & state
     @State private var showExecutionSheet = false
@@ -62,11 +35,11 @@ struct OverwriteFileView: View {
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var showFilePicker = false
     
-    // Custom container items
+    // Container target directories
     @State private var containerFolders: [(title: String, badge: String, isSuccess: Bool)] = [
         ("Documents", "Read / Write", false),
         ("Library", "Read / Write", false),
-        ("Đè niut", "Đã đè tệp", true)
+        ("tmp", "Read / Write", false)
     ]
 
     var body: some View {
@@ -86,62 +59,77 @@ struct OverwriteFileView: View {
                         .padding(.horizontal, 16)
 
                     // Horizontal ScrollView for App Cards
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    if filteredApps.isEmpty {
                         HStack(spacing: 12) {
-                            ForEach(filteredApps) { app in
-                                let isSelected = (selectedApp.id == app.id)
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        selectedApp = app
-                                    }
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        // App Icon
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .fill(TotoroxTheme.searchBackground)
-                                                .frame(width: 54, height: 54)
-
-                                            if let uiImg = app.iconImage {
-                                                Image(uiImage: uiImg)
-                                                    .resizable()
-                                                    .scaledToFill()
-                                                    .frame(width: 54, height: 54)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                            } else {
-                                                Image(systemName: app.iconName)
-                                                    .font(.system(size: 26))
-                                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                            }
-                                        }
-
-                                        // App title
-                                        Text(app.name)
-                                            .font(.system(size: 14, weight: .bold))
-                                            .foregroundStyle(TotoroxTheme.textPrimary)
-                                            .lineLimit(1)
-
-                                        // Bundle ID subline
-                                        Text(app.bundleID)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                            .lineLimit(2)
-                                            .frame(maxWidth: 110, alignment: .leading)
-                                    }
-                                    .padding(14)
-                                    .frame(width: 140, height: 140, alignment: .topLeading)
-                                    .background(TotoroxTheme.cardBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .stroke(isSelected ? TotoroxTheme.mintAccent : Color.clear, lineWidth: 2)
-                                    )
-                                    .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.04), radius: 8, x: 0, y: 3)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                            ProgressView()
+                                .tint(TotoroxTheme.mintAccent)
+                            Text("Đang quét danh sách container ứng dụng...")
+                                .font(.system(size: 13))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(TotoroxTheme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .padding(.horizontal, 16)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(filteredApps) { app in
+                                    let isSelected = (selectedApp?.id == app.id)
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            selectedApp = app
+                                        }
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            // App Icon
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                    .fill(TotoroxTheme.searchBackground)
+                                                    .frame(width: 54, height: 54)
+
+                                                if let uiImg = app.iconImage {
+                                                    Image(uiImage: uiImg)
+                                                        .resizable()
+                                                        .scaledToFill()
+                                                        .frame(width: 54, height: 54)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                                } else {
+                                                    Image(systemName: app.iconName)
+                                                        .font(.system(size: 26))
+                                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                                }
+                                            }
+
+                                            // App title
+                                            Text(app.name)
+                                                .font(.system(size: 14, weight: .bold))
+                                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                                .lineLimit(1)
+
+                                            // Bundle ID subline
+                                            Text(app.bundleID)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                                .lineLimit(2)
+                                                .frame(maxWidth: 110, alignment: .leading)
+                                        }
+                                        .padding(14)
+                                        .frame(width: 140, height: 140, alignment: .topLeading)
+                                        .background(TotoroxTheme.cardBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                .stroke(isSelected ? TotoroxTheme.mintAccent : Color.clear, lineWidth: 2)
+                                        )
+                                        .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.04), radius: 8, x: 0, y: 3)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
                     }
                 }
 
@@ -232,6 +220,9 @@ struct OverwriteFileView: View {
                 .padding(.bottom, 24)
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Color.clear.frame(height: 80)
+        }
         .background(TotoroxTheme.pageBackground)
         .onAppear {
             loadDiscoveredApps()
@@ -251,6 +242,7 @@ struct OverwriteFileView: View {
                         .ignoresSafeArea()
                     WindowsConflictDialog(conflict: conflict)
                 }
+                .zIndex(999)
                 .transition(.opacity)
             }
         }
@@ -273,32 +265,42 @@ struct OverwriteFileView: View {
 
     private var filteredFolders: [(title: String, badge: String, isSuccess: Bool)] {
         if selectedFilter == .patch3105 {
-            return [("Gói 3105 Payload", "Sẵn sàng ghi đè", true)]
+            return [("Gói .3105 Payload", "Sẵn sàng ghi đè", true)]
         }
         return containerFolders
     }
 
     private func loadDiscoveredApps() {
         Task {
-            let discovered = ContainerStore.installedAppsFromMCM()
-            guard !discovered.isEmpty else { return }
+            var discovered = ContainerStore.installedAppsFromAPI()
+            if discovered.isEmpty {
+                discovered = ContainerStore.installedAppsFromMCM()
+            }
+            if discovered.isEmpty {
+                discovered = ContainerStore.containersFromFilesystem()
+            }
+            let catalog = ContainerStore.applicationBundleMetadataCatalog()
+            if !catalog.isEmpty {
+                discovered = ContainerStore.applyingBundleMetadata(to: discovered, catalog: catalog)
+            }
+
+            let sorted = discovered.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+
             await MainActor.run {
-                var newItems = TargetAppItem.presets
-                for d in discovered.prefix(10) {
-                    if !newItems.contains(where: { $0.bundleID == d.bundleID }) {
-                        newItems.append(TargetAppItem(
-                            id: d.bundleID,
-                            name: d.displayName,
-                            bundleID: d.bundleID,
-                            containerPath: d.containerPath,
-                            iconName: "app.fill",
-                            iconImage: d.icon
-                        ))
-                    }
+                self.installedApps = sorted.map { app in
+                    TargetAppItem(
+                        id: app.bundleID,
+                        name: app.displayName.isEmpty ? app.bundleID : app.displayName,
+                        bundleID: app.bundleID,
+                        containerPath: app.containerPath,
+                        iconName: "app.fill",
+                        iconImage: app.icon ?? iconForBundleID(app.bundleID as NSString)
+                    )
                 }
-                self.installedApps = newItems
-                if let first = newItems.first {
-                    self.selectedApp = first
+                if self.selectedApp == nil || !self.installedApps.contains(where: { $0.id == self.selectedApp?.id }) {
+                    self.selectedApp = self.installedApps.first
                 }
             }
         }
@@ -320,11 +322,11 @@ struct OverwriteFileView: View {
                             .foregroundStyle(TotoroxTheme.mintAccent)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(selectedApp.name)
+                            Text(selectedApp?.name ?? "Chưa chọn ứng dụng")
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
 
-                            Text("\(selectedApp.bundleID) / \(selectedContainerTargetFolder)")
+                            Text("\(selectedApp?.bundleID ?? "N/A") / \(selectedContainerTargetFolder)")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                         }
@@ -428,21 +430,32 @@ struct OverwriteFileView: View {
                     self.sourceURL = pickedURL
                 }
             }
+            .overlay {
+                if let conflict = activeConflict {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+                        WindowsConflictDialog(conflict: conflict)
+                    }
+                    .zIndex(999)
+                    .transition(.opacity)
+                }
+            }
         }
     }
 
     private func executeOverwriteAction() {
-        guard let source = sourceURL else { return }
+        guard let source = sourceURL, let targetApp = selectedApp else { return }
         isExecuting = true
         executionStatusText = "Đang chuẩn bị container..."
 
         Task {
             // Determine target path
             let destinationPath: String
-            if let resolved = ContainerStore.resolveAppContainerPath(bundleID: selectedApp.bundleID) {
+            if let resolved = ContainerStore.resolveAppContainerPath(bundleID: targetApp.bundleID) {
                 destinationPath = (resolved as NSString).appendingPathComponent(selectedContainerTargetFolder)
             } else {
-                let tempBase = FileManager.default.temporaryDirectory.appendingPathComponent("Totorox_Containers/\(selectedApp.bundleID)")
+                let tempBase = FileManager.default.temporaryDirectory.appendingPathComponent("Totorox_Containers/\(targetApp.bundleID)")
                 destinationPath = tempBase.appendingPathComponent(selectedContainerTargetFolder).path
             }
 

@@ -406,8 +406,20 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.corruptedArchive("End of Central Directory record not found.")
         }
 
-        let cdTotalEntries = Int(data.readUInt16(at: eocdPos + 10))
-        let cdOffset = Int(data.readUInt32(at: eocdPos + 16))
+        var cdTotalEntries = Int(data.readUInt16(at: eocdPos + 10))
+        var cdOffset = Int(data.readUInt32(at: eocdPos + 16))
+
+        // Check for ZIP64 EOCD locator (0x07064b50) immediately preceding EOCD
+        if eocdPos >= 20 {
+            let locSig = data.readUInt32(at: eocdPos - 20)
+            if locSig == 0x07064b50 {
+                let zip64EOCDOffset = Int(data.readUInt64(at: eocdPos - 12))
+                if zip64EOCDOffset + 56 <= data.count && data.readUInt32(at: zip64EOCDOffset) == 0x06064b50 {
+                    cdTotalEntries = Int(data.readUInt64(at: zip64EOCDOffset + 32))
+                    cdOffset = Int(data.readUInt64(at: zip64EOCDOffset + 48))
+                }
+            }
+        }
 
         guard cdOffset < data.count else {
             throw PatchZipConverterError.corruptedArchive("Invalid central directory offset.")
@@ -426,11 +438,13 @@ public final class PatchZipConverter {
             }
 
             let compressionMethod = data.readUInt16(at: currentCDPos + 10)
-            let uncompressedSize = Int(data.readUInt32(at: currentCDPos + 24))
+            let entryCRC = data.readUInt32(at: currentCDPos + 16)
+            var compressedSize = UInt64(data.readUInt32(at: currentCDPos + 20))
+            var uncompressedSize = UInt64(data.readUInt32(at: currentCDPos + 24))
             let nameLen = Int(data.readUInt16(at: currentCDPos + 28))
             let extraLen = Int(data.readUInt16(at: currentCDPos + 30))
             let commentLen = Int(data.readUInt16(at: currentCDPos + 32))
-            let localHeaderOffset = Int(data.readUInt32(at: currentCDPos + 42))
+            var localHeaderOffset = UInt64(data.readUInt32(at: currentCDPos + 42))
 
             let nameStart = currentCDPos + 46
             guard nameStart + nameLen <= data.count else {
@@ -442,33 +456,73 @@ public final class PatchZipConverter {
                 throw PatchZipConverterError.corruptedArchive("Invalid UTF-8 file name in archive.")
             }
 
+            // Parse ZIP64 extra field if 32-bit values overflowed
+            if uncompressedSize == 0xFFFFFFFF || compressedSize == 0xFFFFFFFF || localHeaderOffset == 0xFFFFFFFF {
+                var extraOffset = nameStart + nameLen
+                let extraEnd = extraOffset + extraLen
+                while extraOffset + 4 <= extraEnd {
+                    let tag = data.readUInt16(at: extraOffset)
+                    let blockSize = Int(data.readUInt16(at: extraOffset + 2))
+                    var blockCursor = extraOffset + 4
+                    let blockEnd = min(blockCursor + blockSize, extraEnd)
+                    if tag == 0x0001 { // ZIP64 Extra
+                        if uncompressedSize == 0xFFFFFFFF && blockCursor + 8 <= blockEnd {
+                            uncompressedSize = data.readUInt64(at: blockCursor)
+                            blockCursor += 8
+                        }
+                        if compressedSize == 0xFFFFFFFF && blockCursor + 8 <= blockEnd {
+                            compressedSize = data.readUInt64(at: blockCursor)
+                            blockCursor += 8
+                        }
+                        if localHeaderOffset == 0xFFFFFFFF && blockCursor + 8 <= blockEnd {
+                            localHeaderOffset = data.readUInt64(at: blockCursor)
+                            blockCursor += 8
+                        }
+                        break
+                    }
+                    extraOffset += 4 + blockSize
+                }
+            }
+
             currentCDPos += 46 + nameLen + extraLen + commentLen
 
-            // Parse Local File Header
-            guard localHeaderOffset + 30 <= data.count else {
-                throw PatchZipConverterError.corruptedArchive("Truncated local file header.")
+            // Skip directory entries
+            if filename.hasSuffix("/") {
+                continue
             }
-            let localSig = data.readUInt32(at: localHeaderOffset)
-            guard localSig == 0x04034b50 else {
-                throw PatchZipConverterError.corruptedArchive("Invalid local header signature.")
-            }
-            let localNameLen = Int(data.readUInt16(at: localHeaderOffset + 26))
-            let localExtraLen = Int(data.readUInt16(at: localHeaderOffset + 28))
-            let dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen
 
-            guard dataStart + uncompressedSize <= data.count else {
+            // Parse Local File Header
+            let localOff = Int(localHeaderOffset)
+            guard localOff + 30 <= data.count else {
+                throw PatchZipConverterError.corruptedArchive("Truncated local file header for: \(filename)")
+            }
+            let localSig = data.readUInt32(at: localOff)
+            guard localSig == 0x04034b50 else {
+                throw PatchZipConverterError.corruptedArchive("Invalid local header signature for: \(filename)")
+            }
+            let localNameLen = Int(data.readUInt16(at: localOff + 26))
+            let localExtraLen = Int(data.readUInt16(at: localOff + 28))
+            let dataStart = localOff + 30 + localNameLen + localExtraLen
+
+            let payloadSize = (compressionMethod == 0) ? Int(uncompressedSize) : Int(compressedSize)
+            guard dataStart + payloadSize <= data.count else {
                 throw PatchZipConverterError.corruptedArchive("Truncated file payload for: \(filename)")
             }
 
             if compressionMethod == 0 {
                 // Stored
-                let fileData = data.subdata(in: dataStart..<(dataStart + uncompressedSize))
+                let fileData = data.subdata(in: dataStart..<(dataStart + Int(uncompressedSize)))
                 results[filename] = fileData
             } else if compressionMethod == 8 {
-                // Deflated -> Decompress raw deflate stream
-                let compressedSize = Int(data.readUInt32(at: localHeaderOffset + 18))
-                let compressedData = data.subdata(in: dataStart..<(dataStart + compressedSize))
-                let decompressedData = try decompressDeflate(compressedData, expectedSize: uncompressedSize)
+                // Deflated -> Decompress raw deflate stream using Central Directory sizes
+                let compressedData = data.subdata(in: dataStart..<(dataStart + Int(compressedSize)))
+                let decompressedData = try decompressDeflate(compressedData, expectedSize: Int(uncompressedSize))
+                if entryCRC != 0 {
+                    let calcCRC = crc32Checksum(decompressedData)
+                    if calcCRC != entryCRC {
+                        throw PatchZipConverterError.corruptedArchive("CRC32 checksum mismatch for: \(filename)")
+                    }
+                }
                 results[filename] = decompressedData
             } else {
                 throw PatchZipConverterError.unsupportedFormat("Unsupported compression method: \(compressionMethod)")
@@ -479,10 +533,21 @@ public final class PatchZipConverter {
     }
 
     private func decompressDeflate(_ compressed: Data, expectedSize: Int) throws -> Data {
-        // Wrap raw deflate in zlib header (RFC 1950) or decode directly
-        // When using Swift on Darwin/iOS/macOS, we can decompress via NSData compression:
-        let decompressed = try (compressed as NSData).decompressed(using: .zlib) as Data
-        return decompressed
+        guard expectedSize > 0 else { return Data() }
+        var destination = Data(count: expectedSize)
+        let status: Int32 = destination.withUnsafeMutableBytes { dstBuf in
+            compressed.withUnsafeBytes { srcBuf in
+                guard let src = srcBuf.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let dst = dstBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return -1
+                }
+                return totorox_decompress_deflate(src, compressed.count, dst, expectedSize)
+            }
+        }
+        guard status == 0 else {
+            throw PatchZipConverterError.corruptedArchive("Deflate decompression failed (code \(status))")
+        }
+        return destination
     }
 
     private func crc32Checksum(_ data: Data) -> UInt32 {
@@ -530,6 +595,12 @@ private extension Data {
     func readUInt32(at offset: Int) -> UInt32 {
         subdata(in: offset..<(offset + 4)).withUnsafeBytes {
             $0.load(as: UInt32.self).littleEndian
+        }
+    }
+
+    func readUInt64(at offset: Int) -> UInt64 {
+        subdata(in: offset..<(offset + 8)).withUnsafeBytes {
+            $0.load(as: UInt64.self).littleEndian
         }
     }
 }

@@ -357,7 +357,7 @@ final class PackageRepositoryStore: ObservableObject {
 
 #if targetEnvironment(simulator)
     private func installSimulatorPreviewRepository() {
-        let sourceURL = URL(string: "https://example.com/3105/repo.json")!
+        let sourceURL = URL(string: "https://example.com/totorox/repo.json")!
         let source = RepositorySource(manifestURL: sourceURL)
         let ranges = [
             PackageOSRange(minimum: "17.0", maximum: "18.7.1", builds: nil),
@@ -369,7 +369,7 @@ final class PackageRepositoryStore: ObservableObject {
                 identifier: "clean-layout",
                 kind: .patch,
                 name: "Clean Layout",
-                author: "YangJiii",
+                author: "Totorox Team",
                 version: "1.2.0",
                 summary: "A compact layout patch for a cleaner app interface.",
                 details: "Simulator preview package used to verify marketplace layout.",
@@ -398,7 +398,7 @@ final class PackageRepositoryStore: ObservableObject {
                 identifier: "profile-switcher",
                 kind: .patch,
                 name: "Profile Switcher",
-                author: "3105 Community",
+                author: "Totorox Community",
                 version: "1.0.0",
                 summary: "A portable workspace example with multiple bundle targets.",
                 details: nil,
@@ -422,8 +422,8 @@ final class PackageRepositoryStore: ObservableObject {
         ]
         sources = [source]
         repositories[source.id] = PackageRepository(
-            identifier: "com.yangjiii.preview",
-            name: "3105 Preview",
+            identifier: "com.totorox.preview",
+            name: "Totorox Preview",
             summary: "Simulator-only marketplace preview",
             iconURL: nil,
             sourceURL: sourceURL,
@@ -436,7 +436,7 @@ final class PackageRepositoryStore: ObservableObject {
     private func installSimulatorWallpaperRepository() {
         let revision = "f04c0a8e81c328201ad7769fac16b907ce905035"
         let sourceURL = URL(
-            string: "https://raw.githubusercontent.com/YangJiiii/3105-repo/main/" +
+            string: "https://raw.githubusercontent.com/Totorox/Totorox-repo/main/" +
                 "repositories/demo/repo.json"
         )!
         let previewURL = URL(
@@ -482,9 +482,9 @@ final class PackageRepositoryStore: ObservableObject {
         )
         sources = [source]
         repositories[source.id] = PackageRepository(
-            identifier: "com.yangjiii.3105",
-            name: "3105 Repository",
-            summary: "Nguồn chính thức cho tweak và wallpaper của 3105.",
+            identifier: "com.totorox.repository",
+            name: "Totorox Repository",
+            summary: "Nguồn chính thức cho tweak và wallpaper của Totorox.",
             iconURL: nil,
             sourceURL: sourceURL,
             packages: [package]
@@ -613,7 +613,7 @@ enum PackageRepositoryNetworkClient {
         defer { session.invalidateAndCancel() }
 
         var request = URLRequest(url: url)
-        request.setValue("3105", forHTTPHeaderField: "User-Agent")
+        request.setValue("Totorox", forHTTPHeaderField: "User-Agent")
         let (temporaryURL, response) = try await session.download(for: request)
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode),

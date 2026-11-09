@@ -127,11 +127,11 @@ static void ensureLaunchServicesLoaded(void) {
         };
         for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
             if (dlopen(candidates[i], RTLD_LAZY | RTLD_GLOBAL)) {
-                NSLog(@"[3105] ls: loaded %s", candidates[i]);
+                NSLog(@"[Totorox] ls: loaded %s", candidates[i]);
                 return;
             }
         }
-        NSLog(@"[3105] ls: CoreServices/MobileCoreServices dlopen failed");
+        NSLog(@"[Totorox] ls: CoreServices/MobileCoreServices dlopen failed");
     });
 }
 
@@ -141,17 +141,17 @@ static NSDictionary *appsFromWorkspace(void) {
 
     Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
     if (!workspaceClass) {
-        NSLog(@"[3105] ls: LSApplicationWorkspace class unavailable");
+        NSLog(@"[Totorox] ls: LSApplicationWorkspace class unavailable");
         return result;
     }
     SEL defaultWorkspaceSel = NSSelectorFromString(@"defaultWorkspace");
     if (![workspaceClass respondsToSelector:defaultWorkspaceSel]) {
-        NSLog(@"[3105] ls: defaultWorkspace selector unavailable");
+        NSLog(@"[Totorox] ls: defaultWorkspace selector unavailable");
         return result;
     }
     id workspace = ((id (*)(id, SEL))objc_msgSend)(workspaceClass, defaultWorkspaceSel);
     if (!workspace) {
-        NSLog(@"[3105] ls: defaultWorkspace returned nil");
+        NSLog(@"[Totorox] ls: defaultWorkspace returned nil");
         return result;
     }
 
@@ -166,14 +166,14 @@ static NSDictionary *appsFromWorkspace(void) {
             usedSelector = selectorName;
             break;
         }
-        NSLog(@"[3105] ls: %@ returned %lu", selectorName,
+        NSLog(@"[Totorox] ls: %@ returned %lu", selectorName,
               (unsigned long)([candidate isKindOfClass:[NSArray class]] ? [candidate count] : 0));
     }
     if (!apps || apps.count == 0) {
-        NSLog(@"[3105] ls: workspace enumeration empty");
+        NSLog(@"[Totorox] ls: workspace enumeration empty");
         return result;
     }
-    NSLog(@"[3105] ls: %@ returned %lu proxies", usedSelector, (unsigned long)apps.count);
+    NSLog(@"[Totorox] ls: %@ returned %lu proxies", usedSelector, (unsigned long)apps.count);
 
     NSUInteger withContainer = 0;
     for (id app in apps) {
@@ -218,7 +218,7 @@ static NSDictionary *appsFromWorkspace(void) {
             result[bundleID] = entry;
         }
     }
-    NSLog(@"[3105] ls: extracted %lu apps (%lu with container)",
+    NSLog(@"[Totorox] ls: extracted %lu apps (%lu with container)",
           (unsigned long)result.count, (unsigned long)withContainer);
     return result;
 }
@@ -227,7 +227,7 @@ NSDictionary<NSString *, NSDictionary *> *installedAppInfo(void) {
     NSDictionary *workspace = appsFromWorkspace();
     if (workspace.count > 0) return workspace;
     NSDictionary *mobileInstallation = appsFromMobileInstallation();
-    NSLog(@"[3105] ls: workspace empty; MobileInstallation=%lu",
+    NSLog(@"[Totorox] ls: workspace empty; MobileInstallation=%lu",
           (unsigned long)mobileInstallation.count);
     return mobileInstallation;
 }

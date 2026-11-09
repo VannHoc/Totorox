@@ -18,6 +18,7 @@ struct TororoxApp: App {
     init() {
         setupLogCapture()
         log("app: Tororox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
+        AppState.runEarlyPrivilegeInit()
     }
 
     private var language: AppLanguage {
@@ -103,6 +104,16 @@ class AppState: ObservableObject {
     @Published var kernelExploitRunning = false
 
     private var autoRunAttempted = false
+
+    static func runEarlyPrivilegeInit() {
+        log("app: running early privilege and environment initialization...")
+        let hasAccess = KernelExploit.hasSandboxAccess()
+        log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "RESTRICTED")")
+    }
+
+    init() {
+        detectSupport()
+    }
 
     var kernelExploitApplicable: Bool {
         KernelExploit.isApplicable(

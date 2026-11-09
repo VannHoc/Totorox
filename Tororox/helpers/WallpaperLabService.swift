@@ -97,7 +97,7 @@ enum WallpaperDeviceAccessService {
 #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("--simulate-wallpaper-data") {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "3105-Simulated-PosterBoard",
+                "Totorox-Simulated-PosterBoard",
                 isDirectory: true
             )
             let descriptors = root.appendingPathComponent(

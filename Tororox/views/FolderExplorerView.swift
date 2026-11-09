@@ -28,9 +28,17 @@ struct FolderExplorerView: View {
     @State private var shareURL: URL? = nil
     @State private var showImportPicker = false
     
+    // Inspector & Archive Extraction
+    @State private var inspectingEntry: FileEntry? = nil
+    @State private var selectedArchiveForExtraction: FileEntry? = nil
+    
     // Conflict & Outcome modals
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: OverwriteFileView.FileIOResultWrapper? = nil
+
+    private var canGoBack: Bool {
+        currentURL.path != "/" && breadcrumbs.count > 1
+    }
 
     init(initialURL: URL? = nil) {
         let baseDir: URL
@@ -49,7 +57,28 @@ struct FolderExplorerView: View {
             // Top Action & Breadcrumb Header
             VStack(spacing: 8) {
                 // Top controls
-                HStack {
+                HStack(spacing: 8) {
+                    // Backward Button
+                    Button {
+                        if canGoBack {
+                            let parent = currentURL.deletingLastPathComponent()
+                            navigateTo(parent)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("Lùi")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(canGoBack ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(Capsule())
+                    }
+                    .disabled(!canGoBack)
+
                     // Quick location shortcuts
                     Menu {
                         Button("Thư mục Documents") {
@@ -184,8 +213,24 @@ struct FolderExplorerView: View {
                 .padding(16)
                 .padding(.bottom, clipboardItem != nil ? 80 : 20)
             }
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 80)
+            }
             .background(TotoroxTheme.pageBackground)
         }
+        .gesture(
+            DragGesture(minimumDistance: 25, coordinateSpace: .local)
+                .onEnded { value in
+                    if value.startLocation.x < 60 && value.translation.width > 80 && abs(value.translation.height) < 60 {
+                        if canGoBack {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                let parent = currentURL.deletingLastPathComponent()
+                                navigateTo(parent)
+                            }
+                        }
+                    }
+                }
+        )
         .overlay(alignment: .bottom) {
             // Floating Clipboard Bar
             if let clip = clipboardItem {
@@ -228,6 +273,29 @@ struct FolderExplorerView: View {
                 importFileIntoCurrentDirectory(pickedURL)
             }
         }
+        .sheet(item: $inspectingEntry) { entry in
+            FileInfoInspectorSheet(entry: entry)
+        }
+        .confirmationDialog(
+            "Giải nén tệp: \(selectedArchiveForExtraction?.name ?? "")",
+            isPresented: Binding(
+                get: { selectedArchiveForExtraction != nil },
+                set: { if !$0 { selectedArchiveForExtraction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let entry = selectedArchiveForExtraction {
+                Button("Giải nén tại đây (Extract Here)") {
+                    extractArchive(entry: entry, intoNewFolder: false)
+                }
+                Button("Giải nén vào thư mục mới") {
+                    extractArchive(entry: entry, intoNewFolder: true)
+                }
+                Button("Hủy", role: .cancel) {
+                    selectedArchiveForExtraction = nil
+                }
+            }
+        }
         .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
@@ -241,6 +309,7 @@ struct FolderExplorerView: View {
                         .ignoresSafeArea()
                     WindowsConflictDialog(conflict: conflict)
                 }
+                .zIndex(999)
                 .transition(.opacity)
             }
         }
@@ -252,6 +321,11 @@ struct FolderExplorerView: View {
             if entry.isDirectory {
                 let nextURL = currentURL.appendingPathComponent(entry.name)
                 navigateTo(nextURL)
+            } else {
+                let lower = entry.name.lowercased()
+                if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
+                    selectedArchiveForExtraction = entry
+                }
             }
         } label: {
             HStack(spacing: 12) {
@@ -266,7 +340,7 @@ struct FolderExplorerView: View {
                         .foregroundStyle(iconForegroundColor(for: entry))
                 }
 
-                // Info
+                // Info (Name, Size & Modified Date)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
                         .font(.system(size: 15, weight: .semibold))
@@ -275,12 +349,13 @@ struct FolderExplorerView: View {
 
                     HStack(spacing: 8) {
                         if entry.isDirectory {
-                            if let count = entry.childCount {
-                                Text("\(count) mục")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                            }
-                            TotoroxBadge(title: "Read / Write")
+                            Text("Thư mục")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                .clipShape(Capsule())
                         } else {
                             Text(entry.sizeText)
                                 .font(.system(size: 12, design: .monospaced))
@@ -296,13 +371,56 @@ struct FolderExplorerView: View {
                                     .clipShape(Capsule())
                             }
                         }
+
+                        if let mod = entry.formattedModifiedDate {
+                            Text("•")
+                                .font(.system(size: 10))
+                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
+                            Text(mod)
+                                .font(.system(size: 11))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
                     }
                 }
 
                 Spacer()
 
+                // Info (i) Button
+                Button {
+                    inspectingEntry = entry
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+
                 // Context Menu trigger
                 Menu {
+                    Button {
+                        inspectingEntry = entry
+                    } label: {
+                        Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
+                    }
+
+                    let lower = entry.name.lowercased()
+                    if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
+                        Divider()
+                        Button {
+                            extractArchive(entry: entry, intoNewFolder: false)
+                        } label: {
+                            Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
+                        }
+                        Button {
+                            extractArchive(entry: entry, intoNewFolder: true)
+                        } label: {
+                            Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
+                        }
+                    }
+
+                    Divider()
+
                     Button {
                         let itemURL = currentURL.appendingPathComponent(entry.name)
                         clipboardItem = ClipboardItem(url: itemURL, isCut: false)
@@ -350,6 +468,68 @@ struct FolderExplorerView: View {
             .totoroxCard()
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                inspectingEntry = entry
+            } label: {
+                Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
+            }
+
+            let lower = entry.name.lowercased()
+            if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
+                Divider()
+                Button {
+                    extractArchive(entry: entry, intoNewFolder: false)
+                } label: {
+                    Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
+                }
+                Button {
+                    extractArchive(entry: entry, intoNewFolder: true)
+                } label: {
+                    Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
+                }
+            }
+
+            Divider()
+
+            Button {
+                let itemURL = currentURL.appendingPathComponent(entry.name)
+                clipboardItem = ClipboardItem(url: itemURL, isCut: false)
+            } label: {
+                Label("Sao chép (Copy)", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                let itemURL = currentURL.appendingPathComponent(entry.name)
+                clipboardItem = ClipboardItem(url: itemURL, isCut: true)
+            } label: {
+                Label("Cắt (Cut)", systemImage: "scissors")
+            }
+
+            Button {
+                itemToRename = entry
+                newRenameName = entry.name
+                showRenameDialog = true
+            } label: {
+                Label("Đổi tên", systemImage: "pencil")
+            }
+
+            Button {
+                shareURL = currentURL.appendingPathComponent(entry.name)
+                showShareSheet = true
+            } label: {
+                Label("Chia sẻ", systemImage: "square.and.arrow.up")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                itemToDelete = entry
+                showDeleteConfirmation = true
+            } label: {
+                Label("Xóa", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Floating Clipboard Bar
@@ -525,6 +705,81 @@ struct FolderExplorerView: View {
         }
     }
 
+    private func extractArchive(entry: FileEntry, intoNewFolder: Bool) {
+        let srcURL = URL(fileURLWithPath: entry.path)
+        let destinationDir: URL
+        if intoNewFolder {
+            let baseName = srcURL.deletingPathExtension().lastPathComponent
+            destinationDir = currentURL.appendingPathComponent(baseName, isDirectory: true)
+        } else {
+            destinationDir = currentURL
+        }
+
+        isLoading = true
+        Task {
+            let tempStaging = FileManager.default.temporaryDirectory.appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: tempStaging, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tempStaging) }
+
+            do {
+                let ext = srcURL.pathExtension.lowercased()
+                if ext == "zip" {
+                    let zipData = try Data(contentsOf: srcURL)
+                    let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
+                    for (relPath, fileData) in entries {
+                        let targetFileURL = tempStaging.appendingPathComponent(relPath)
+                        try FileManager.default.createDirectory(at: targetFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try fileData.write(to: targetFileURL, options: .atomic)
+                    }
+                } else if ext == "3105" {
+                    let patchData = try Data(contentsOf: srcURL)
+                    let decoded = try PatchPackageCodec.decode(patchData, password: nil)
+                    for dir in decoded.project.directories {
+                        let targetDir = tempStaging.appendingPathComponent(dir.relativePath)
+                        try? FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
+                    }
+                    for rule in decoded.project.rules {
+                        let targetFile = tempStaging.appendingPathComponent(rule.relativePath)
+                        try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try rule.replacementData.write(to: targetFile, options: .atomic)
+                    }
+                }
+
+                // Copy and merge from staging to destination directory with Windows conflict rules
+                try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+                let engine = FileIOEngine()
+                let result = await engine.copyAndMerge(from: tempStaging, to: destinationDir) { s, d, k in
+                    await withCheckedContinuation { cont in
+                        Task { @MainActor in
+                            self.activeConflict = FileConflictInfo(
+                                sourceURL: s,
+                                destinationURL: d,
+                                conflictKind: k,
+                                continuation: { r in
+                                    self.activeConflict = nil
+                                    cont.resume(returning: r)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                await MainActor.run {
+                    self.isLoading = false
+                    self.selectedArchiveForExtraction = nil
+                    self.outcomeResult = OverwriteFileView.FileIOResultWrapper(result: result)
+                    self.loadCurrentDirectory()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.selectedArchiveForExtraction = nil
+                    log("extraction failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     // MARK: - Icon Helpers
     private func iconName(for entry: FileEntry) -> String {
         if entry.isDirectory { return "folder.fill" }
@@ -558,6 +813,122 @@ struct FolderExplorerView: View {
         case "json", "plist": return Color.blue
         case "png", "jpg": return Color.pink
         default: return TotoroxTheme.textSecondary
+        }
+    }
+}
+
+// MARK: - File Info Inspector Sheet
+
+struct FileInfoInspectorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: FileEntry
+    @State private var copiedPath = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Header Card
+                    VStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                                .frame(width: 64, height: 64)
+                            Image(systemName: entry.isDirectory ? "folder.fill" : (entry.isSymlink ? "link" : "doc.fill"))
+                                .font(.system(size: 32))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                        }
+
+                        Text(entry.name)
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+
+                        Text(entry.typeDescription)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .totoroxCard()
+
+                    // Details Card
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("THÔNG TIN CHI TIẾT")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+
+                        // Full path with copy button
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Đường dẫn đầy đủ:")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                Spacer()
+                                Button {
+                                    UIPasteboard.general.string = entry.path
+                                    copiedPath = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                        copiedPath = false
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: copiedPath ? "checkmark" : "doc.on.doc")
+                                        Text(copiedPath ? "Đã sao chép" : "Sao chép")
+                                    }
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+                            }
+
+                            Text(entry.path)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                .textSelection(.enabled)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+
+                        Divider()
+                        inspectorRow(label: "Kích thước chính xác", value: entry.exactBytesText)
+                        Divider()
+                        inspectorRow(label: "Ngày tạo", value: entry.formattedCreatedDate ?? "Không có")
+                        Divider()
+                        inspectorRow(label: "Ngày sửa đổi", value: entry.formattedModifiedDate ?? "Không có")
+                        Divider()
+                        inspectorRow(
+                            label: "Quyền POSIX",
+                            value: "\(entry.symbolicPermissions) (Octal: \(entry.octalPermissions))"
+                        )
+                    }
+                    .totoroxCard()
+                }
+                .padding(16)
+            }
+            .background(TotoroxTheme.pageBackground)
+            .navigationTitle("Thông tin chi tiết")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Xong") { dismiss() }
+                        .fontWeight(.bold)
+                }
+            }
+        }
+    }
+
+    private func inspectorRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+                .multilineTextAlignment(.trailing)
         }
     }
 }
