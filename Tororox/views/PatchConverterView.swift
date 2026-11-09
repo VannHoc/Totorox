@@ -1,0 +1,414 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+enum ConverterDirection: String, CaseIterable, Identifiable {
+    case zipToPatch = "ZIP ➔ .3105"
+    case patchToZip = ".3105 ➔ ZIP"
+
+    var id: String { rawValue }
+}
+
+struct ConversionHistoryItem: Identifiable, Codable {
+    let id: UUID
+    let sourceName: String
+    let targetName: String
+    let targetPath: String
+    let timestamp: Date
+    let fileSizeText: String
+}
+
+struct PatchConverterView: View {
+    @State private var direction: ConverterDirection = .zipToPatch
+    @State private var selectedSourceURL: URL? = nil
+    @State private var sourceFileSizeText: String = ""
+    @State private var sourceMetadataSummary: String? = nil
+    @State private var passwordText: String = ""
+    
+    // Processing state
+    @State private var isConverting: Bool = false
+    @State private var conversionError: String? = nil
+    @State private var convertedFileURL: URL? = nil
+    @State private var convertedFileSizeText: String = ""
+    
+    // UI sheets
+    @State private var showFilePicker: Bool = false
+    @State private var showShareSheet: Bool = false
+    
+    // History
+    @State private var history: [ConversionHistoryItem] = []
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 20) {
+                // Header description
+                VStack(spacing: 4) {
+                    Text("Bộ Chuyển Đổi Hai Chiều")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+
+                    Text("Giải mã .3105 xuất sang .zip hoặc đóng gói .zip thành .3105")
+                        .font(.system(size: 13))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 8)
+                .padding(.horizontal, 16)
+
+                // Direction Pill Switcher
+                HStack(spacing: 8) {
+                    ForEach(ConverterDirection.allCases) { dir in
+                        let isSelected = (direction == dir)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                direction = dir
+                                selectedSourceURL = nil
+                                sourceMetadataSummary = nil
+                                convertedFileURL = nil
+                                conversionError = nil
+                            }
+                        } label: {
+                            Text(dir.rawValue)
+                                .font(.system(size: 14, weight: isSelected ? .bold : .medium))
+                                .foregroundColor(isSelected ? .white : TotoroxTheme.textSecondary)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                                .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+
+                // Dropzone / File Picker Card
+                VStack(spacing: 12) {
+                    if let source = selectedSourceURL {
+                        // Selected File Info Card
+                        HStack(spacing: 14) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                                    .frame(width: 48, height: 48)
+                                Image(systemName: direction == .zipToPatch ? "doc.zipper" : "archivebox.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                            }
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(source.lastPathComponent)
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                    .lineLimit(1)
+
+                                HStack(spacing: 8) {
+                                    Text(sourceFileSizeText)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                    
+                                    TotoroxBadge(
+                                        title: direction == .zipToPatch ? "ZIP Source" : ".3105 Source",
+                                        isAccent: true
+                                    )
+                                }
+                            }
+
+                            Spacer()
+
+                            Button("Đổi tệp") {
+                                showFilePicker = true
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                        }
+
+                        if let summary = sourceMetadataSummary {
+                            Divider()
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                Text(summary)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                Spacer()
+                            }
+                        }
+                    } else {
+                        // Empty Dropzone
+                        Button {
+                            showFilePicker = true
+                        } label: {
+                            VStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(TotoroxTheme.searchBackground)
+                                        .frame(width: 60, height: 60)
+                                    Image(systemName: "arrow.down.doc.fill")
+                                        .font(.system(size: 26))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+
+                                Text(direction == .zipToPatch ? "Nhấn để chọn tệp .zip nguồn" : "Nhấn để chọn tệp .3105 nguồn")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+
+                                Text("Hỗ trợ bảo toàn 100% metadata, manifest và rules payload")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 28)
+                            .background(TotoroxTheme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(TotoroxTheme.mintAccent.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .totoroxCard()
+                .padding(.horizontal, 16)
+
+                // Optional Password Field
+                HStack {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                    SecureField("Mật khẩu gói (nếu có mã hóa)", text: $passwordText)
+                        .font(.system(size: 14))
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .background(TotoroxTheme.searchBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+
+                // Error Banner
+                if let err = conversionError {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Color.red)
+                        Text(err)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.red)
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color.red.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 16)
+                }
+
+                // Convert Button
+                TotoroxPrimaryButton(
+                    title: "Bắt đầu Chuyển đổi",
+                    icon: "arrow.triangle.2.circlepath",
+                    isLoading: isConverting,
+                    isEnabled: selectedSourceURL != nil && !isConverting
+                ) {
+                    performConversion()
+                }
+                .padding(.horizontal, 16)
+
+                // Converted Result Banner
+                if let converted = convertedFileURL {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(TotoroxTheme.mintAccent.opacity(0.15))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Chuyển đổi thành công!")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+
+                                Text("\(converted.lastPathComponent) (\(convertedFileSizeText))")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                            }
+                            Spacer()
+                        }
+
+                        Button {
+                            showShareSheet = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "square.and.arrow.up")
+                                Text("Lưu / Chia sẻ Tệp Đích")
+                                    .fontWeight(.bold)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(TotoroxTheme.mintAccent)
+                            .foregroundColor(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .totoroxCard()
+                    .padding(.horizontal, 16)
+                }
+
+                // Recent History
+                if !history.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Lịch sử chuyển đổi")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .padding(.horizontal, 16)
+
+                        VStack(spacing: 8) {
+                            ForEach(history) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("\(item.sourceName) ➔ \(item.targetName)")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .lineLimit(1)
+                                        Text(item.fileSizeText)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        convertedFileURL = URL(fileURLWithPath: item.targetPath)
+                                        showShareSheet = true
+                                    } label: {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .foregroundStyle(TotoroxTheme.mintAccent)
+                                    }
+                                }
+                                .totoroxCard(padding: 12)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .padding(.bottom, 24)
+        }
+        .background(TotoroxTheme.pageBackground)
+        .sheet(isPresented: $showFilePicker) {
+            DocumentPickerWrapper { picked in
+                inspectSourceFile(picked)
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let target = convertedFileURL {
+                ActivityViewControllerWrapper(activityItems: [target])
+            }
+        }
+    }
+
+    private func inspectSourceFile(_ url: URL) {
+        selectedSourceURL = url
+        convertedFileURL = nil
+        conversionError = nil
+        
+        let fm = FileManager.default
+        let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
+        let size = (attrs[.size] as? Int64) ?? 0
+        sourceFileSizeText = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+
+        Task {
+            if direction == .zipToPatch {
+                // Inspect ZIP
+                if let data = try? Data(contentsOf: url),
+                   let entries = try? PatchZipConverter().parseZipArchive(data),
+                   let manifestData = entries["patch.json"],
+                   let manifest = try? JSONDecoder().decode(PatchZipManifest.self, from: manifestData) {
+                    await MainActor.run {
+                        self.sourceMetadataSummary = "Gói: \(manifest.name) • Tác giả: \(manifest.author) • Quy tắc: \(manifest.rules.count) rules • Apps: \(manifest.bundleIdentifiers.joined(separator: ", "))"
+                    }
+                } else {
+                    await MainActor.run {
+                        self.sourceMetadataSummary = "Tệp ZIP tiêu chuẩn. Sẽ tự động khởi tạo manifest nếu thiếu."
+                    }
+                }
+            } else {
+                // Inspect .3105
+                if let data = try? Data(contentsOf: url),
+                   let decoded = try? PatchPackageCodec.decode(data, password: passwordText.isEmpty ? nil : passwordText) {
+                    await MainActor.run {
+                        let project = decoded.project
+                        self.sourceMetadataSummary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
+                    }
+                } else {
+                    await MainActor.run {
+                        self.sourceMetadataSummary = "Gói .3105 hợp lệ. Sẵn sàng giải mã sang .zip."
+                    }
+                }
+            }
+        }
+    }
+
+    private func performConversion() {
+        guard let source = selectedSourceURL else { return }
+        isConverting = true
+        conversionError = nil
+        convertedFileURL = nil
+
+        Task {
+            let converter = PatchZipConverter()
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ConvertedPatches", isDirectory: true)
+            try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+            let baseName = source.deletingPathExtension().lastPathComponent
+            let password = passwordText.isEmpty ? nil : passwordText
+
+            do {
+                if direction == .zipToPatch {
+                    let outURL = tempDir.appendingPathComponent("\(baseName).3105")
+                    try converter.convertZipToPatch(zipURL: source, destinationPatchURL: outURL, password: password)
+                    let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
+                    let outSize = (attrs[.size] as? Int64) ?? 0
+                    let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)
+
+                    await MainActor.run {
+                        self.convertedFileURL = outURL
+                        self.convertedFileSizeText = sizeStr
+                        self.isConverting = false
+                        self.history.insert(ConversionHistoryItem(
+                            id: UUID(),
+                            sourceName: source.lastPathComponent,
+                            targetName: outURL.lastPathComponent,
+                            targetPath: outURL.path,
+                            timestamp: Date(),
+                            fileSizeText: sizeStr
+                        ), at: 0)
+                    }
+                } else {
+                    let outURL = tempDir.appendingPathComponent("\(baseName).zip")
+                    try converter.convertPatchToZip(patchURL: source, destinationZipURL: outURL, password: password)
+                    let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
+                    let outSize = (attrs[.size] as? Int64) ?? 0
+                    let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)
+
+                    await MainActor.run {
+                        self.convertedFileURL = outURL
+                        self.convertedFileSizeText = sizeStr
+                        self.isConverting = false
+                        self.history.insert(ConversionHistoryItem(
+                            id: UUID(),
+                            sourceName: source.lastPathComponent,
+                            targetName: outURL.lastPathComponent,
+                            targetPath: outURL.path,
+                            timestamp: Date(),
+                            fileSizeText: sizeStr
+                        ), at: 0)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.conversionError = error.localizedDescription
+                    self.isConverting = false
+                }
+            }
+        }
+    }
+}

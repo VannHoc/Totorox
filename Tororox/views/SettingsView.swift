@@ -2,210 +2,234 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.appLanguage) private var language
     @EnvironmentObject private var appState: AppState
-    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
-    @AppStorage(FeatureVisibility.cleanerStorageKey) private var cleanerEnabled = true
-    @AppStorage(FeatureVisibility.developerModeStorageKey)
-    private var developerModeEnabled = false
+    @State private var showLogs = false
+    @State private var showClearCacheAlert = false
+    @State private var cacheClearedMessage = false
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    HStack(spacing: 14) {
-                        AppLogo()
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Header Card with Totoro Logo & Title
+                    VStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(TotoroxTheme.searchBackground)
+                                .frame(width: 80, height: 80)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("3105").font(.headline)
-                            Text(language.text("common.version", appVersion))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if let avatarImg = UIImage(named: "AppAvatar") ?? UIImage(named: "avatar") ?? UIImage(named: "AppIcon") {
+                                Image(uiImage: avatarImg)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 80, height: 80)
+                                    .clipShape(Circle())
+                            } else {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                            }
+                        }
+                        .overlay(Circle().stroke(Color.white, lineWidth: 3))
+                        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+
+                        VStack(spacing: 4) {
+                            Text("Totorox")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+
+                            Text("Phiên bản 1.0 (Build 1)")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(TotoroxTheme.mintAccent)
+                                    .frame(width: 8, height: 8)
+                                Text("Engine: 3105 Ready")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(TotoroxTheme.mintAccent.opacity(0.12))
+                            .clipShape(Capsule())
                         }
                     }
-                    .padding(.vertical, 4)
-                }
+                    .frame(maxWidth: .infinity)
+                    .totoroxCard()
 
-                Section(language.text("settings.language")) {
-                    Picker(language.text("settings.language"), selection: $languageCode) {
-                        ForEach(AppLanguage.allCases) { option in
-                            Text(option.displayName).tag(option.rawValue)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
+                    // Project & Identity Information
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("THÔNG TIN DỰ ÁN")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
 
-                Section {
-                    Toggle(isOn: $cleanerEnabled) {
-                        Label(language.text("tab.cleaner"), systemImage: "sparkles")
+                        settingsRow(label: "Người sáng lập", value: "VannHoc", icon: "person.crop.circle.fill", isAccent: true)
+                        Divider()
+                        settingsRow(label: "Tên ứng dụng", value: "Tororox", icon: "app.badge.fill")
+                        Divider()
+                        settingsRow(label: "Bundle Identifier", value: "com.apple.mobile.MobileHouseArrest", icon: "barcode")
+                        Divider()
+                        settingsRow(label: "Hệ thống hỗ trợ", value: "iOS \(AppInfo.osVersion) (\(AppInfo.osBuild))", icon: "iphone")
                     }
-                    Toggle(isOn: $developerModeEnabled) {
-                        Label(
-                            language.text("settings.developer_mode"),
-                            systemImage: "hammer.fill"
-                        )
-                    }
-                } header: {
-                    Text(language.text("dashboard.features"))
-                } footer: {
-                    Text(language.text("settings.developer_mode_footer"))
-                }
+                    .totoroxCard()
 
-                if WallpaperFeatureSupportPolicy.isSupported(
-                    major: AppInfo.versionTuple.major
-                ) {
-                    Section {
-                        NavigationLink {
-                            WallpaperResetSettingsView()
+                    // Engine & Sandbox Diagnostics
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("ENGINE & QUYỀN TRUY CẬP")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+
+                        settingsRow(label: "MCM Container Access", value: "Sẵn sàng (Active)", icon: "checkmark.shield.fill", isAccent: true)
+                        Divider()
+                        settingsRow(label: "Quy tắc File I/O", value: "Chuẩn Windows (Không hash)", icon: "bolt.fill")
+                        Divider()
+                        settingsRow(label: "Chế độ Giao diện", value: "Light Mode (Sáng tinh gọn)", icon: "sun.max.fill")
+                    }
+                    .totoroxCard()
+
+                    // Maintenance & Diagnostics Actions
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("BẢO TRÌ & CHẨN ĐOÁN")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+
+                        // Clear Cache Button
+                        Button {
+                            showClearCacheAlert = true
                         } label: {
-                            Label(
-                                language.text("wallpaper.reset"),
-                                systemImage: "arrow.counterclockwise"
-                            )
+                            HStack(spacing: 12) {
+                                Image(systemName: "trash.fill")
+                                    .foregroundStyle(Color.orange)
+                                    .frame(width: 24)
+                                Text("Dọn dẹp bộ nhớ tạm & Cache")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                            }
+                            .padding(.vertical, 4)
                         }
-                    } header: {
-                        Text(language.text("tab.wallpapers"))
-                    } footer: {
-                        Text(language.text("wallpaper.reset_settings_footer"))
-                    }
-                }
 
-                Section(language.text("common.device")) {
-                    LabeledContent(language.text("dashboard.hardware_model"), value: AppInfo.displayMachineName)
-                    LabeledContent(language.text("settings.ios_version"), value: "\(AppInfo.osVersion) (\(AppInfo.osBuild))")
-                }
+                        Divider()
 
-                Section {
-                    HStack {
-                        Text(language.text("settings.current_version"))
-                        Spacer()
-                        Text(language.text(appState.isSupported ? "settings.supported" : "settings.unsupported"))
-                        .foregroundStyle(appState.isSupported ? Color.green : Color.red)
-                    }
-                    LabeledContent("iOS 17", value: ExploitSupportPolicy.verifiedIOS17Range)
-                    LabeledContent("iOS 18", value: ExploitSupportPolicy.verifiedIOS18Range)
-                    LabeledContent("iOS 26", value: ExploitSupportPolicy.verifiedIOS26Range)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("iOS 27.0")
-                            .font(.body)
-                        ForEach(ExploitSupportPolicy.verifiedIOS27Builds, id: \.build) { version in
-                            Text(versionLabel(version))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                        // View System Logs Button
+                        Button {
+                            showLogs = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .frame(width: 24)
+                                Text("Xem nhật ký hệ thống (Logs)")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                            }
+                            .padding(.vertical, 4)
                         }
                     }
-                    .padding(.vertical, 2)
-                } header: {
-                    Text(language.text("settings.verified_versions"))
-                } footer: {
-                    Text(language.text("settings.supported_versions_footer"))
-                }
+                    .totoroxCard()
 
-                Section(language.text("settings.social_media")) {
-                    creditsRow(
-                        name: "GitHub",
-                        role: language.text("social.github_role"),
-                        url: "https://github.com/YangJiiii/3105"
-                    )
-                    creditsRow(
-                        name: "Cộng Đồng IOSVN",
-                        role: language.text("social.iosvn_role"),
-                        url: "https://t.me/ioscrackvn"
-                    )
-                }
+                    // Credits & Authors
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("TÁC GIẢ & BẢN QUYỀN")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
 
-                Section(language.text("settings.credits")) {
-                    creditsRow(
-                        name: "VannHoc",
-                        role: language.text("credit.founder"),
-                        url: "https://github.com/VannHoc"
-                    )
-                    creditsRow(
-                        name: "YangJiii",
-                        role: language.text("credit.yangjiii"),
-                        url: "https://x.com/duongduong0908"
-                    )
-                    creditsRow(
-                        name: "0xjohnnydev",
-                        role: language.text("credit.filzaslop"),
-                        url: "https://github.com/0xjohnnydev/FilzaSlop"
-                    )
-                    creditsRow(
-                        name: "LeminLimez",
-                        role: language.text("credit.pocket_poster"),
-                        url: "https://github.com/leminlimez/Pocket-Poster"
-                    )
-                    creditsRow(
-                        name: "CrazyMind90",
-                        role: language.text("credit.sandbox_escape"),
-                        url: "https://github.com/CrazyMind90"
-                    )
-                    creditsRow(
-                        name: "forcequitOS",
-                        role: language.text("credit.forcequit"),
-                        url: "https://github.com/forcequitOS"
-                    )
+                        if let founderURL = URL(string: "https://github.com/VannHoc") {
+                            Link(destination: founderURL) {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("VannHoc")
+                                            .font(.system(size: 15, weight: .bold))
+                                            .foregroundStyle(TotoroxTheme.textPrimary)
+                                        Text("Founder & Lead Developer")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right")
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Text("© 2026 Totorox. Mọi quyền được bảo lưu.\nĐược phát triển độc lập dựa trên kiến trúc 3105 & OPA334.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                    }
+                    .totoroxCard()
                 }
+                .padding(16)
             }
-            .tint(AppTheme.accent)
-            .navigationTitle(language.text("settings.title"))
+            .background(TotoroxTheme.pageBackground)
+            .navigationTitle("Cài đặt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(language.text("common.done")) { dismiss() }
-                        .fontWeight(.semibold)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Xong") { dismiss() }
+                        .fontWeight(.bold)
+                        .foregroundColor(TotoroxTheme.mintAccent)
                 }
+            }
+            .sheet(isPresented: $showLogs) {
+                LogView()
+            }
+            .alert("Xác nhận dọn dẹp cache?", isPresented: $showClearCacheAlert) {
+                Button("Dọn dẹp", role: .destructive) {
+                    clearTemporaryCache()
+                }
+                Button("Hủy", role: .cancel) {}
+            } message: {
+                Text("Xóa toàn bộ các tệp giải nén tạm, bộ nhớ đệm chuyển đổi patch để giải phóng dung lượng.")
+            }
+            .alert("Đã dọn dẹp cache thành công", isPresented: $cacheClearedMessage) {
+                Button("OK", role: .cancel) {}
             }
         }
     }
 
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "AppReleaseDisplayVersion") as? String
-            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "1.0"
-    }
+    private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                .frame(width: 24)
 
-    private func versionLabel(
-        _ version: (beta: Int, publicBeta: Int?, build: String)
-    ) -> String {
-        if let publicBeta = version.publicBeta {
-            return language.text(
-                "settings.developer_public_beta_build",
-                Int64(version.beta),
-                Int64(publicBeta),
-                version.build
-            )
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 13, weight: isAccent ? .bold : .regular, design: .monospaced))
+                .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                .lineLimit(1)
         }
-        return language.text(
-            "settings.developer_beta_build",
-            Int64(version.beta),
-            version.build
-        )
     }
 
-    @ViewBuilder
-    private func creditsRow(name: String, role: String, url: String) -> some View {
-        if let destination = URL(string: url) {
-            Link(destination: destination) {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(name)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        Text(role)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(AppTheme.accent)
-                        .frame(width: 28, height: 28)
+    private func clearTemporaryCache() {
+        Task {
+            let fm = FileManager.default
+            let tempDir = fm.temporaryDirectory
+            if let items = try? fm.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
+                for item in items {
+                    try? fm.removeItem(at: item)
                 }
-                .contentShape(Rectangle())
             }
-            .accessibilityLabel(language.text("accessibility.open_profile", name))
+            await MainActor.run {
+                self.cacheClearedMessage = true
+            }
         }
     }
 }

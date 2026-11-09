@@ -47,6 +47,7 @@ public struct FileIOResult: Equatable, Sendable {
 }
 
 public final class FileIOEngine {
+    public static let shared = FileIOEngine()
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {

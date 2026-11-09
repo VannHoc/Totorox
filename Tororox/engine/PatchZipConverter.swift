@@ -95,10 +95,19 @@ public struct PatchZipManifest: Codable, Equatable {
 }
 
 public final class PatchZipConverter {
+    public static let shared = PatchZipConverter()
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
+    }
+
+    public func convertPatch3105ToZip(inputURL: URL, outputZipURL: URL, password: String? = nil) throws {
+        try convertPatchToZip(patchURL: inputURL, destinationZipURL: outputZipURL, password: password)
+    }
+
+    public func convertZipToPatch3105(inputZipURL: URL, outputPatchURL: URL, password: String? = nil) throws {
+        try convertZipToPatch(zipURL: inputZipURL, destinationPatchURL: outputPatchURL, password: password)
     }
 
     // MARK: - .3105 -> .zip Conversion
