@@ -1,5 +1,5 @@
 import XCTest
-@testable import Tororox
+@testable import Totorox
 
 final class PatchZipConverterTests: XCTestCase {
     var tempDirectory: URL!
