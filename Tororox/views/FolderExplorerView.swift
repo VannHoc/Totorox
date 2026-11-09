@@ -151,10 +151,6 @@ struct FolderExplorerView: View {
                             .clipShape(Circle())
                     }
                 }
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(Circle())
-                    }
-                }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
 
