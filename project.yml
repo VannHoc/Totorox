@@ -23,6 +23,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.MobileHouseArrest
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ENABLE_TESTABILITY: YES
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Tororox"
         INFOPLIST_FILE: Tororox/Info.plist
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Tororox
@@ -55,5 +58,30 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.TororoxTests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tororox.app/Tororox"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Tororox"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: "-lz"
+schemes:
+  Tororox:
+    build:
+      targets:
+        Tororox: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TororoxTests
+    archive:
+      config: Release
+  TororoxTests:
+    build:
+      targets:
+        Tororox: all
+        TororoxTests: all
+    test:
+      config: Debug
+      targets:
+        - TororoxTests

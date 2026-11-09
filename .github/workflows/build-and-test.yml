@@ -31,17 +31,19 @@ jobs:
       - name: Generate Xcode Project from project.yml
         run: |
           xcodegen generate
+          xcodebuild -list -project Tororox.xcodeproj
 
       - name: Run Unit Tests
         run: |
           set -o pipefail
-          SIM_NAME=$(xcrun simctl list devices available | grep -E "iPhone (16|15|14)" | head -n 1 | sed -E 's/^[[:space:]]*([^(]+)\(.*/\1/' | xargs)
-          if [ -z "$SIM_NAME" ]; then SIM_NAME="iPhone 15"; fi
-          echo "Using Simulator: $SIM_NAME"
+          # Find first available iPhone simulator UDID
+          SIM_ID=$(xcrun simctl list devices available | grep -E "iPhone" | head -n 1 | grep -o -E "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "Selected Simulator UDID: $SIM_ID"
+          
           xcodebuild test \
             -project Tororox.xcodeproj \
-            -scheme TororoxTests \
-            -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -scheme Tororox \
+            -destination "platform=iOS Simulator,id=$SIM_ID" \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
