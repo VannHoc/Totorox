@@ -1,18 +1,18 @@
 import Foundation
 import Darwin
 
-public struct DirectorySizeResult: Sendable, Equatable {
-    public let totalBytes: Int64
-    public let fileCount: Int
-    public let folderCount: Int
+struct DirectorySizeResult: Sendable, Equatable {
+    let totalBytes: Int64
+    let fileCount: Int
+    let folderCount: Int
 
-    public init(totalBytes: Int64 = 0, fileCount: Int = 0, folderCount: Int = 0) {
+    init(totalBytes: Int64 = 0, fileCount: Int = 0, folderCount: Int = 0) {
         self.totalBytes = totalBytes
         self.fileCount = fileCount
         self.folderCount = folderCount
     }
 
-    public var formattedText: String {
+    var formattedText: String {
         let nf = NumberFormatter()
         nf.numberStyle = .decimal
         let byteStr = nf.string(from: NSNumber(value: totalBytes)) ?? "\(totalBytes)"
@@ -21,14 +21,14 @@ public struct DirectorySizeResult: Sendable, Equatable {
     }
 }
 
-public enum DirectorySizeService {
-    public static func calculateSize(at path: String) async -> DirectorySizeResult {
+enum DirectorySizeService {
+    static func calculateSize(at path: String) async -> DirectorySizeResult {
         await Task.detached(priority: .userInitiated) {
             calculateSizeSync(at: path)
         }.value
     }
 
-    public static func calculateSizeSync(at path: String) -> DirectorySizeResult {
+    static func calculateSizeSync(at path: String) -> DirectorySizeResult {
         var totalBytes: Int64 = 0
         var fileCount: Int = 0
         var folderCount: Int = 0
@@ -77,7 +77,7 @@ public enum DirectorySizeService {
         return DirectorySizeResult(totalBytes: totalBytes, fileCount: fileCount, folderCount: folderCount)
     }
 
-    public static func countImmediateChildren(at path: String) -> Int? {
+    static func countImmediateChildren(at path: String) -> Int? {
         guard let dir = opendir(path) else { return nil }
         defer { closedir(dir) }
         var count = 0

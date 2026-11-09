@@ -1,17 +1,17 @@
 import Foundation
 import UIKit
 
-public struct AppContainerMetadata {
-    public let uuid: String
-    public let containerPath: String
-    public let bundleID: String
-    public let appName: String
-    public let icon: UIImage?
-    public let isUserApp: Bool
-    public let modificationDate: Date?
-    public let shortUUID: String
+struct AppContainerMetadata {
+    let uuid: String
+    let containerPath: String
+    let bundleID: String
+    let appName: String
+    let icon: UIImage?
+    let isUserApp: Bool
+    let modificationDate: Date?
+    let shortUUID: String
 
-    public init(
+    init(
         uuid: String,
         containerPath: String,
         bundleID: String,
@@ -35,8 +35,8 @@ public struct AppContainerMetadata {
     }
 }
 
-public final class ContainerMetadataCache: @unchecked Sendable {
-    public static let shared = ContainerMetadataCache()
+final class ContainerMetadataCache: @unchecked Sendable {
+    static let shared = ContainerMetadataCache()
 
     private let lock = NSRecursiveLock()
     private var appMetadataCache: [String: AppContainerMetadata] = [:]
@@ -48,13 +48,13 @@ public final class ContainerMetadataCache: @unchecked Sendable {
         iconCache.countLimit = 300
     }
 
-    public func cachedApp(forUUID uuid: String) -> AppContainerMetadata? {
+    func cachedApp(forUUID uuid: String) -> AppContainerMetadata? {
         lock.lock()
         defer { lock.unlock() }
         return appMetadataCache[uuid]
     }
 
-    public func store(app: AppContainerMetadata) {
+    func store(app: AppContainerMetadata) {
         lock.lock()
         defer { lock.unlock() }
         appMetadataCache[app.uuid] = app
@@ -63,47 +63,47 @@ public final class ContainerMetadataCache: @unchecked Sendable {
         }
     }
 
-    public func cachedIcon(for bundleID: String) -> UIImage? {
+    func cachedIcon(for bundleID: String) -> UIImage? {
         lock.lock()
         defer { lock.unlock() }
         return iconCache.object(forKey: bundleID as NSString)
     }
 
-    public func storeIcon(_ icon: UIImage, for bundleID: String) {
+    func storeIcon(_ icon: UIImage, for bundleID: String) {
         lock.lock()
         defer { lock.unlock() }
         iconCache.setObject(icon, forKey: bundleID as NSString)
     }
 
-    public func cachedList(for path: String) -> [FileEntry]? {
+    func cachedList(for path: String) -> [FileEntry]? {
         lock.lock()
         defer { lock.unlock() }
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         return directoryListCache[clean]
     }
 
-    public func storeList(_ entries: [FileEntry], for path: String) {
+    func storeList(_ entries: [FileEntry], for path: String) {
         lock.lock()
         defer { lock.unlock() }
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         directoryListCache[clean] = entries
     }
 
-    public func cachedSize(for path: String) -> DirectorySizeResult? {
+    func cachedDirectorySize(for path: String) -> DirectorySizeResult? {
         lock.lock()
         defer { lock.unlock() }
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         return directorySizes[clean]
     }
 
-    public func storeSize(_ size: DirectorySizeResult, for path: String) {
+    func storeDirectorySize(_ size: DirectorySizeResult, for path: String) {
         lock.lock()
         defer { lock.unlock() }
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         directorySizes[clean] = size
     }
 
-    public func invalidate(path: String) {
+    func invalidate(path: String) {
         lock.lock()
         defer { lock.unlock() }
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
@@ -111,7 +111,7 @@ public final class ContainerMetadataCache: @unchecked Sendable {
         directorySizes.removeValue(forKey: clean)
     }
 
-    public func clear() {
+    func clear() {
         lock.lock()
         defer { lock.unlock() }
         appMetadataCache.removeAll()
