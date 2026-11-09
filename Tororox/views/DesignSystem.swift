@@ -227,6 +227,86 @@ struct TotoroxPillSelector<T: Hashable>: View {
     }
 }
 
+// MARK: - Legacy Compatibility Shims (AppTheme, AppCardBorder, AppRowIcon, AppSearchField, AppLogo)
+
+enum AppTheme {
+    static var accent: Color { TotoroxTheme.mintAccent }
+    static var pageBackground: Color { TotoroxTheme.pageBackground }
+    static var consoleBackground: Color { Color(red: 0.12, green: 0.14, blue: 0.18) }
+    static let pageInset: CGFloat = 16
+    static let rowIconSize: CGFloat = 17
+    static let rowIconFrame: CGFloat = 28
+    static let fileRowIconSize: CGFloat = 17
+    static let fileRowIconFrame: CGFloat = 30
+    static let fileRowHeight: CGFloat = 60
+    static let appIconSize: CGFloat = 32
+    static let emptyIconSize: CGFloat = 30
+    static let selectionIconSize: CGFloat = 18
+    static let contentCardCornerRadius: CGFloat = 20
+    static let contentCardInset: CGFloat = 16
+    static let contentCardPadding: CGFloat = 16
+}
+
+struct AppCardBorder: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: AppTheme.contentCardCornerRadius, style: .continuous)
+            .strokeBorder(Color(uiColor: .separator).opacity(0.22), lineWidth: 0.5)
+            .accessibilityHidden(true)
+    }
+}
+
+struct AppRowIcon: View {
+    let systemName: String
+    var tint: Color = AppTheme.accent
+    var symbolSize: CGFloat = AppTheme.rowIconSize
+    var frameSize: CGFloat = AppTheme.rowIconFrame
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(tint.opacity(0.12))
+            Image(systemName: systemName)
+                .font(.system(size: symbolSize, weight: .medium))
+                .foregroundStyle(tint)
+        }
+        .frame(width: frameSize, height: frameSize)
+        .accessibilityHidden(true)
+    }
+}
+
+struct AppSearchField: View {
+    @Binding var text: String
+    var placeholder: String = "Search"
+    var clearLabel: String = "Clear search"
+
+    var body: some View {
+        TotoroxSearchBar(text: $text, placeholder: placeholder)
+    }
+}
+
+struct AppLogo: View {
+    var size: CGFloat = 44
+
+    var body: some View {
+        Group {
+            if let icon = UIImage(named: "AppAvatar") ?? UIImage(named: "AppIcon") {
+                Image(uiImage: icon)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "app.fill")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppTheme.accent)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Share Sheet Helper
 
 struct ActivityViewControllerWrapper: UIViewControllerRepresentable {
@@ -239,3 +319,4 @@ struct ActivityViewControllerWrapper: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+
