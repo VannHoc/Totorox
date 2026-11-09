@@ -279,6 +279,18 @@ struct AppSearchField: View {
     var placeholder: String = "Search"
     var clearLabel: String = "Clear search"
 
+    init(text: Binding<String>, placeholder: String = "Search", clearLabel: String = "Clear search") {
+        self._text = text
+        self.placeholder = placeholder
+        self.clearLabel = clearLabel
+    }
+
+    init(text: Binding<String>, prompt: String, clearLabel: String = "Clear search") {
+        self._text = text
+        self.placeholder = prompt
+        self.clearLabel = clearLabel
+    }
+
     var body: some View {
         TotoroxSearchBar(text: $text, placeholder: placeholder)
     }
