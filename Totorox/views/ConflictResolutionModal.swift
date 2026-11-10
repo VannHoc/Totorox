@@ -26,8 +26,8 @@ final class ConflictPromptCoordinator: @unchecked Sendable {
         source: URL,
         destination: URL,
         kind: FileIOConflictKind,
-        presentModal: @escaping @MainActor (FileConflictInfo) -> Void,
-        dismissModal: @escaping @MainActor () -> Void
+        presentModal: @escaping @Sendable @MainActor (FileConflictInfo) -> Void,
+        dismissModal: @escaping @Sendable @MainActor () -> Void
     ) async -> FileIOConflictResolution {
         lock.lock()
         if isCancelled {
@@ -54,8 +54,10 @@ final class ConflictPromptCoordinator: @unchecked Sendable {
                             self.isCancelled = true
                         }
                         self.lock.unlock()
-                        dismissModal()
-                        cont.resume(returning: choice)
+                        Task { @MainActor in
+                            dismissModal()
+                            cont.resume(returning: choice)
+                        }
                     }
                 )
                 presentModal(info)
@@ -226,14 +228,8 @@ struct WindowsConflictDialog: View {
         }
         .padding(18)
         .frame(maxWidth: 340)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.88))
-                )
-        )
+        .background(Color.white.opacity(0.88))
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
