@@ -229,7 +229,9 @@ struct FolderExplorerView: View {
                             }
 
                             if !filteredEntries.isEmpty {
-                                Text("\(filteredEntries.count) mục")
+                                let fileCount = filteredEntries.filter { !$0.isDirectory }.count
+                                let dirCount = filteredEntries.filter { $0.isDirectory }.count
+                                Text("\(filteredEntries.count) mục (\(fileCount) tệp, \(dirCount) thư mục)")
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                     .frame(maxWidth: .infinity, alignment: .center)
@@ -450,15 +452,22 @@ struct FolderExplorerView: View {
                         // Regular metadata HStack
                         HStack(spacing: 6) {
                             if entry.isDirectory {
-                                Text(entry.childCountText)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                    .clipShape(Capsule())
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
+                                HStack(spacing: 4) {
+                                    Text("Thư mục")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                    if let count = entry.childCount {
+                                        Text("(\(count) tệp)")
+                                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(TotoroxTheme.mintAccent)
+                                    }
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                .clipShape(Capsule())
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                             } else {
                                 Text(entry.sizeText)
                                     .font(.system(size: 11, design: .monospaced))
@@ -739,6 +748,7 @@ struct FolderExplorerView: View {
         }
 
         Task.detached(priority: .userInitiated) {
+            _ = ContainerStore.ensureContainerAccess(for: path)
             let grantHandle = ContainerStore.grantContainerAccess(path)
             defer {
                 if grantHandle >= 0 { bad_query_release(grantHandle) }
@@ -759,6 +769,7 @@ struct FolderExplorerView: View {
     // MARK: - File Actions
     private func createNewFolder() {
         guard !newFolderName.isEmpty else { return }
+        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
         let target = currentURL.appendingPathComponent(newFolderName)
         do {
             try FileIOEngine.createDirectoryIfNeeded(at: target)
@@ -771,6 +782,7 @@ struct FolderExplorerView: View {
 
     private func applyRename() {
         guard let item = itemToRename, !newRenameName.isEmpty else { return }
+        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
         let src = currentURL.appendingPathComponent(item.name)
         let dst = currentURL.appendingPathComponent(newRenameName)
         if rename(src.path, dst.path) != 0 {
@@ -782,6 +794,7 @@ struct FolderExplorerView: View {
 
     private func applyDelete() {
         guard let item = itemToDelete else { return }
+        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
         let src = currentURL.appendingPathComponent(item.name)
         if item.isDirectory {
             try? FileManager.default.removeItem(at: src)
@@ -797,6 +810,7 @@ struct FolderExplorerView: View {
     }
 
     private func importFileIntoCurrentDirectory(_ src: URL) {
+        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
         Task {
             let engine = FileIOEngine()
             let dst = currentURL.appendingPathComponent(src.lastPathComponent)
@@ -823,6 +837,7 @@ struct FolderExplorerView: View {
     }
 
     private func executePasteAction(_ clip: ClipboardItem) {
+        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
         let dest = currentURL.appendingPathComponent(clip.url.lastPathComponent)
         Task {
             let engine = FileIOEngine()
@@ -866,6 +881,7 @@ struct FolderExplorerView: View {
         }
 
         isLoading = true
+        _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
         Task {
             let tempStaging = FileManager.default.temporaryDirectory.appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempStaging, withIntermediateDirectories: true)

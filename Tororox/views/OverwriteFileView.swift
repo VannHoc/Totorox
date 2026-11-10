@@ -852,14 +852,17 @@ struct OverwriteFileView: View {
         Task.detached(priority: .userInitiated) {
             // 0. Activate container sandbox permissions via MCM & bad_query
             var actError: NSString? = nil
-            _ = MCMActivateContainerPath(2, app.bundleID, false, &actError)
-            let grantHandle = ContainerStore.grantContainerAccess(app.dataPath)
+            let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
+            let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
+            _ = ContainerStore.ensureContainerAccess(for: rootPath)
+            let grantHandle = ContainerStore.grantContainerAccess(rootPath)
             defer {
                 if grantHandle >= 0 { bad_query_release(grantHandle) }
             }
 
-            let containerBase = URL(fileURLWithPath: app.dataPath)
+            let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath()
             let destinationDir = containerBase.appendingPathComponent(self.selectedTargetFolder, isDirectory: true)
+            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
             
             // Đảm bảo thư mục đích tồn tại
             do {

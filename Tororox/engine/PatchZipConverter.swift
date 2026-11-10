@@ -342,7 +342,7 @@ public final class PatchZipConverter {
         }
 
         let bundleID = detectedBundleID
-            ?? AppContainerScanner.shared.scannedApps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
+            ?? AppContainerScanner.shared.apps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
             ?? "com.apple.mobile.MobileHouseArrest"
 
         var ruleEntries: [PatchZipManifest.RuleEntry] = []
@@ -438,7 +438,7 @@ public final class PatchZipConverter {
         }
 
         let bundleID = detectedBundleID
-            ?? AppContainerScanner.shared.scannedApps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
+            ?? AppContainerScanner.shared.apps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
             ?? "com.apple.mobile.MobileHouseArrest"
 
         var ruleEntries: [PatchZipManifest.RuleEntry] = []

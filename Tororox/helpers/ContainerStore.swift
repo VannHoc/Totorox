@@ -57,7 +57,7 @@ struct FileEntry: Identifiable, Hashable {
     var childCountText: String {
         if isDirectory {
             if let count = childCount {
-                return count == 0 ? "Trống" : "\(count) mục"
+                return count == 0 ? "Trống" : "\(count) tệp"
             }
             return "Thư mục"
         }
@@ -793,6 +793,39 @@ enum ContainerStore {
         return bad_query(&pathC, true, nil, false)
     }
 
+    @discardableResult
+    static func ensureContainerAccess(for path: String) -> String {
+        guard !path.isEmpty else { return path }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        let targetPath = resolved.isEmpty ? path : resolved
+
+        // Detect if path belongs to an Application container or App Group
+        let roots = ["Containers/Data/Application/", "Containers/Shared/AppGroup/"]
+        for root in roots {
+            if let range = targetPath.range(of: root) {
+                let after = targetPath[range.upperBound...]
+                let idOrUUID = String(after.split(separator: "/").first ?? "")
+                if !idOrUUID.isEmpty {
+                    if root.contains("AppGroup") {
+                        var actErr: NSString?
+                        _ = MCMActivateContainerPath(7, idOrUUID, true, &actErr)
+                    } else {
+                        let bid = ContainerStore.bundleID(forUUID: idOrUUID)
+                            ?? AppContainerScanner.shared.getCachedInfo(forUDID: idOrUUID)?.bundleID
+                            ?? readContainerMetadata(containerPath: "/private/var/mobile/Containers/Data/Application/" + idOrUUID)?.bundleID
+                            ?? readContainerMetadata(containerPath: "/var/mobile/Containers/Data/Application/" + idOrUUID)?.bundleID
+                        if let bid = bid, !bid.isEmpty {
+                            var actErr: NSString?
+                            _ = MCMActivateContainerPath(2, bid, false, &actErr)
+                        }
+                    }
+                }
+            }
+        }
+        _ = grantContainerAccess(targetPath)
+        return targetPath
+    }
+
     static func containersFromFilesystem() -> [InstalledApp] {
         let grantedDirectories = enumerateDirectoriesWithTraversalGrant(path: appDataRoot)
         let dirs: [String]
@@ -975,19 +1008,34 @@ enum ContainerStore {
     // MARK: File browsing
 
     static func shallowChildCount(atPath path: String) -> Int? {
-        guard let dir = opendir(path) else { return nil }
-        defer { closedir(dir) }
-        var count = 0
-        while let dp = readdir(dir) {
-            let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+        let clean = ensureContainerAccess(for: path)
+        let resolved = URL(fileURLWithPath: clean).resolvingSymlinksInPath().path
+
+        // 1. Try FileManager.contentsOfDirectory (native Foundation sandbox integration)
+        for p in [resolved, clean, path] {
+            if let items = try? FileManager.default.contentsOfDirectory(atPath: p) {
+                return items.filter { !$0.hasPrefix(".") }.count
             }
-            if name == "." || name == ".." || name.hasPrefix(".") {
-                continue
-            }
-            count += 1
         }
-        return count
+
+        // 2. Fallback to POSIX opendir
+        for p in [resolved, clean, path] {
+            if let dir = opendir(p) {
+                defer { closedir(dir) }
+                var count = 0
+                while let dp = readdir(dir) {
+                    let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                        String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+                    }
+                    if name == "." || name == ".." || name.hasPrefix(".") {
+                        continue
+                    }
+                    count += 1
+                }
+                return count
+            }
+        }
+        return nil
     }
 
     static func posixListDirectory(at path: String) -> [FileEntry]? {
@@ -1114,14 +1162,21 @@ enum ContainerStore {
     }
 
     static func listFiles(at path: String) -> [FileEntry] {
+        let accessPath = ensureContainerAccess(for: path)
+        let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
+
         // 1. Try POSIX opendir/readdir first
-        if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
-            return sortedEntries(posixEntries)
+        for p in [resolved, accessPath, path] {
+            if let posixEntries = posixListDirectory(at: p), !posixEntries.isEmpty {
+                return sortedEntries(posixEntries)
+            }
         }
 
         // 2. Default to FileManager
-        if let fallback = fileManagerListFiles(at: path) {
-            return sortedEntries(fallback)
+        for p in [resolved, accessPath, path] {
+            if let fallback = fileManagerListFiles(at: p), !fallback.isEmpty {
+                return sortedEntries(fallback)
+            }
         }
 
         log("listFiles: FAILED for \(path) errno=\(errno)")

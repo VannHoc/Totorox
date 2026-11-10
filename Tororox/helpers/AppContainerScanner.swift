@@ -165,6 +165,7 @@ final class AppContainerScanner: ObservableObject {
     static let shared = AppContainerScanner()
     
     @Published private(set) var apps: [AppContainerInfo] = []
+    var scannedApps: [AppContainerInfo] { apps }
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var statusMessage: String = ""
     

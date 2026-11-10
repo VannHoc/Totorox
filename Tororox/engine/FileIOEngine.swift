@@ -108,6 +108,8 @@ public final class FileIOEngine {
             return
         }
 
+        _ = ContainerStore.ensureContainerAccess(for: destination.path)
+
         var destIsDir: ObjCBool = false
         let destExists = fileManager.fileExists(atPath: destination.path, isDirectory: &destIsDir)
 
@@ -282,6 +284,8 @@ public final class FileIOEngine {
         to destination: URL
     ) throws {
         let parentDir = destination.deletingLastPathComponent()
+        _ = ContainerStore.ensureContainerAccess(for: destination.path)
+        _ = ContainerStore.ensureContainerAccess(for: parentDir.path)
         try Self.createDirectoryIfNeeded(at: parentDir)
 
         let stagingURL = parentDir.appendingPathComponent(".totorox-\(UUID().uuidString).tmp")
@@ -326,7 +330,11 @@ public final class FileIOEngine {
 
         // 3. Atomic commit via POSIX rename within the same directory
         if rename(stagingURL.path, destination.path) != 0 {
-            // Rename failed, try POSIX write directly to destination
+            // If rename failed (e.g. cross-device or permission), try FileReplacementService (3105 engine)
+            if (try? FileReplacementService.replace(target: destination, with: source)) != nil {
+                return
+            }
+            // Fallback: POSIX direct write to destination
             if let data = (try? Data(contentsOf: source)) ?? ContainerStore.readDataDirectly(atPath: source.path) {
                 if !posixWriteData(data, to: destination.path) {
                     if fileManager.fileExists(atPath: destination.path) {
