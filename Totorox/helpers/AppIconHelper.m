@@ -226,8 +226,6 @@ static NSDictionary *appsFromWorkspace(void) {
                     break;
                 }
             }
-            UIImage *appIcon = iconForBundleID(bundleID);
-            if (appIcon) entry[@"icon"] = appIcon;
             result[bundleID] = entry;
         }
     }
@@ -338,6 +336,7 @@ UIImage *iconForBundlePath(NSString *bundlePath) {
 // Icon via LSApplicationProxy / CoreUI / Bundle PNG (per bundle ID)
 UIImage *iconForBundleID(NSString *bundleID) {
     if (!bundleID || bundleID.length == 0) return nil;
+    ensureLaunchServicesLoaded();
     static NSCache<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -347,21 +346,7 @@ UIImage *iconForBundleID(NSString *bundleID) {
     UIImage *cached = [cache objectForKey:bundleID];
     if (cached) return cached;
 
-    // 1. Try private UIKit API _applicationIconImageForBundleIdentifier:format:scale:
-    SEL privateIconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
-    if ([UIImage respondsToSelector:privateIconSel]) {
-        CGFloat scale = [UIScreen mainScreen].scale;
-        int formats[] = {2, 0, 1, 3};
-        for (int i = 0; i < 4; i++) {
-            UIImage *img = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)([UIImage class], privateIconSel, bundleID, formats[i], scale);
-            if (img && img.size.width > 0 && img.size.height > 0) {
-                [cache setObject:img forKey:bundleID];
-                return img;
-            }
-        }
-    }
-
-    // 2. Try LSApplicationProxy iconDataForVariant: and bundleURL
+    // 1. Try LSApplicationProxy iconDataForVariant: and bundleURL (thread-safe on background queues)
     Class proxyClass = NSClassFromString(@"LSApplicationProxy");
     if (proxyClass) {
         SEL appProxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
@@ -376,7 +361,7 @@ UIImage *iconForBundleID(NSString *bundleID) {
                         return icon;
                     }
                 }
-                
+
                 SEL bundleURLSel = NSSelectorFromString(@"bundleURL");
                 if ([proxy respondsToSelector:bundleURLSel]) {
                     id bVal = ((id (*)(id, SEL))objc_msgSend)(proxy, bundleURLSel);
@@ -392,6 +377,20 @@ UIImage *iconForBundleID(NSString *bundleID) {
             }
         }
     }
+
+    // 2. Fallback to private UIKit API with fixed scale (avoids main-thread-only UIScreen.mainScreen)
+    SEL privateIconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([UIImage respondsToSelector:privateIconSel]) {
+        const CGFloat scale = 2.0;
+        const int formats[] = {2, 0, 1, 3};
+        for (int i = 0; i < 4; i++) {
+            UIImage *img = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)([UIImage class], privateIconSel, bundleID, formats[i], scale);
+            if (img && img.size.width > 0 && img.size.height > 0) {
+                [cache setObject:img forKey:bundleID];
+                return img;
+            }
+        }
+    }
     return nil;
 }
 
@@ -399,6 +398,8 @@ UIImage *iconForBundleID(NSString *bundleID) {
 NSDictionary *appInfoForBundleID(NSString *bundleID) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"name"] = bundleID;
+    if (!bundleID || bundleID.length == 0) return result;
+    ensureLaunchServicesLoaded();
 
     Class proxyClass = NSClassFromString(@"LSApplicationProxy");
     if (!proxyClass) return result;
@@ -407,7 +408,7 @@ NSDictionary *appInfoForBundleID(NSString *bundleID) {
     id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, appProxySel, bundleID);
     if (!proxy) return result;
 
-    BOOL matchesRequestedIdentifier = YES;
+    BOOL matchesRequestedIdentifier = NO;
     for (NSString *selectorName in @[@"applicationIdentifier", @"bundleIdentifier"]) {
         SEL identifierSel = NSSelectorFromString(selectorName);
         if (![proxy respondsToSelector:identifierSel]) continue;
@@ -420,6 +421,7 @@ NSDictionary *appInfoForBundleID(NSString *bundleID) {
             }
         }
     }
+    if (!matchesRequestedIdentifier) return result;
     result[@"found"] = @YES;
 
     NSURL *bundleURL = nil;

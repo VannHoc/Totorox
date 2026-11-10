@@ -51,16 +51,27 @@ final class ContainerMetadataCache: @unchecked Sendable {
     func cachedApp(forUUID uuid: String) -> AppContainerMetadata? {
         lock.lock()
         defer { lock.unlock() }
-        return appMetadataCache[uuid] ?? appMetadataCache[uuid.uppercased()] ?? appMetadataCache[uuid.lowercased()]
+        guard let found = appMetadataCache[uuid] ?? appMetadataCache[uuid.uppercased()] ?? appMetadataCache[uuid.lowercased()] else {
+            return nil
+        }
+        guard !found.bundleID.isEmpty,
+              UUID(uuidString: found.bundleID) == nil,
+              found.bundleID.caseInsensitiveCompare(uuid) != .orderedSame else {
+            return nil
+        }
+        return found
     }
 
     func bundleID(forUUID uuid: String) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return (appMetadataCache[uuid] ?? appMetadataCache[uuid.uppercased()] ?? appMetadataCache[uuid.lowercased()])?.bundleID
+        return cachedApp(forUUID: uuid)?.bundleID
     }
 
     func store(app: AppContainerMetadata) {
+        guard !app.bundleID.isEmpty,
+              UUID(uuidString: app.bundleID) == nil,
+              app.bundleID.caseInsensitiveCompare(app.uuid) != .orderedSame else {
+            return
+        }
         lock.lock()
         defer { lock.unlock() }
         appMetadataCache[app.uuid] = app

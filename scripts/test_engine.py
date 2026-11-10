@@ -9,7 +9,7 @@ import time
 
 def test_file_io_engine():
     print("=== Running File I/O Engine Verification Tests ===")
-    temp_dir = tempfile.mkdtemp(prefix="tororox_test_")
+    temp_dir = tempfile.mkdtemp(prefix="totorox_test_")
     try:
         # Test 1: File Overwriting Same Name (Rule 1)
         src_file = os.path.join(temp_dir, "src.txt")
@@ -103,19 +103,19 @@ def test_file_io_engine():
 
 def test_patch_zip_converter():
     print("\n=== Running Patch <-> Zip Converter Verification Tests ===")
-    temp_dir = tempfile.mkdtemp(prefix="tororox_zip_test_")
+    temp_dir = tempfile.mkdtemp(prefix="totorox_zip_test_")
     try:
         # Create a mock patch project
         pkg_id = str(uuid.uuid4())
         rule_id = str(uuid.uuid4())
         dir_id = str(uuid.uuid4())
         bundle_id = "com.apple.mobile.MobileHouseArrest"
-        payload_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRTororoxSkinTexture12345"
+        payload_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRTotoroxSkinTexture12345"
 
         project_manifest = {
             "schemaVersion": 3,
             "id": pkg_id,
-            "name": "Tororox Super Mod",
+            "name": "Totorox Super Mod",
             "author": "VannHoc",
             "isPrivate": False,
             "createdAt": "2026-11-09T08:00:00Z",
@@ -148,7 +148,7 @@ def test_patch_zip_converter():
 
         # Step C: Verify round-trip integrity
         assert read_manifest["id"] == pkg_id
-        assert read_manifest["name"] == "Tororox Super Mod"
+        assert read_manifest["name"] == "Totorox Super Mod"
         assert read_manifest["author"] == "VannHoc"
         assert read_manifest["bundleIdentifiers"] == [bundle_id]
         assert read_payload == payload_data

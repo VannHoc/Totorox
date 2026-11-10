@@ -7,7 +7,6 @@ xcuserdata/
 *.xcscmblueprint
 
 # App Packages & Test Artifacts
-Tororox-*.ipa
 Totorox-*.ipa
 TestResults.xcresult
 analysis_3105/

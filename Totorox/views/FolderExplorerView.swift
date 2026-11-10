@@ -749,10 +749,7 @@ struct FolderExplorerView: View {
 
         Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: path)
-            let grantHandle = ContainerStore.grantContainerAccess(path)
-            defer {
-                if grantHandle >= 0 { bad_query_release(grantHandle) }
-            }
+            _ = ContainerStore.grantContainerAccess(path)
 
             let loaded = ContainerStore.listFiles(at: path)
             ContainerMetadataCache.shared.storeList(loaded, for: path)
@@ -766,55 +763,55 @@ struct FolderExplorerView: View {
         }
     }
 
-    // MARK: - File Actions
+    // MARK: - File Actions (All executed on Background Thread via FileIOEngine / Task.detached)
     private func createNewFolder() {
-        guard !newFolderName.isEmpty else { return }
-        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
-        let target = currentURL.appendingPathComponent(newFolderName)
-        do {
-            try FileIOEngine.createDirectoryIfNeeded(at: target)
-        } catch {
-            try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let folderName = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !folderName.isEmpty else { return }
+        let baseDir = currentURL
+        let target = baseDir.appendingPathComponent(folderName)
+        Task.detached(priority: .userInitiated) {
+            try? await FileIOEngine.shared.createFolder(at: target)
+            ContainerMetadataCache.shared.invalidate(path: baseDir.path)
+            await MainActor.run {
+                self.loadCurrentDirectory(forceRefresh: true)
+            }
         }
-        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
-        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func applyRename() {
-        guard let item = itemToRename, !newRenameName.isEmpty else { return }
-        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
-        let src = currentURL.appendingPathComponent(item.name)
-        let dst = currentURL.appendingPathComponent(newRenameName)
-        if rename(src.path, dst.path) != 0 {
-            try? FileManager.default.moveItem(at: src, to: dst)
+        let newName = newRenameName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let item = itemToRename, !newName.isEmpty else { return }
+        let baseDir = currentURL
+        let src = baseDir.appendingPathComponent(item.name)
+        let dst = baseDir.appendingPathComponent(newName)
+        Task.detached(priority: .userInitiated) {
+            try? await FileIOEngine.shared.renameItem(at: src, to: dst)
+            ContainerMetadataCache.shared.invalidate(path: baseDir.path)
+            await MainActor.run {
+                self.loadCurrentDirectory(forceRefresh: true)
+            }
         }
-        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
-        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func applyDelete() {
         guard let item = itemToDelete else { return }
-        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
-        let src = currentURL.appendingPathComponent(item.name)
-        if item.isDirectory {
-            try? FileManager.default.removeItem(at: src)
-            if FileManager.default.fileExists(atPath: src.path) {
-                _ = rmdir(src.path)
+        let baseDir = currentURL
+        let src = baseDir.appendingPathComponent(item.name)
+        Task.detached(priority: .userInitiated) {
+            try? await FileIOEngine.shared.deleteItem(at: src)
+            ContainerMetadataCache.shared.invalidate(path: baseDir.path)
+            await MainActor.run {
+                self.loadCurrentDirectory(forceRefresh: true)
             }
-        } else {
-            _ = unlink(src.path)
-            try? FileManager.default.removeItem(at: src)
         }
-        ContainerMetadataCache.shared.invalidate(path: currentURL.path)
-        loadCurrentDirectory(forceRefresh: true)
     }
 
     private func importFileIntoCurrentDirectory(_ src: URL) {
-        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
-        Task {
-            let engine = FileIOEngine()
-            let dst = currentURL.appendingPathComponent(src.lastPathComponent)
-            let result = await engine.copyAndMerge(from: src, to: dst) { s, d, k in
+        let baseDir = currentURL
+        let dst = baseDir.appendingPathComponent(src.lastPathComponent)
+        Task.detached(priority: .userInitiated) {
+            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
+            let result = await FileIOEngine.shared.copyAndMerge(from: src, to: dst) { s, d, k in
                 await withCheckedContinuation { cont in
                     Task { @MainActor in
                         self.activeConflict = FileConflictInfo(
@@ -829,19 +826,20 @@ struct FolderExplorerView: View {
                     }
                 }
             }
+            ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
-                ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                 self.outcomeResult = FileIOResultWrapper(result: result)
+                self.loadCurrentDirectory(forceRefresh: true)
             }
         }
     }
 
     private func executePasteAction(_ clip: ClipboardItem) {
-        _ = ContainerStore.ensureContainerAccess(for: currentURL.path)
-        let dest = currentURL.appendingPathComponent(clip.url.lastPathComponent)
-        Task {
-            let engine = FileIOEngine()
-            let result = await engine.copyAndMerge(from: clip.url, to: dest) { s, d, k in
+        let baseDir = currentURL
+        let dest = baseDir.appendingPathComponent(clip.url.lastPathComponent)
+        Task.detached(priority: .userInitiated) {
+            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
+            let result = await FileIOEngine.shared.copyAndMerge(from: clip.url, to: dest) { s, d, k in
                 await withCheckedContinuation { cont in
                     Task { @MainActor in
                         self.activeConflict = FileConflictInfo(
@@ -858,31 +856,33 @@ struct FolderExplorerView: View {
             }
 
             if clip.isCut && result.failed.isEmpty && !result.isCancelled {
-                try? FileManager.default.removeItem(at: clip.url)
+                try? await FileIOEngine.shared.deleteItem(at: clip.url)
                 ContainerMetadataCache.shared.invalidate(path: clip.url.deletingLastPathComponent().path)
             }
 
+            ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
                 self.clipboardItem = nil
-                ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                 self.outcomeResult = FileIOResultWrapper(result: result)
+                self.loadCurrentDirectory(forceRefresh: true)
             }
         }
     }
 
     private func extractArchive(entry: FileEntry, intoNewFolder: Bool) {
         let srcURL = URL(fileURLWithPath: entry.path)
+        let baseDir = currentURL
         let destinationDir: URL
         if intoNewFolder {
             let baseName = srcURL.deletingPathExtension().lastPathComponent
-            destinationDir = currentURL.appendingPathComponent(baseName, isDirectory: true)
+            destinationDir = baseDir.appendingPathComponent(baseName, isDirectory: true)
         } else {
-            destinationDir = currentURL
+            destinationDir = baseDir
         }
 
         isLoading = true
-        _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
-        Task {
+        Task.detached(priority: .userInitiated) {
+            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
             let tempStaging = FileManager.default.temporaryDirectory.appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempStaging, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempStaging) }
@@ -911,10 +911,8 @@ struct FolderExplorerView: View {
                     }
                 }
 
-                // Copy and merge from staging to destination directory with Windows conflict rules
-                try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-                let engine = FileIOEngine()
-                let result = await engine.copyAndMerge(from: tempStaging, to: destinationDir) { s, d, k in
+                try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
+                let result = await FileIOEngine.shared.copyAndMerge(from: tempStaging, to: destinationDir) { s, d, k in
                     await withCheckedContinuation { cont in
                         Task { @MainActor in
                             self.activeConflict = FileConflictInfo(
@@ -930,10 +928,10 @@ struct FolderExplorerView: View {
                     }
                 }
 
+                ContainerMetadataCache.shared.invalidate(path: baseDir.path)
                 await MainActor.run {
                     self.isLoading = false
                     self.selectedArchiveForExtraction = nil
-                    ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                     self.outcomeResult = FileIOResultWrapper(result: result)
                     self.loadCurrentDirectory(forceRefresh: true)
                 }

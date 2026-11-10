@@ -14,6 +14,7 @@ struct OverwriteFileView: View {
     // Custom folder dialog
     @State private var showCustomFolderSheet: Bool = false
     @State private var customFolderInput: String = ""
+    @State private var availableSubfolders: [String] = ["Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"]
     
     // Modal Sheets
     @State private var showInstalledAppsSheet: Bool = false
@@ -609,10 +610,8 @@ struct OverwriteFileView: View {
                     List {
                         ForEach(filteredApps) { app in
                             Button {
-                                selectedApp = app
-                                targetBundleIDInput = app.bundleID
+                                selectApp(app)
                                 showInstalledAppsSheet = false
-                                appendLog("[CHỌN APP] Đã chọn: \(app.appName) (\(app.bundleID))")
                             } label: {
                                 HStack(spacing: 12) {
                                     AppIconAvatarView(info: app, size: 44)
@@ -700,34 +699,37 @@ struct OverwriteFileView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
                 
-                // Gợi ý nhanh
-                VStack(spacing: 8) {
-                    ForEach(["Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"], id: \.self) { folder in
-                        Button {
-                            selectedTargetFolder = folder
-                            showCustomFolderSheet = false
-                            appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(folder)")
-                        } label: {
-                            HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                Text(folder)
-                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textPrimary)
-                                Spacer()
-                                if selectedTargetFolder == folder {
-                                    Image(systemName: "checkmark")
+                // Gợi ý nhanh từ cấu trúc thực tế của Container
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        ForEach(availableSubfolders, id: \.self) { folder in
+                            Button {
+                                selectedTargetFolder = folder
+                                showCustomFolderSheet = false
+                                appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(folder)")
+                            } label: {
+                                HStack {
+                                    Image(systemName: "folder.fill")
                                         .foregroundStyle(TotoroxTheme.mintAccent)
+                                    Text(folder)
+                                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                    Spacer()
+                                    if selectedTargetFolder == folder {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(TotoroxTheme.mintAccent)
+                                    }
                                 }
+                                .padding(.horizontal, 14)
+                                .frame(height: 44)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            .padding(.horizontal, 14)
-                            .frame(height: 44)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
+                .frame(maxHeight: 280)
                 
                 // Nhập tùy chỉnh
                 VStack(alignment: .leading, spacing: 8) {
@@ -792,21 +794,56 @@ struct OverwriteFileView: View {
         }
     }
     
+    private func selectApp(_ app: AppContainerInfo) {
+        selectedApp = app
+        targetBundleIDInput = app.bundleID
+        appendLog("[CHỌN APP] Đã chọn: \(app.appName) (\(app.bundleID))")
+        Task {
+            let subfolders = await scanner.scanContainerSubdirectories(for: app)
+            await MainActor.run {
+                self.availableSubfolders = subfolders
+            }
+        }
+    }
+
     private func handleSelectedPatch(url: URL) {
         selectedPatchURL = url
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        patchFileSizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
-        appendLog("[TỆP BẢN VÁ] Đã chọn: \(url.lastPathComponent) (\(patchFileSizeText))")
+        Task.detached(priority: .userInitiated) {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            let sizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            var autoBundleID: String? = nil
+            if url.pathExtension.lowercased() == "3105",
+               let decoded = try? PatchPackageCodec.decode(from: url) {
+                defer { try? FileManager.default.removeItem(at: decoded.stagingRootURL) }
+                let bid = decoded.manifest.appBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !bid.isEmpty {
+                    autoBundleID = bid
+                }
+            }
+            await MainActor.run {
+                self.patchFileSizeText = sizeText
+                self.appendLog("[TỆP BẢN VÁ] Đã chọn: \(url.lastPathComponent) (\(sizeText))")
+            }
+            if let bid = autoBundleID {
+                let currentSelected = await MainActor.run { self.selectedApp }
+                if currentSelected == nil, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
+                    await MainActor.run {
+                        self.selectApp(resolved)
+                        self.appendLog("[TỰ ĐỘNG] Đã nhận diện ứng dụng từ bản vá .3105: \(resolved.appName) (\(bid))")
+                    }
+                }
+            }
+        }
     }
-    
+
     private func resolveManualBundleID() {
         let clean = targetBundleIDInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        
+
         Task {
             if let resolved = await scanner.resolveContainer(bundleID: clean) {
                 await MainActor.run {
-                    self.selectedApp = resolved
+                    self.selectApp(resolved)
                     self.appendLog("[NHẬP TAY] Đã tìm thấy container cho: \(clean)")
                 }
             } else {
@@ -843,27 +880,24 @@ struct OverwriteFileView: View {
     // MARK: - Thực thi Ghi đè Tệp
     private func executePatch() {
         guard let app = selectedApp, let patchURL = selectedPatchURL else { return }
-        
+        let targetSubfolder = selectedTargetFolder
+
         isExecuting = true
         appendLog("[BẮT ĐẦU] Bắt đầu quá trình đè file vào: \(app.appName)")
-        appendLog("  - Thư mục đích: \(selectedTargetFolder)")
+        appendLog("  - Thư mục đích: \(targetSubfolder)")
         appendLog("  - Gói bản vá: \(patchURL.lastPathComponent)")
-        
+
         Task.detached(priority: .userInitiated) {
-            // 0. Activate container sandbox permissions via MCM & bad_query
+            // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
             var actError: NSString? = nil
             let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
             let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
             _ = ContainerStore.ensureContainerAccess(for: rootPath)
-            let grantHandle = ContainerStore.grantContainerAccess(rootPath)
-            defer {
-                if grantHandle >= 0 { bad_query_release(grantHandle) }
-            }
 
             let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath()
-            let destinationDir = containerBase.appendingPathComponent(self.selectedTargetFolder, isDirectory: true)
+            let destinationDir = containerBase.appendingPathComponent(targetSubfolder, isDirectory: true)
             _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
-            
+
             // Đảm bảo thư mục đích tồn tại
             do {
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
@@ -874,53 +908,85 @@ struct OverwriteFileView: View {
                 }
                 return
             }
-            
+
             // 1. Thư mục tạm staging
             let stagingDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("TotoroxPatch_\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-            
+
             defer {
                 try? FileManager.default.removeItem(at: stagingDir)
             }
-            
+
             let is3105 = patchURL.pathExtension.lowercased() == "3105"
-            var sourceToCopy: URL = stagingDir
-            
+            var rawExtractedRoot: URL = stagingDir
+
             if is3105 {
                 do {
                     let converter = PatchZipConverter()
                     let zipOutput = stagingDir.appendingPathComponent("converted.zip")
                     try converter.convertPatch3105ToZip(inputURL: patchURL, outputZipURL: zipOutput)
-                    let payloadDir = stagingDir.appendingPathComponent("payload", isDirectory: true)
-                    try? FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
+                    let payloadDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
+                    try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
                     _ = try ZIPArchiveExtractor.extract(archiveURL: zipOutput, into: payloadDir)
-                    sourceToCopy = payloadDir
+                    rawExtractedRoot = payloadDir
                     await MainActor.run {
                         self.appendLog("[GIẢI MÃ] Giải mã thành công gói tệp .3105.")
                     }
                 } catch {
                     await MainActor.run {
                         self.appendLog("[LỖI] Giải mã gói .3105 thất bại: \(error.localizedDescription)")
+                        self.isExecuting = false
                     }
+                    return
                 }
             } else {
                 do {
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, into: stagingDir)
-                    sourceToCopy = stagingDir
+                    let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
+                    try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
+                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, into: extractedDir)
+                    rawExtractedRoot = extractedDir
                     await MainActor.run {
                         self.appendLog("[GIẢI NÉN] Giải nén thành công tệp ZIP.")
                     }
                 } catch {
                     await MainActor.run {
                         self.appendLog("[LỖI] Giải nén tệp ZIP thất bại: \(error.localizedDescription)")
+                        self.isExecuting = false
                     }
+                    return
                 }
             }
-            
-            // 2. Ghi đè và hợp nhất tệp qua FileIOEngine
-            let engine = FileIOEngine()
-            let result = await engine.copyAndMerge(from: sourceToCopy, to: destinationDir) { s, d, k in
+
+            // Unwrap payload/<bundleID>/ if the archive is a structured patch package
+            let engine = FileIOEngine.shared
+            let unwrapped = engine.unwrapExtractedPayloadRoot(
+                at: rawExtractedRoot,
+                preferredBundleID: app.bundleID
+            )
+            let sourceToCopy = unwrapped.rootURL
+
+            // Determine whether the payload root already starts with the target subfolder (e.g. Documents/...)
+            var effectiveDestination = destinationDir
+            let matchingSubfolderInSource = sourceToCopy.appendingPathComponent(targetSubfolder)
+            var isSubDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: matchingSubfolderInSource.path, isDirectory: &isSubDir),
+               isSubDir.boolValue {
+                effectiveDestination = containerBase
+            } else if unwrapped.usesContainerRootRelativePaths {
+                let topContainerDirs = ["Documents", "Library", "tmp", "SystemData"]
+                let hasTopLevelContainerStructure = topContainerDirs.contains { dirName in
+                    var d: ObjCBool = false
+                    let p = sourceToCopy.appendingPathComponent(dirName).path
+                    return FileManager.default.fileExists(atPath: p, isDirectory: &d) && d.boolValue
+                }
+                if hasTopLevelContainerStructure {
+                    effectiveDestination = containerBase
+                }
+            }
+
+            // 2. Ghi đè và hợp nhất tệp qua FileIOEngine trên Background Thread
+            let result = await engine.copyAndMerge(from: sourceToCopy, to: effectiveDestination) { s, d, k in
                 await withCheckedContinuation { cont in
                     Task { @MainActor in
                         self.activeConflict = FileConflictInfo(

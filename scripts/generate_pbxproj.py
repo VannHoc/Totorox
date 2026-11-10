@@ -6,7 +6,7 @@ with open(os.path.join('3105_repo', 'ThreeOneOSFive.xcodeproj', 'project.pbxproj
     orig = f.read()
 
 # Replace product & directory names
-text = orig.replace('ThreeOneOSFive-Bridging-Header.h', 'Tororox-Bridging-Header.h')
+text = orig.replace('ThreeOneOSFive-Bridging-Header.h', 'Totorox-Bridging-Header.h')
 text = text.replace('ThreeOneOSFive', 'Totorox')
 text = text.replace('3105.app', 'Totorox.app')
 text = text.replace('MARKETING_VERSION = 2.0;', 'MARKETING_VERSION = 1.0;')
@@ -27,13 +27,13 @@ text = text.replace('/* Begin PBXBuildFile section */', '/* Begin PBXBuildFile s
 file_refs_to_add = """
 \t\tTRXENG01 /* FileIOEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngine.swift; sourceTree = "<group>"; };
 \t\tTRXENG02 /* PatchZipConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverter.swift; sourceTree = "<group>"; };
-\t\tTRXTST00 /* TororoxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TororoxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+\t\tTRXTST00 /* TotoroxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TotoroxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 \t\tTRXTST01 /* FileIOEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngineTests.swift; sourceTree = "<group>"; };
 \t\tTRXTST02 /* PatchZipConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverterTests.swift; sourceTree = "<group>"; };
 """
 text = text.replace('/* Begin PBXFileReference section */', '/* Begin PBXFileReference section */' + file_refs_to_add)
 
-# Add engine group and TororoxTests group in PBXGroup
+# Add engine group and TotoroxTests group in PBXGroup
 groups_to_add = """
 \t\tTRXGRP01 /* engine */ = {
 \t\t\tisa = PBXGroup;
@@ -44,47 +44,47 @@ groups_to_add = """
 \t\t\tpath = engine;
 \t\t\tsourceTree = "<group>";
 \t\t};
-\t\tTRXGRP02 /* TororoxTests */ = {
+\t\tTRXGRP02 /* TotoroxTests */ = {
 \t\t\tisa = PBXGroup;
 \t\t\tchildren = (
 \t\t\t\tTRXTST01 /* FileIOEngineTests.swift */,
 \t\t\t\tTRXTST02 /* PatchZipConverterTests.swift */,
 \t\t\t);
-\t\t\tpath = TororoxTests;
+\t\t\tpath = TotoroxTests;
 \t\t\tsourceTree = "<group>";
 \t\t};
 """
 text = text.replace('/* Begin PBXGroup section */', '/* Begin PBXGroup section */' + groups_to_add)
 
-# Add engine group to Tororox group's children
+# Add engine group to Totorox group's children
 text = re.sub(
-    r'(3105A401 /\* Tororox \*/ = \{[^}]+children = \()',
+    r'(3105A401 /\* Totorox \*/ = \{[^}]+children = \()',
     r'\1\n\t\t\t\tTRXGRP01 /* engine */,',
     text
 )
 
-# Add TororoxTests to root group children
+# Add TotoroxTests to root group children
 text = re.sub(
     r'(3105A400 = \{[^}]+children = \()',
-    r'\1\n\t\t\t\tTRXGRP02 /* TororoxTests */,',
+    r'\1\n\t\t\t\tTRXGRP02 /* TotoroxTests */,',
     text
 )
 
-# Add TororoxTests.xctest to Products group
+# Add TotoroxTests.xctest to Products group
 text = re.sub(
     r'(3105A402 /\* Products \*/ = \{[^}]+children = \()',
-    r'\1\n\t\t\t\tTRXTST00 /* TororoxTests.xctest */,',
+    r'\1\n\t\t\t\tTRXTST00 /* TotoroxTests.xctest */,',
     text
 )
 
-# Add build files to Sources build phase of Tororox
+# Add build files to Sources build phase of Totorox
 text = re.sub(
     r'(3105A700 /\* Sources \*/ = \{[^}]+files = \()',
     r'\1\n\t\t\t\tTRXBLD01 /* FileIOEngine.swift in Sources */,\n\t\t\t\tTRXBLD02 /* PatchZipConverter.swift in Sources */,',
     text
 )
 
-# Add TororoxTests Sources build phase
+# Add TotoroxTests Sources build phase
 sources_build_phase_tests = """
 \t\tTRXPHS01 /* Sources */ = {
 \t\t\tisa = PBXSourcesBuildPhase;
@@ -98,7 +98,7 @@ sources_build_phase_tests = """
 """
 text = text.replace('/* Begin PBXSourcesBuildPhase section */', '/* Begin PBXSourcesBuildPhase section */' + sources_build_phase_tests)
 
-# Add TororoxTests Frameworks and Resources phases if needed
+# Add TotoroxTests Frameworks and Resources phases if needed
 frameworks_phase_tests = """
 \t\tTRXPHS02 /* Frameworks */ = {
 \t\t\tisa = PBXFrameworksBuildPhase;
@@ -129,25 +129,25 @@ target_proxy = """
 \t\t\tcontainerPortal = 3105A000 /* Project object */;
 \t\t\tproxyType = 1;
 \t\t\tremoteGlobalIDString = 3105A500;
-\t\t\tremoteInfo = Tororox;
+\t\t\tremoteInfo = Totorox;
 \t\t};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
 \t\tTRXDEP01 /* PBXTargetDependency */ = {
 \t\t\tisa = PBXTargetDependency;
-\t\t\ttarget = 3105A500 /* Tororox */;
+\t\t\ttarget = 3105A500 /* Totorox */;
 \t\t\ttargetProxy = TRXPRX01 /* PBXContainerItemProxy */;
 \t\t};
 /* End PBXTargetDependency section */
 """
 text = text.replace('/* Begin PBXNativeTarget section */', target_proxy + '\n/* Begin PBXNativeTarget section */')
 
-# Add TororoxTests PBXNativeTarget
+# Add TotoroxTests PBXNativeTarget
 native_target_tests = """
-\t\tTRXTAR01 /* TororoxTests */ = {
+\t\tTRXTAR01 /* TotoroxTests */ = {
 \t\t\tisa = PBXNativeTarget;
-\t\t\tbuildConfigurationList = TRXCFG00 /* Build configuration list for PBXNativeTarget "TororoxTests" */;
+\t\t\tbuildConfigurationList = TRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */;
 \t\t\tbuildPhases = (
 \t\t\t\tTRXPHS01 /* Sources */,
 \t\t\t\tTRXPHS02 /* Frameworks */,
@@ -158,22 +158,22 @@ native_target_tests = """
 \t\t\tdependencies = (
 \t\t\t\tTRXDEP01 /* PBXTargetDependency */,
 \t\t\t);
-\t\t\tname = TororoxTests;
-\t\t\tproductName = TororoxTests;
-\t\t\tproductReference = TRXTST00 /* TororoxTests.xctest */;
+\t\t\tname = TotoroxTests;
+\t\t\tproductName = TotoroxTests;
+\t\t\tproductReference = TRXTST00 /* TotoroxTests.xctest */;
 \t\t\tproductType = "com.apple.product-type.bundle.unit-test";
 \t\t};
 """
 text = text.replace('/* End PBXNativeTarget section */', native_target_tests + '/* End PBXNativeTarget section */')
 
-# Add TororoxTests to targets list in PBXProject
+# Add TotoroxTests to targets list in PBXProject
 text = re.sub(
     r'(3105A000 /\* Project object \*/ = \{[^}]+targets = \([^)]+)',
-    r'\g<1>\t\t\t\tTRXTAR01 /* TororoxTests */,\n',
+    r'\g<1>\t\t\t\tTRXTAR01 /* TotoroxTests */,\n',
     text
 )
 
-# Add XCBuildConfiguration and XCConfigurationList for TororoxTests
+# Add XCBuildConfiguration and XCConfigurationList for TotoroxTests
 test_configs = """
 \t\tTRXCFG01 /* Debug */ = {
 \t\t\tisa = XCBuildConfiguration;
@@ -184,11 +184,11 @@ test_configs = """
 \t\t\t\tGENERATE_INFOPLIST_FILE = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
 \t\t\t\tMARKETING_VERSION = 1.0;
-\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TororoxTests;
+\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.0;
 \t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";
-\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tororox.app/Tororox";
+\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox";
 \t\t\t};
 \t\t\tname = Debug;
 \t\t};
@@ -201,11 +201,11 @@ test_configs = """
 \t\t\t\tGENERATE_INFOPLIST_FILE = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
 \t\t\t\tMARKETING_VERSION = 1.0;
-\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TororoxTests;
+\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.0;
 \t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";
-\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tororox.app/Tororox";
+\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox";
 \t\t\t};
 \t\t\tname = Release;
 \t\t};
@@ -213,7 +213,7 @@ test_configs = """
 text = text.replace('/* Begin XCBuildConfiguration section */', '/* Begin XCBuildConfiguration section */' + test_configs)
 
 test_config_list = """
-\t\tTRXCFG00 /* Build configuration list for PBXNativeTarget "TororoxTests" */ = {
+\t\tTRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */ = {
 \t\t\tisa = XCConfigurationList;
 \t\t\tbuildConfigurations = (
 \t\t\t\tTRXCFG01 /* Debug */,
@@ -225,8 +225,8 @@ test_config_list = """
 """
 text = text.replace('/* Begin XCConfigurationList section */', '/* Begin XCConfigurationList section */' + test_config_list)
 
-dest_path = os.path.join('Tororox.xcodeproj', 'project.pbxproj')
+dest_path = os.path.join('Totorox.xcodeproj', 'project.pbxproj')
 with open(dest_path, 'w', encoding='utf-8') as f:
     f.write(text)
 
-print('Generated Tororox.xcodeproj/project.pbxproj successfully. Length:', len(text))
+print('Generated Totorox.xcodeproj/project.pbxproj successfully. Length:', len(text))

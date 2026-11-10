@@ -206,7 +206,7 @@ struct SettingsView: View {
     }
 
     private func clearTemporaryCache() {
-        Task {
+        Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             let tempDir = fm.temporaryDirectory
             if let items = try? fm.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
@@ -214,6 +214,7 @@ struct SettingsView: View {
                     try? fm.removeItem(at: item)
                 }
             }
+            ContainerMetadataCache.shared.clear()
             await MainActor.run {
                 self.cacheClearedMessage = true
             }

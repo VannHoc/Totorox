@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 @main
-struct TororoxApp: App {
+struct TotoroxApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var patchDraftCoordinator = PatchDraftCoordinator()
     @StateObject private var fileOperationCoordinator = FileOperationCoordinator()
@@ -154,6 +154,7 @@ class AppState: ObservableObject {
         guard applicable else { return }
 
         refreshKernelExploitStatus()
+        maybeAutoRunKernelExploit()
     }
 
     private func maybeAutoRunKernelExploit() {

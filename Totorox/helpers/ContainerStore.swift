@@ -176,60 +176,94 @@ enum ContainerStore {
 
     private static var _uuidMap: [String: String]? = nil
     private static let uuidMapLock = NSLock()
+    private static var activeGrantHandles: [String: Int64] = [:]
+    private static let grantHandlesLock = NSLock()
+
     static var uuidMap: [String: String] {
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
         if let m = _uuidMap, !m.isEmpty { return m }
-        var map = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        var map = (containerUUIDToBundleIDMap() as? [String: String] ?? [:]).filter { key, val in
+            !val.isEmpty && UUID(uuidString: val) == nil && val.caseInsensitiveCompare(key) != .orderedSame
+        }
         var mcmErr: NSString? = nil
         let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
-        for bid in mcmIDs {
+        for bid in mcmIDs where !bid.isEmpty && UUID(uuidString: bid) == nil {
             var actErr: NSString? = nil
             if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
                 let u = (p as NSString).lastPathComponent
-                map[u] = bid
-                map[u.uppercased()] = bid
-                map[u.lowercased()] = bid
+                if u.caseInsensitiveCompare(bid) != .orderedSame {
+                    map[u] = bid
+                    map[u.uppercased()] = bid
+                    map[u.lowercased()] = bid
+                }
             }
         }
         _uuidMap = map
         return map
     }
+
     static func refreshUUIDMap() {
-        uuidMapLock.lock()
-        defer { uuidMapLock.unlock() }
-        var map = containerUUIDToBundleIDMap() as? [String: String] ?? [:]
+        var map = (containerUUIDToBundleIDMap() as? [String: String] ?? [:]).filter { key, val in
+            !val.isEmpty && UUID(uuidString: val) == nil && val.caseInsensitiveCompare(key) != .orderedSame
+        }
         var mcmErr: NSString? = nil
         let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
-        for bid in mcmIDs {
+        for bid in mcmIDs where !bid.isEmpty && UUID(uuidString: bid) == nil {
             var actErr: NSString? = nil
             if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
                 let u = (p as NSString).lastPathComponent
-                map[u] = bid
-                map[u.uppercased()] = bid
-                map[u.lowercased()] = bid
+                if u.caseInsensitiveCompare(bid) != .orderedSame {
+                    map[u] = bid
+                    map[u.uppercased()] = bid
+                    map[u.lowercased()] = bid
+                }
+            }
+        }
+        uuidMapLock.lock()
+        if let existing = _uuidMap {
+            for (k, v) in existing where !v.isEmpty && UUID(uuidString: v) == nil && v.caseInsensitiveCompare(k) != .orderedSame {
+                if map[k] == nil {
+                    map[k] = v
+                }
             }
         }
         _uuidMap = map
+        uuidMapLock.unlock()
     }
 
     static func bundleID(forUUID uuid: String) -> String? {
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
         let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
-        return _uuidMap?[clean] ?? _uuidMap?[clean.uppercased()] ?? _uuidMap?[clean.lowercased()]
+        guard let found = _uuidMap?[clean] ?? _uuidMap?[clean.uppercased()] ?? _uuidMap?[clean.lowercased()] else {
+            return nil
+        }
+        guard !found.isEmpty,
+              UUID(uuidString: found) == nil,
+              found.caseInsensitiveCompare(clean) != .orderedSame else {
+            return nil
+        }
+        return found
     }
 
     static func setCachedMapping(uuid: String, bundleID: String) {
+        let cleanUUID = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanUUID.isEmpty,
+              !cleanBundleID.isEmpty,
+              UUID(uuidString: cleanBundleID) == nil,
+              cleanBundleID.caseInsensitiveCompare(cleanUUID) != .orderedSame else {
+            return
+        }
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
         if _uuidMap == nil {
             _uuidMap = [:]
         }
-        let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
-        _uuidMap?[clean] = bundleID
-        _uuidMap?[clean.uppercased()] = bundleID
-        _uuidMap?[clean.lowercased()] = bundleID
+        _uuidMap?[cleanUUID] = cleanBundleID
+        _uuidMap?[cleanUUID.uppercased()] = cleanBundleID
+        _uuidMap?[cleanUUID.lowercased()] = cleanBundleID
     }
 
     private static var shouldUseBadQuery: Bool {
@@ -462,9 +496,6 @@ enum ContainerStore {
         nested: Bool
     ) -> [ApplicationBundleMetadata] {
         let handle = grantContainerAccess(rootPath)
-        defer {
-            if handle >= 0 { bad_query_release(handle) }
-        }
 
         let fileManager = FileManager.default
         let rootEntries: [String]
@@ -573,9 +604,6 @@ enum ContainerStore {
                     continue
                 }
             }
-            defer {
-                if handle >= 0 { bad_query_release(handle) }
-            }
 
             let names = (try? FileManager.default.contentsOfDirectory(atPath: cachePath)) ?? []
             for name in names where identifiers.count < maximumCandidateCount {
@@ -663,20 +691,32 @@ enum ContainerStore {
 
     static func enumerateDirectoriesWithTraversalGrant(path: String) -> [String] {
         let handle = grantContainerAccess(path)
-        if handle >= 0 {
-            defer { bad_query_release(handle) }
-            if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
-                return posixEntries.filter { $0.isDirectory }.map { $0.path }
+        if handle >= 0 || !shouldUseBadQuery {
+            let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+            if let dir = opendir(clean) {
+                defer { closedir(dir) }
+                var subdirs: [String] = []
+                while let dp = readdir(dir) {
+                    let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                        String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+                    }
+                    if name == "." || name == ".." || name.hasPrefix(".") { continue }
+                    let full = (clean as NSString).appendingPathComponent(name)
+                    var st = stat()
+                    if lstat(full, &st) == 0 {
+                        if (st.st_mode & S_IFMT) == S_IFDIR {
+                            subdirs.append(full)
+                        }
+                    } else if dp.pointee.d_type == DT_DIR {
+                        subdirs.append(full)
+                    }
+                }
+                if !subdirs.isEmpty {
+                    return subdirs
+                }
             }
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: path), !names.isEmpty {
-                return names.map { (path as NSString).appendingPathComponent($0) }
-            }
-        } else if !shouldUseBadQuery {
-            if let posixEntries = posixListDirectory(at: path), !posixEntries.isEmpty {
-                return posixEntries.filter { $0.isDirectory }.map { $0.path }
-            }
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: path), !names.isEmpty {
-                return names.map { (path as NSString).appendingPathComponent($0) }
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: clean), !names.isEmpty {
+                return names.filter { !$0.hasPrefix(".") }.map { (clean as NSString).appendingPathComponent($0) }
             }
         } else {
             log("browser: root traversal grant failed \(path) -> \(handle)")
@@ -686,12 +726,8 @@ enum ContainerStore {
     }
 
     static func readDataDirectly(atPath path: String) -> Data? {
-        // 1. First attempt: Standard Swift Data(contentsOf:)
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty {
-            return data
-        }
-        // 2. Second attempt: POSIX open & read
-        let fd = open(path, O_RDONLY)
+        // 1. First attempt: POSIX open & read (fastest, zero Foundation overhead)
+        let fd = open(path, O_RDONLY | O_CLOEXEC)
         if fd >= 0 {
             defer { close(fd) }
             var st = stat()
@@ -708,6 +744,10 @@ enum ContainerStore {
                     return Data(buffer.prefix(totalRead))
                 }
             }
+        }
+        // 2. Second attempt: Standard Swift Data(contentsOf:)
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty {
+            return data
         }
         // 3. Third attempt: fopen & fread with "rb"
         if let fp = fopen(path, "rb") {
@@ -727,35 +767,54 @@ enum ContainerStore {
     }
 
     static func readContainerMetadata(containerPath: String) -> ContainerMetadata? {
-        let metadataPath = metadataPath(for: containerPath)
-        let handle = grantContainerAccess(containerPath)
-        defer {
-            if handle >= 0 { bad_query_release(handle) }
-        }
-        guard let data = readDataDirectly(atPath: metadataPath) else {
-            return nil
-        }
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
-            return nil
-        }
-        let rawID = (plist["MCMMetadataIdentifier"] as? String) ??
-                    ((plist["MCMMetadataInfo"] as? [String: Any])?["CFBundleIdentifier"] as? String)
-        guard let bundleID = rawID, !bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-        let cleanBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        var displayName = ""
-        if let info = plist["MCMMetadataInfo"] as? [String: Any] {
-            if let name = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) {
-                displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanContainer = (containerPath.hasSuffix("/") && containerPath.count > 1)
+            ? String(containerPath.dropLast())
+            : containerPath
+        guard !cleanContainer.isEmpty else { return nil }
+
+        let candidateContainers: [String] = {
+            if cleanContainer.hasPrefix("/private/var/") {
+                let withoutPrivate = String(cleanContainer.dropFirst("/private".count))
+                return [cleanContainer, withoutPrivate]
+            } else if cleanContainer.hasPrefix("/var/") {
+                return [cleanContainer, "/private" + cleanContainer]
+            }
+            return [cleanContainer]
+        }()
+
+        var plistData: Data? = nil
+        for candidate in candidateContainers {
+            let metaPath = metadataPath(for: candidate)
+            if let direct = readDataDirectly(atPath: metaPath) {
+                plistData = direct
+                break
             }
         }
-        if displayName.isEmpty {
-            if let name = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String) {
-                displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if plistData == nil {
+            _ = grantContainerAccess(cleanContainer)
+            for candidate in candidateContainers {
+                let metaPath = metadataPath(for: candidate)
+                if let grantedData = readDataDirectly(atPath: metaPath) {
+                    plistData = grantedData
+                    break
+                }
             }
         }
-        return ContainerMetadata(bundleID: cleanBundleID, displayName: displayName)
+
+        guard let data = plistData,
+              let metadata = ContainerMetadataReader.metadata(from: data) else {
+            return nil
+        }
+
+        let cleanBundleID = metadata.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanBundleID.isEmpty else { return nil }
+
+        let uuid = (cleanContainer as NSString).lastPathComponent
+        if UUID(uuidString: uuid) != nil && UUID(uuidString: cleanBundleID) == nil {
+            setCachedMapping(uuid: uuid, bundleID: cleanBundleID)
+        }
+        return ContainerMetadata(bundleID: cleanBundleID, displayName: metadata.displayName)
     }
 
     static func enumerateDirectoryNames(path: String) -> [String] {
@@ -777,6 +836,10 @@ enum ContainerStore {
         if let items = try? FileManager.default.contentsOfDirectory(atPath: clean), !items.isEmpty {
             return items.filter { !$0.hasPrefix(".") }
         }
+        let dirs = enumerateDirectoriesWithTraversalGrant(path: clean)
+        if !dirs.isEmpty {
+            return dirs.map { ($0 as NSString).lastPathComponent }.filter { !$0.isEmpty && !$0.hasPrefix(".") }
+        }
         return []
     }
 
@@ -788,9 +851,28 @@ enum ContainerStore {
 
     static func grantContainerAccess(_ containerPath: String) -> Int64 {
         guard !containerPath.isEmpty else { return -1 }
-        let clean = containerPath.hasSuffix("/") ? String(containerPath.dropLast()) : containerPath
+        let clean = (containerPath.hasSuffix("/") && containerPath.count > 1)
+            ? String(containerPath.dropLast())
+            : containerPath
+        let canonical = ContainerDiscoveryMerger.canonicalPath(clean)
+        let key = canonical.isEmpty ? clean : canonical
+
+        grantHandlesLock.lock()
+        if let existing = activeGrantHandles[key], existing >= 0 {
+            grantHandlesLock.unlock()
+            return existing
+        }
+        grantHandlesLock.unlock()
+
         var pathC = clean.utf8CString.map { Int8($0) }
-        return bad_query(&pathC, true, nil, false)
+        let handle = bad_query(&pathC, true, nil, false)
+        if handle >= 0 {
+            grantHandlesLock.lock()
+            activeGrantHandles[key] = handle
+            activeGrantHandles[clean] = handle
+            grantHandlesLock.unlock()
+        }
+        return handle
     }
 
     @discardableResult
@@ -803,22 +885,26 @@ enum ContainerStore {
         let roots = ["Containers/Data/Application/", "Containers/Shared/AppGroup/"]
         for root in roots {
             if let range = targetPath.range(of: root) {
+                let prefixPath = String(targetPath[..<range.upperBound])
                 let after = targetPath[range.upperBound...]
                 let idOrUUID = String(after.split(separator: "/").first ?? "")
                 if !idOrUUID.isEmpty {
+                    let containerRoot = prefixPath + idOrUUID
                     if root.contains("AppGroup") {
                         var actErr: NSString?
                         _ = MCMActivateContainerPath(7, idOrUUID, true, &actErr)
                     } else {
                         let bid = ContainerStore.bundleID(forUUID: idOrUUID)
                             ?? AppContainerScanner.shared.getCachedInfo(forUDID: idOrUUID)?.bundleID
+                            ?? readContainerMetadata(containerPath: containerRoot)?.bundleID
                             ?? readContainerMetadata(containerPath: "/private/var/mobile/Containers/Data/Application/" + idOrUUID)?.bundleID
                             ?? readContainerMetadata(containerPath: "/var/mobile/Containers/Data/Application/" + idOrUUID)?.bundleID
-                        if let bid = bid, !bid.isEmpty {
+                        if let bid = bid, !bid.isEmpty, UUID(uuidString: bid) == nil {
                             var actErr: NSString?
                             _ = MCMActivateContainerPath(2, bid, false, &actErr)
                         }
                     }
+                    _ = grantContainerAccess(containerRoot)
                 }
             }
         }
@@ -880,10 +966,7 @@ enum ContainerStore {
             }
         }
 
-        let handle = grantContainerAccess(fallback.containerPath)
-        defer {
-            if handle >= 0 { bad_query_release(handle) }
-        }
+        _ = grantContainerAccess(fallback.containerPath)
 
         let libraryPath = (fallback.containerPath as NSString).appendingPathComponent("Library")
         let savedStatePath = (libraryPath as NSString).appendingPathComponent("Saved Application State")
@@ -1008,34 +1091,137 @@ enum ContainerStore {
     // MARK: File browsing
 
     static func shallowChildCount(atPath path: String) -> Int? {
-        let clean = ensureContainerAccess(for: path)
-        let resolved = URL(fileURLWithPath: clean).resolvingSymlinksInPath().path
+        let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
 
-        // 1. Try FileManager.contentsOfDirectory (native Foundation sandbox integration)
-        for p in [resolved, clean, path] {
-            if let items = try? FileManager.default.contentsOfDirectory(atPath: p) {
-                return items.filter { !$0.hasPrefix(".") }.count
+        // 1. Fast POSIX opendir/readdir without triggering XPC per child directory
+        if let dir = opendir(clean) {
+            defer { closedir(dir) }
+            var count = 0
+            while let dp = readdir(dir) {
+                let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                    String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+                }
+                if name == "." || name == ".." || name.hasPrefix(".") {
+                    continue
+                }
+                count += 1
             }
+            return count
         }
 
-        // 2. Fallback to POSIX opendir
-        for p in [resolved, clean, path] {
-            if let dir = opendir(p) {
-                defer { closedir(dir) }
-                var count = 0
-                while let dp = readdir(dir) {
-                    let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                        String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
-                    }
-                    if name == "." || name == ".." || name.hasPrefix(".") {
-                        continue
-                    }
-                    count += 1
-                }
-                return count
-            }
+        // 2. Fallback to FileManager.contentsOfDirectory
+        if let items = try? FileManager.default.contentsOfDirectory(atPath: clean) {
+            return items.filter { !$0.hasPrefix(".") }.count
         }
         return nil
+    }
+
+    private static func resolveAppContainerIdentity(
+        uuid: String,
+        containerPath: String,
+        modDate: Date?
+    ) -> (bundleID: String?, appName: String?, appIcon: UIImage?) {
+        if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid),
+           !cached.bundleID.isEmpty,
+           UUID(uuidString: cached.bundleID) == nil {
+            let icon = cached.icon ?? ContainerMetadataCache.shared.cachedIcon(for: cached.bundleID) ?? iconForBundleID(cached.bundleID)
+            return (cached.bundleID, cached.appName, icon)
+        }
+
+        if let app = AppContainerScanner.shared.getCachedInfo(forUDID: uuid),
+           !app.bundleID.isEmpty,
+           UUID(uuidString: app.bundleID) == nil {
+            let icon = app.appIcon ?? ContainerMetadataCache.shared.cachedIcon(for: app.bundleID) ?? iconForBundleID(app.bundleID)
+            return (app.bundleID, app.appName, icon)
+        }
+
+        // Directly parse .com.apple.mobile_container_manager.metadata.plist (MCMMetadataIdentifier)
+        if let meta = readContainerMetadata(containerPath: containerPath),
+           !meta.bundleID.isEmpty,
+           UUID(uuidString: meta.bundleID) == nil {
+            let proxyInfo = appInfoForBundleID(meta.bundleID) as? [String: Any] ?? [:]
+            let lsName = proxyInfo["name"] as? String
+            let resolvedName: String
+            if let lsName = lsName, !lsName.isEmpty, lsName != meta.bundleID {
+                resolvedName = lsName
+            } else if !meta.displayName.isEmpty {
+                resolvedName = meta.displayName
+            } else {
+                resolvedName = AppDisplayNamePolicy.resolve(bundleID: meta.bundleID, candidates: [])
+            }
+            let appIcon = (proxyInfo["icon"] as? UIImage)
+                ?? ContainerMetadataCache.shared.cachedIcon(for: meta.bundleID)
+                ?? iconForBundleID(meta.bundleID)
+
+            let containerMeta = AppContainerMetadata(
+                uuid: uuid,
+                containerPath: containerPath,
+                bundleID: meta.bundleID,
+                appName: resolvedName,
+                icon: appIcon,
+                isUserApp: !meta.bundleID.hasPrefix("com.apple."),
+                modificationDate: modDate
+            )
+            ContainerMetadataCache.shared.store(app: containerMeta)
+            ContainerStore.setCachedMapping(uuid: uuid, bundleID: meta.bundleID)
+            return (meta.bundleID, resolvedName, appIcon)
+        }
+
+        if let bid = ContainerStore.bundleID(forUUID: uuid),
+           !bid.isEmpty,
+           UUID(uuidString: bid) == nil {
+            let proxyInfo = appInfoForBundleID(bid) as? [String: Any] ?? [:]
+            let lsName = proxyInfo["name"] as? String
+            let resolvedName = (lsName != nil && !lsName!.isEmpty && lsName != bid)
+                ? lsName!
+                : AppDisplayNamePolicy.resolve(bundleID: bid, candidates: [])
+            let appIcon = (proxyInfo["icon"] as? UIImage)
+                ?? ContainerMetadataCache.shared.cachedIcon(for: bid)
+                ?? iconForBundleID(bid)
+            let containerMeta = AppContainerMetadata(
+                uuid: uuid,
+                containerPath: containerPath,
+                bundleID: bid,
+                appName: resolvedName,
+                icon: appIcon,
+                isUserApp: !bid.hasPrefix("com.apple."),
+                modificationDate: modDate
+            )
+            ContainerMetadataCache.shared.store(app: containerMeta)
+            return (bid, resolvedName, appIcon)
+        }
+
+        // Fallback to container content inference (Saved Application State / Preferences)
+        let fallback = InstalledApp(
+            bundleID: uuid,
+            name: uuid,
+            containerPath: containerPath,
+            version: "",
+            icon: nil
+        )
+        if let inferred = inferredApp(for: fallback, knownAppsByBundleID: [:], launchServicesIdentifiers: []),
+           !inferred.bundleID.isEmpty,
+           UUID(uuidString: inferred.bundleID) == nil {
+            let resolvedName = AppDisplayNamePolicy.resolve(
+                bundleID: inferred.bundleID,
+                candidates: [inferred.name]
+            )
+            let appIcon = inferred.icon ?? iconForBundleID(inferred.bundleID)
+            let containerMeta = AppContainerMetadata(
+                uuid: uuid,
+                containerPath: containerPath,
+                bundleID: inferred.bundleID,
+                appName: resolvedName,
+                icon: appIcon,
+                isUserApp: !inferred.bundleID.hasPrefix("com.apple."),
+                modificationDate: modDate
+            )
+            ContainerMetadataCache.shared.store(app: containerMeta)
+            ContainerStore.setCachedMapping(uuid: uuid, bundleID: inferred.bundleID)
+            return (inferred.bundleID, resolvedName, appIcon)
+        }
+
+        return (nil, nil, nil)
     }
 
     static func posixListDirectory(at path: String) -> [FileEntry]? {
@@ -1088,57 +1274,17 @@ enum ContainerStore {
             var appIcon: UIImage? = nil
             var isAppContainer = false
             var shortUUID: String? = nil
-            var childCount: Int? = nil
 
             if isDir && isAppContainerDirectory && UUID(uuidString: name) != nil {
                 isAppContainer = true
                 shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
-
-                // 1. Check in-memory caches first for instant response
-                if let bid = ContainerStore.bundleID(forUUID: name) {
-                    bundleID = bid
-                    let proxyInfo = appInfoForBundleID(bid) as? [String: Any] ?? [:]
-                    let lsName = proxyInfo["name"] as? String
-                    appName = (lsName != nil && !lsName!.isEmpty && lsName != bid) ? lsName! : bid
-                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bid)
-                } else if let app = AppContainerScanner.shared.getCachedInfo(forUDID: name) {
-                    bundleID = app.bundleID
-                    appName = app.appName
-                    appIcon = app.appIcon
-                } else if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: name) {
-                    bundleID = cached.bundleID
-                    appName = cached.appName
-                    appIcon = cached.icon
-                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
-                    bundleID = meta.bundleID
-                    let proxyInfo = appInfoForBundleID(meta.bundleID) as? [String: Any] ?? [:]
-                    let lsName = proxyInfo["name"] as? String
-                    let resolvedName: String
-                    if let lsName = lsName, !lsName.isEmpty, lsName != meta.bundleID {
-                        resolvedName = lsName
-                    } else if !meta.displayName.isEmpty {
-                        resolvedName = meta.displayName
-                    } else {
-                        resolvedName = meta.bundleID
-                    }
-                    appName = resolvedName
-                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(meta.bundleID)
-
-                    let containerMeta = AppContainerMetadata(
-                        uuid: name,
-                        containerPath: full,
-                        bundleID: meta.bundleID,
-                        appName: resolvedName,
-                        icon: appIcon,
-                        isUserApp: !meta.bundleID.hasPrefix("com.apple."),
-                        modificationDate: modDate
-                    )
-                    ContainerMetadataCache.shared.store(app: containerMeta)
-                    ContainerStore.setCachedMapping(uuid: name, bundleID: meta.bundleID)
-                }
+                let resolved = resolveAppContainerIdentity(uuid: name, containerPath: full, modDate: modDate)
+                bundleID = resolved.bundleID
+                appName = resolved.appName
+                appIcon = resolved.appIcon
             }
 
-            let childrenCount = isDir ? shallowChildCount(atPath: full) : nil
+            let childrenCount = (isDir && !isAppContainer) ? shallowChildCount(atPath: full) : nil
             entries.append(
                 FileEntry(
                     name: name,
@@ -1176,6 +1322,67 @@ enum ContainerStore {
         for p in [resolved, accessPath, path] {
             if let fallback = fileManagerListFiles(at: p), !fallback.isEmpty {
                 return sortedEntries(fallback)
+            }
+        }
+
+        // 3. Fallback for /var/mobile/Containers/Data/Application using inode walk & MCM/Scanner cache
+        if path.contains("Containers/Data/Application") {
+            var dirPaths = enumerateDirectories(path: accessPath)
+            if dirPaths.isEmpty {
+                dirPaths = enumerateDirectories(path: appDataRoot)
+            }
+            var entriesByUUID: [String: FileEntry] = [:]
+            for full in dirPaths {
+                let name = (full as NSString).lastPathComponent
+                guard UUID(uuidString: name) != nil else { continue }
+                var st = stat()
+                let statRes = lstat(full, &st)
+                let mode = statRes == 0 ? UInt16(st.st_mode) : 0o755
+                let modDate = statRes == 0 ? Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)) : nil
+                let createDate = statRes == 0 ? Date(timeIntervalSince1970: TimeInterval(st.st_birthtimespec.tv_sec)) : nil
+                let shortUUID = name.count >= 8 ? "\(name.prefix(4))...\(name.suffix(4))" : name
+                let resolvedIdentity = resolveAppContainerIdentity(uuid: name, containerPath: full, modDate: modDate)
+                entriesByUUID[name.uppercased()] = FileEntry(
+                    name: name,
+                    path: full,
+                    isDirectory: true,
+                    size: -1,
+                    modifiedAt: modDate,
+                    createdAt: createDate,
+                    isSymlink: false,
+                    posixPermissions: mode,
+                    childCount: nil,
+                    appName: resolvedIdentity.appName,
+                    bundleID: resolvedIdentity.bundleID,
+                    appIcon: resolvedIdentity.appIcon,
+                    isAppContainer: true,
+                    shortUUID: shortUUID
+                )
+            }
+            for cachedApp in AppContainerScanner.shared.allCachedApps() {
+                let key = cachedApp.udid.uppercased()
+                if entriesByUUID[key] == nil {
+                    let shortUUID = cachedApp.udid.count >= 8 ? "\(cachedApp.udid.prefix(4))...\(cachedApp.udid.suffix(4))" : cachedApp.udid
+                    entriesByUUID[key] = FileEntry(
+                        name: cachedApp.udid,
+                        path: cachedApp.containerPath,
+                        isDirectory: true,
+                        size: -1,
+                        modifiedAt: nil,
+                        createdAt: nil,
+                        isSymlink: false,
+                        posixPermissions: 0o755,
+                        childCount: nil,
+                        appName: cachedApp.appName,
+                        bundleID: cachedApp.bundleID,
+                        appIcon: cachedApp.appIcon,
+                        isAppContainer: true,
+                        shortUUID: shortUUID
+                    )
+                }
+            }
+            if !entriesByUUID.isEmpty {
+                return sortedEntries(Array(entriesByUUID.values))
             }
         }
 
@@ -1235,57 +1442,17 @@ enum ContainerStore {
             var appIcon: UIImage? = nil
             var isAppContainer = false
             var shortUUID: String? = nil
-            var childCount: Int? = nil
 
             if isDirectory && isAppContainerDirectory && UUID(uuidString: item) != nil {
                 isAppContainer = true
                 shortUUID = item.count >= 8 ? "\(item.prefix(4))...\(item.suffix(4))" : item
-
-                // 1. Check in-memory caches first
-                if let bid = ContainerStore.bundleID(forUUID: item) {
-                    bundleID = bid
-                    let proxyInfo = appInfoForBundleID(bid) as? [String: Any] ?? [:]
-                    let lsName = proxyInfo["name"] as? String
-                    appName = (lsName != nil && !lsName!.isEmpty && lsName != bid) ? lsName! : bid
-                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(bid)
-                } else if let app = AppContainerScanner.shared.getCachedInfo(forUDID: item) {
-                    bundleID = app.bundleID
-                    appName = app.appName
-                    appIcon = app.appIcon
-                } else if let cached = ContainerMetadataCache.shared.cachedApp(forUUID: item) {
-                    bundleID = cached.bundleID
-                    appName = cached.appName
-                    appIcon = cached.icon
-                } else if let meta = readContainerMetadata(containerPath: full), !meta.bundleID.isEmpty {
-                    bundleID = meta.bundleID
-                    let proxyInfo = appInfoForBundleID(meta.bundleID) as? [String: Any] ?? [:]
-                    let lsName = proxyInfo["name"] as? String
-                    let resolvedName: String
-                    if let lsName = lsName, !lsName.isEmpty, lsName != meta.bundleID {
-                        resolvedName = lsName
-                    } else if !meta.displayName.isEmpty {
-                        resolvedName = meta.displayName
-                    } else {
-                        resolvedName = meta.bundleID
-                    }
-                    appName = resolvedName
-                    appIcon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(meta.bundleID)
-
-                    let containerMeta = AppContainerMetadata(
-                        uuid: item,
-                        containerPath: full,
-                        bundleID: meta.bundleID,
-                        appName: resolvedName,
-                        icon: appIcon,
-                        isUserApp: !meta.bundleID.hasPrefix("com.apple."),
-                        modificationDate: modDate
-                    )
-                    ContainerMetadataCache.shared.store(app: containerMeta)
-                    ContainerStore.setCachedMapping(uuid: item, bundleID: meta.bundleID)
-                }
+                let resolved = resolveAppContainerIdentity(uuid: item, containerPath: full, modDate: modDate)
+                bundleID = resolved.bundleID
+                appName = resolved.appName
+                appIcon = resolved.appIcon
             }
 
-            let childrenCount = isDirectory ? shallowChildCount(atPath: full) : nil
+            let childrenCount = (isDirectory && !isAppContainer) ? shallowChildCount(atPath: full) : nil
             entries.append(
                 FileEntry(
                     name: item,

@@ -51,7 +51,7 @@ final class PatchZipConverterTests: XCTestCase {
 
         let originalProject = PatchProject(
             id: UUID(),
-            name: "Tororox Super Mod",
+            name: "Totorox Super Mod",
             author: "VannHoc",
             isPrivate: false,
             createdAt: Date(),

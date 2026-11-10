@@ -313,59 +313,59 @@ struct PatchConverterView: View {
         convertedFileURL = nil
         conversionError = nil
         
-        let fm = FileManager.default
-        let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
-        let size = (attrs[.size] as? Int64) ?? 0
-        sourceFileSizeText = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        let currentDirection = direction
+        let currentPassword = passwordText.isEmpty ? nil : passwordText
 
-        Task {
-            if direction == .zipToPatch {
-                // Inspect ZIP
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
+            let size = (attrs[.size] as? Int64) ?? 0
+            let sizeStr = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+
+            let summary: String
+            if currentDirection == .zipToPatch {
                 if let data = try? Data(contentsOf: url),
                    let entries = try? PatchZipConverter().parseZipArchive(data),
                    let manifestData = entries["patch.json"],
                    let manifest = try? JSONDecoder().decode(PatchZipManifest.self, from: manifestData) {
-                    await MainActor.run {
-                        self.sourceMetadataSummary = "Gói: \(manifest.name) • Tác giả: \(manifest.author) • Quy tắc: \(manifest.rules.count) rules • Apps: \(manifest.bundleIdentifiers.joined(separator: ", "))"
-                    }
+                    summary = "Gói: \(manifest.name) • Tác giả: \(manifest.author) • Quy tắc: \(manifest.rules.count) rules • Apps: \(manifest.bundleIdentifiers.joined(separator: ", "))"
                 } else {
-                    await MainActor.run {
-                        self.sourceMetadataSummary = "Tệp ZIP tiêu chuẩn. Sẽ tự động khởi tạo manifest nếu thiếu."
-                    }
+                    summary = "Tệp ZIP tiêu chuẩn. Sẽ tự động khởi tạo manifest nếu thiếu."
                 }
             } else {
-                // Inspect .3105
                 if let data = try? Data(contentsOf: url),
-                   let decoded = try? PatchPackageCodec.decode(data, password: passwordText.isEmpty ? nil : passwordText) {
-                    await MainActor.run {
-                        let project = decoded.project
-                        self.sourceMetadataSummary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
-                    }
+                   let decoded = try? PatchPackageCodec.decode(data, password: currentPassword) {
+                    let project = decoded.project
+                    summary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
                 } else {
-                    await MainActor.run {
-                        self.sourceMetadataSummary = "Gói .3105 hợp lệ. Sẵn sàng giải mã sang .zip."
-                    }
+                    summary = "Gói .3105 hợp lệ. Sẵn sàng giải mã sang .zip."
                 }
+            }
+
+            await MainActor.run {
+                self.sourceFileSizeText = sizeStr
+                self.sourceMetadataSummary = summary
             }
         }
     }
 
     private func performConversion() {
         guard let source = selectedSourceURL else { return }
+        let currentDirection = direction
+        let password = passwordText.isEmpty ? nil : passwordText
         isConverting = true
         conversionError = nil
         convertedFileURL = nil
 
-        Task {
+        Task.detached(priority: .userInitiated) {
             let converter = PatchZipConverter()
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ConvertedPatches", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
             let baseName = source.deletingPathExtension().lastPathComponent
-            let password = passwordText.isEmpty ? nil : passwordText
 
             do {
-                if direction == .zipToPatch {
+                if currentDirection == .zipToPatch {
                     let outURL = tempDir.appendingPathComponent("\(baseName).3105")
                     try converter.convertZipToPatch(zipURL: source, destinationPatchURL: outURL, password: password)
                     let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)

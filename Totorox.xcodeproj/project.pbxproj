@@ -13,6 +13,12 @@
 		TRXBLD04 /* DirectorySizeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG04; };
 		TRXBLD05 /* AppContainerScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG05; };
 		TRXBLD06 /* AppNavigationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG06; };
+		TRXBLD07 /* FolderExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG07; };
+		TRXBLD08 /* OverwriteFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG08; };
+		TRXBLD09 /* PatchConverterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG09; };
+		TRXBLD10 /* ConflictResolutionModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG10; };
+		TRXBLD11 /* TotoroxTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG11; };
+		TRXBLD12 /* DocumentPickerWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG12; };
 		TRXTBL01 /* FileIOEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST01; };
 		TRXTBL02 /* PatchZipConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST02; };
 
@@ -93,7 +99,13 @@
 		TRXENG04 /* DirectorySizeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectorySizeService.swift; sourceTree = "<group>"; };
 		TRXENG05 /* AppContainerScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainerScanner.swift; sourceTree = "<group>"; };
 		TRXENG06 /* AppNavigationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigationCoordinator.swift; sourceTree = "<group>"; };
-		TRXTST00 /* TororoxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TororoxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		TRXENG07 /* FolderExplorerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderExplorerView.swift; sourceTree = "<group>"; };
+		TRXENG08 /* OverwriteFileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverwriteFileView.swift; sourceTree = "<group>"; };
+		TRXENG09 /* PatchConverterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchConverterView.swift; sourceTree = "<group>"; };
+		TRXENG10 /* ConflictResolutionModal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictResolutionModal.swift; sourceTree = "<group>"; };
+		TRXENG11 /* TotoroxTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TotoroxTabBar.swift; sourceTree = "<group>"; };
+		TRXENG12 /* DocumentPickerWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPickerWrapper.swift; sourceTree = "<group>"; };
+		TRXTST00 /* TotoroxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TotoroxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		TRXTST01 /* FileIOEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngineTests.swift; sourceTree = "<group>"; };
 		TRXTST02 /* PatchZipConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverterTests.swift; sourceTree = "<group>"; };
 
@@ -110,7 +122,7 @@
 		3105A031 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3105A040 /* bad_query.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bad_query.h; sourceTree = "<group>"; };
 		3105A041 /* mcm_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mcm_bridge.h; sourceTree = "<group>"; };
-		3105A050 /* Tororox-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Tororox-Bridging-Header.h"; sourceTree = "<group>"; };
+		3105A050 /* Totorox-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Totorox-Bridging-Header.h"; sourceTree = "<group>"; };
 		3105A060 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		3105A080 /* kexploit_opa334.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kexploit_opa334.m; sourceTree = "<group>"; };
 		3105A081 /* offsets.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = offsets.m; sourceTree = "<group>"; };
@@ -213,30 +225,30 @@
 			path = engine;
 			sourceTree = "<group>";
 		};
-		TRXGRP02 /* TororoxTests */ = {
+		TRXGRP02 /* TotoroxTests */ = {
 			isa = PBXGroup;
 			children = (
 				TRXTST01 /* FileIOEngineTests.swift */,
 				TRXTST02 /* PatchZipConverterTests.swift */,
 			);
-			path = TororoxTests;
+			path = TotoroxTests;
 			sourceTree = "<group>";
 		};
 
 		3105A400 = {
 			isa = PBXGroup;
 			children = (
-				TRXGRP02 /* TororoxTests */,
-				3105A401 /* Tororox */,
+				TRXGRP02 /* TotoroxTests */,
+				3105A401 /* Totorox */,
 				3105A402 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		3105A401 /* Tororox */ = {
+		3105A401 /* Totorox */ = {
 			isa = PBXGroup;
 			children = (
 				TRXGRP01 /* engine */,
-				3105A050 /* Tororox-Bridging-Header.h */,
+				3105A050 /* Totorox-Bridging-Header.h */,
 				3105A060 /* Info.plist */,
 				3105A020 /* App.swift */,
 				3105A021 /* ContentView.swift */,
@@ -247,13 +259,13 @@
 				3105A120 /* Localizable.strings */,
 				3105A031 /* Assets.xcassets */,
 			);
-			path = Tororox;
+			path = Totorox;
 			sourceTree = "<group>";
 		};
 		3105A402 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				TRXTST00 /* TororoxTests.xctest */,
+				TRXTST00 /* TotoroxTests.xctest */,
 				3105A010 /* Totorox.app */,
 			);
 			name = Products;
@@ -276,6 +288,11 @@
 			isa = PBXGroup;
 			children = (
 				3105A098 /* DesignSystem.swift */,
+				TRXENG07 /* FolderExplorerView.swift */,
+				TRXENG08 /* OverwriteFileView.swift */,
+				TRXENG09 /* PatchConverterView.swift */,
+				TRXENG10 /* ConflictResolutionModal.swift */,
+				TRXENG11 /* TotoroxTabBar.swift */,
 				3105A023 /* SettingsView.swift */,
 				3105A024 /* LogView.swift */,
 				3105A105 /* AppDataBrowserView.swift */,
@@ -304,6 +321,7 @@
 				TRXENG04 /* DirectorySizeService.swift */,
 				TRXENG05 /* AppContainerScanner.swift */,
 				TRXENG06 /* AppNavigationCoordinator.swift */,
+				TRXENG12 /* DocumentPickerWrapper.swift */,
 				3105A108 /* ContainerIdentityResolver.swift */,
 				3105A109 /* ContainerBrowserLogic.swift */,
 				3105A110 /* FileReplacementService.swift */,
@@ -408,9 +426,9 @@
 			productType = "com.apple.product-type.application";
 		};
 
-		TRXTAR01 /* TororoxTests */ = {
+		TRXTAR01 /* TotoroxTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = TRXCFG00 /* Build configuration list for PBXNativeTarget "TororoxTests" */;
+			buildConfigurationList = TRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */;
 			buildPhases = (
 				TRXPHS01 /* Sources */,
 				TRXPHS02 /* Frameworks */,
@@ -421,9 +439,9 @@
 			dependencies = (
 				TRXDEP01 /* PBXTargetDependency */,
 			);
-			name = TororoxTests;
-			productName = TororoxTests;
-			productReference = TRXTST00 /* TororoxTests.xctest */;
+			name = TotoroxTests;
+			productName = TotoroxTests;
+			productReference = TRXTST00 /* TotoroxTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -452,6 +470,7 @@
 			projectRoot = "";
 			targets = (
 				3105A500,
+				TRXTAR01,
 			);
 		};
 /* End PBXProject section */
@@ -497,6 +516,12 @@
 				TRXBLD04 /* DirectorySizeService.swift in Sources */,
 				TRXBLD05 /* AppContainerScanner.swift in Sources */,
 				TRXBLD06 /* AppNavigationCoordinator.swift in Sources */,
+				TRXBLD07 /* FolderExplorerView.swift in Sources */,
+				TRXBLD08 /* OverwriteFileView.swift in Sources */,
+				TRXBLD09 /* PatchConverterView.swift in Sources */,
+				TRXBLD10 /* ConflictResolutionModal.swift in Sources */,
+				TRXBLD11 /* TotoroxTabBar.swift in Sources */,
+				TRXBLD12 /* DocumentPickerWrapper.swift in Sources */,
 				3105A200, 3105A201, 3105A203, 3105A204,
 				3105A205, 3105A206, 3105A207, 3105A209,
 				3105A210, 3105A220, 3105A221, 3105A222, 3105A223,
@@ -580,7 +605,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TororoxTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -597,7 +622,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TororoxTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -616,7 +641,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Tororox/Info.plist;
+				INFOPLIST_FILE = Totorox/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Totorox;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -633,7 +658,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.apple.mobile.MobileHouseArrest";
 				PRODUCT_NAME = Totorox;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Tororox/Tororox-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Totorox/Totorox-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -649,7 +674,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Tororox/Info.plist;
+				INFOPLIST_FILE = Totorox/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Totorox;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -666,7 +691,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.apple.mobile.MobileHouseArrest";
 				PRODUCT_NAME = Totorox;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Tororox/Tororox-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Totorox/Totorox-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -792,7 +817,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		TRXCFG00 /* Build configuration list for PBXNativeTarget "TororoxTests" */ = {
+		TRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				TRXCFG01 /* Debug */,

@@ -10,7 +10,7 @@ final class FileIOEngineTests: XCTestCase {
         super.setUp()
         fileManager = FileManager.default
         tempDirectory = fileManager.temporaryDirectory
-            .appendingPathComponent("TororoxTest_\(UUID().uuidString)")
+            .appendingPathComponent("TotoroxTest_\(UUID().uuidString)")
         try? fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         engine = FileIOEngine(fileManager: fileManager)
     }

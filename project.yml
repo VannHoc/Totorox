@@ -16,7 +16,7 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
-      - path: Tororox
+      - path: Totorox
     settings:
       base:
         PRODUCT_NAME: Totorox
@@ -25,8 +25,8 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_TESTABILITY: YES
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/Tororox"
-        INFOPLIST_FILE: Tororox/Info.plist
+          - "$(SRCROOT)/Totorox"
+        INFOPLIST_FILE: Totorox/Info.plist
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Totorox
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -34,7 +34,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        SWIFT_OBJC_BRIDGING_HEADER: Tororox/Tororox-Bridging-Header.h
+        SWIFT_OBJC_BRIDGING_HEADER: Totorox/Totorox-Bridging-Header.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: "-lz"
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -44,22 +44,22 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/Frameworks"
-  TororoxTests:
+  TotoroxTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "16.0"
     sources:
-      - path: TororoxTests
+      - path: TotoroxTests
     dependencies:
       - target: Totorox
     settings:
       base:
-        PRODUCT_NAME: TororoxTests
-        PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.TororoxTests
+        PRODUCT_NAME: TotoroxTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.TotoroxTests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox"
         BUNDLE_LOADER: "$(TEST_HOST)"
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/Tororox"
+          - "$(SRCROOT)/Totorox"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS: "-lz"
@@ -73,15 +73,15 @@ schemes:
     test:
       config: Debug
       targets:
-        - TororoxTests
+        - TotoroxTests
     archive:
       config: Release
-  TororoxTests:
+  TotoroxTests:
     build:
       targets:
         Totorox: all
-        TororoxTests: all
+        TotoroxTests: all
     test:
       config: Debug
       targets:
-        - TororoxTests
+        - TotoroxTests
