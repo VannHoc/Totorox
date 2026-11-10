@@ -68,11 +68,11 @@ struct SettingsView: View {
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textSecondary)
 
-                        settingsRow(label: "MCM Container Access", value: "Sẵn sàng (Active)", icon: "checkmark.shield.fill", isAccent: true)
+                        settingsRow(label: "MCM Container Access", value: "Active", icon: "checkmark.shield.fill", isAccent: true)
                         Divider()
-                        settingsRow(label: "Quy tắc File I/O", value: "Chuẩn Windows (Không hash)", icon: "bolt.fill")
+                        settingsRow(label: "Quy tắc File I/O", value: "Chuẩn Windows", icon: "bolt.fill")
                         Divider()
-                        settingsRow(label: "Chế độ Giao diện", value: "Light Mode (Sáng tinh gọn)", icon: "sun.max.fill")
+                        settingsRow(label: "Chế độ Giao diện", value: "Light Mode", icon: "sun.max.fill")
                     }
                     .totoroxCard()
 
@@ -130,50 +130,26 @@ struct SettingsView: View {
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textSecondary)
 
-                        if let founderURL = URL(string: "https://github.com/VannHoc") {
-                            Link(destination: founderURL) {
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("VannHoc")
-                                            .font(.system(size: 15, weight: .bold))
-                                            .foregroundStyle(TotoroxTheme.textPrimary)
-                                        Text("Founder & Lead Developer")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right")
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                }
-                            }
-                        }
+                        // Link 1: Tác giả
+                        TotoroxLinkRow(
+                            urlString: "https://github.com/VannHoc",
+                            title: "VannHoc",
+                            subtitle: "Founder & Lead Developer"
+                        )
 
                         Divider()
 
-                        // 2. Link Telegram 
-                        if let telegramURL = URL(string: "https://t.me/DucThaiAOV") {
-                            Link(destination: telegramURL) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "paperplane.fill")
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                        .frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Telegram đối tác")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(TotoroxTheme.textPrimary)
-                                        Text("Mod IOS")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                }
-                            }
-                        }
+                        // Link 2: Đối tác Telegram
+                        TotoroxLinkRow(
+                            urlString: "https://t.me/DucThaiAOV",
+                            title: "Telegram đối tác",
+                            subtitle: "Mod IOS",
+                            icon: "paperplane.fill"
+                        )
+
                         Divider()
 
+                        // Dòng bản quyền
                         Text("@2026 Totorox. Được phát triển bởi VannHoc.")
                             .font(.system(size: 11))
                             .foregroundStyle(TotoroxTheme.textSecondary)
@@ -242,6 +218,40 @@ struct SettingsView: View {
             ContainerMetadataCache.shared.clear()
             await MainActor.run {
                 self.cacheClearedMessage = true
+            }
+        }
+    }
+}
+
+struct TotoroxLinkRow: View {
+    var urlString: String
+    var title: String
+    var subtitle: String
+    var icon: String? = nil // Thích thì truyền icon, không thì thôi
+    
+    var body: some View {
+        if let validURL = URL(string: urlString) {
+            Link(destination: validURL) {
+                HStack(spacing: 12) {
+                    if let iconName = icon {
+                        Image(systemName: iconName)
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .frame(width: 20)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                }
             }
         }
     }
