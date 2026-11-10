@@ -6,20 +6,30 @@ struct ClipboardItem {
     let isCut: Bool
 }
 
+enum FolderSortOption: String, CaseIterable, Identifiable {
+    case nameAsc = "Tên (A → Z)"
+    case nameDesc = "Tên (Z → A)"
+    case userAppsFirst = "Ứng dụng ngoài trước"
+    case dateDesc = "Ngày sửa đổi (Mới nhất)"
+
+    var id: String { rawValue }
+}
+
 struct FolderExplorerView: View {
     @State private var currentURL: URL
     @State private var breadcrumbs: [URL] = []
     @State private var entries: [FileEntry] = []
     @State private var searchText: String = ""
+    @State private var sortOption: FolderSortOption = .nameAsc
     @State private var isLoading: Bool = false
-    
+
     // Clipboard state
     @State private var clipboardItem: ClipboardItem? = nil
-    
-    // Scroll restoration & indicators
+
+    // Scroll restoration & indicators (keyed by canonical directory path)
     @State private var savedScrollItemID: [String: String] = [:]
     @State private var pendingScrollToID: String? = nil
-    
+
     // Dialogs & Modals
     @State private var showNewFolderDialog = false
     @State private var newFolderName: String = ""
@@ -31,11 +41,11 @@ struct FolderExplorerView: View {
     @State private var showShareSheet = false
     @State private var shareURL: URL? = nil
     @State private var showImportPicker = false
-    
+
     // Inspector & Archive Extraction
     @State private var inspectingEntry: FileEntry? = nil
     @State private var selectedArchiveForExtraction: FileEntry? = nil
-    
+
     // Conflict & Outcome modals
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: FileIOResultWrapper? = nil
@@ -49,7 +59,6 @@ struct FolderExplorerView: View {
         if let initial = initialURL {
             baseDir = initial
         } else {
-            // Default to app documents or containers directory
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
             baseDir = docs
         }
@@ -61,21 +70,21 @@ struct FolderExplorerView: View {
             // Top Action & Breadcrumb Header
             VStack(spacing: 8) {
                 // Top controls
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     // Backward Button
                     Button {
                         if canGoBack {
-                            let parent = currentURL.deletingLastPathComponent()
-                            navigateTo(parent)
+                            navigateBack()
                         }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.system(size: 13, weight: .bold))
                             Text("Lùi")
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                         }
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(canGoBack ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -97,24 +106,42 @@ struct FolderExplorerView: View {
                             navigateTo(FileManager.default.temporaryDirectory)
                         }
                     } label: {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 5) {
                             Image(systemName: "folder.badge.gearshape")
+                                .font(.system(size: 13))
                                 .foregroundStyle(TotoroxTheme.mintAccent)
                             Text("Vị trí nhanh")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .lineLimit(1)
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 10))
+                                .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                         }
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(TotoroxTheme.searchBackground)
                         .clipShape(Capsule())
                     }
 
-                    Spacer()
+                    Spacer(minLength: 4)
+
+                    // Sort Menu Button
+                    Menu {
+                        Picker("Sắp xếp", selection: $sortOption) {
+                            ForEach(FolderSortOption.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(sortOption == .nameAsc ? TotoroxTheme.textPrimary : TotoroxTheme.mintAccent)
+                            .frame(width: 34, height: 34)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(Circle())
+                    }
 
                     // New Folder Button
                     Button {
@@ -122,9 +149,9 @@ struct FolderExplorerView: View {
                         showNewFolderDialog = true
                     } label: {
                         Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 34, height: 34)
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(Circle())
                     }
@@ -134,9 +161,9 @@ struct FolderExplorerView: View {
                         showImportPicker = true
                     } label: {
                         Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 34, height: 34)
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(Circle())
                     }
@@ -146,14 +173,14 @@ struct FolderExplorerView: View {
                         loadCurrentDirectory(forceRefresh: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 34, height: 34)
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(Circle())
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
                 .padding(.top, 4)
 
                 // Breadcrumb Navigation Bar
@@ -172,7 +199,7 @@ struct FolderExplorerView: View {
                                         Text(breadcrumbTitle(for: crumb))
                                             .font(.system(size: 12, weight: index == breadcrumbs.count - 1 ? .bold : .medium))
                                             .lineLimit(1)
-                                            .truncationMode(.middle)
+                                            .truncationMode(.tail)
                                     }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
@@ -190,7 +217,7 @@ struct FolderExplorerView: View {
                                 }
                             }
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 14)
                     }
                     .onChange(of: breadcrumbs) { newCrumbs in
                         if !newCrumbs.isEmpty {
@@ -207,17 +234,23 @@ struct FolderExplorerView: View {
                 }
 
                 // Filter search
-                TotoroxSearchBar(text: $searchText, placeholder: "Tìm kiếm trong thư mục này...")
+                TotoroxSearchBar(
+                    text: $searchText,
+                    placeholder: ContainerMetadataCache.isApplicationContainersRoot(currentURL.path)
+                        ? "Tìm ứng dụng hoặc Bundle ID..."
+                        : "Tìm kiếm trong thư mục này..."
+                )
             }
             .padding(.bottom, 8)
             .background(TotoroxTheme.cardBackground)
             .shadow(color: Color.black.opacity(0.02), radius: 4, x: 0, y: 2)
 
-            // Content List
+            // Content List (ScrollView + LazyVStack with stable IDs for 60-120fps)
             ScrollViewReader { scrollProxy in
                 ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 10) {
-                        if filteredEntries.isEmpty {
+                    LazyVStack(spacing: 8) {
+                        let visibleEntries = displayedEntries
+                        if visibleEntries.isEmpty {
                             VStack(spacing: 12) {
                                 if isLoading {
                                     ProgressView()
@@ -230,7 +263,7 @@ struct FolderExplorerView: View {
                                     Image(systemName: "folder")
                                         .font(.system(size: 44))
                                         .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
-                                    Text("Thư mục trống hoặc không có quyền đọc")
+                                    Text(searchText.isEmpty ? "Thư mục trống hoặc không có quyền đọc" : "Không tìm thấy mục phù hợp")
                                         .font(.system(size: 14))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
@@ -238,35 +271,30 @@ struct FolderExplorerView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
                         } else {
-                            ForEach(filteredEntries) { entry in
+                            ForEach(visibleEntries, id: \.id) { entry in
                                 fileEntryCard(entry)
-                                    .id(entry.path)
+                                    .id(entry.id)
                             }
 
-                            if !filteredEntries.isEmpty {
-                                let fileCount = filteredEntries.filter { !$0.isDirectory }.count
-                                let dirCount = filteredEntries.filter { $0.isDirectory }.count
-                                Text("\(filteredEntries.count) mục (\(fileCount) tệp, \(dirCount) thư mục)")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .padding(.vertical, 14)
-                            }
+                            let fileCount = visibleEntries.filter { !$0.isDirectory }.count
+                            let dirCount = visibleEntries.filter { $0.isDirectory }.count
+                            Text("\(visibleEntries.count) mục (\(fileCount) tệp, \(dirCount) thư mục)")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 14)
                         }
                     }
-                    .padding(16)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
                     .padding(.bottom, clipboardItem != nil ? 80 : 20)
                 }
                 .scrollIndicators(.visible)
+                .onChange(of: currentURL) { _ in
+                    restoreScrollIfNeeded(using: scrollProxy)
+                }
                 .onChange(of: entries) { _ in
-                    if let targetID = pendingScrollToID {
-                        pendingScrollToID = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                scrollProxy.scrollTo(targetID, anchor: .center)
-                            }
-                        }
-                    }
+                    restoreScrollIfNeeded(using: scrollProxy)
                 }
                 .safeAreaInset(edge: .bottom) {
                     Color.clear.frame(height: 80)
@@ -281,16 +309,12 @@ struct FolderExplorerView: View {
                 .onEnded { value in
                     if value.startLocation.x < 60 && value.translation.width > 80 && abs(value.translation.height) < 60 {
                         if canGoBack {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                let parent = currentURL.deletingLastPathComponent()
-                                navigateTo(parent)
-                            }
+                            navigateBack()
                         }
                     }
                 }
         )
         .overlay(alignment: .bottom) {
-            // Floating Clipboard Bar
             if let clip = clipboardItem {
                 floatingClipboardBar(clip)
             }
@@ -298,6 +322,15 @@ struct FolderExplorerView: View {
         .onAppear {
             rebuildBreadcrumbs()
             loadCurrentDirectory()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .totoroxContainersDidUpdate)) { _ in
+            guard ContainerMetadataCache.isApplicationContainersRoot(currentURL.path) else { return }
+            if let updated = ContainerMetadataCache.shared.cachedList(for: currentURL.path),
+               !updated.isEmpty,
+               updated.count != entries.count {
+                self.entries = updated
+                self.isLoading = false
+            }
         }
         .onReceive(AppNavigationCoordinator.shared.$folderExplorerTargetURL) { targetURL in
             if let url = targetURL {
@@ -380,12 +413,18 @@ struct FolderExplorerView: View {
         }
     }
 
-    // MARK: - File & Folder Card View
+    // MARK: - File & Folder Card View (Zero Main Thread I/O, Clean 3105 Layout, No UDID)
     private func fileEntryCard(_ entry: FileEntry) -> some View {
         Button {
             if entry.isDirectory {
-                savedScrollItemID[currentURL.path] = entry.path
-                let nextURL = currentURL.appendingPathComponent(entry.name)
+                let canonCurrent = ContainerMetadataCache.canonicalPath(currentURL.path)
+                savedScrollItemID[canonCurrent] = entry.id
+                let nextURL: URL
+                if entry.isAppContainer {
+                    nextURL = URL(fileURLWithPath: entry.path)
+                } else {
+                    nextURL = currentURL.appendingPathComponent(entry.name)
+                }
                 navigateTo(nextURL)
             } else {
                 let lower = entry.name.lowercased()
@@ -395,80 +434,39 @@ struct FolderExplorerView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                // Icon: Uniform default icon (all folders identical mint squircle, matching original design)
+                // Uniform lightweight vector icon for 120fps scrolling
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(iconBackgroundColor(for: entry))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
 
                     Image(systemName: iconName(for: entry))
-                        .font(.system(size: 20))
+                        .font(.system(size: 18))
                         .foregroundStyle(iconForegroundColor(for: entry))
                 }
 
-                // Info: Line 1 (Name in com.... format) & Line 2 (Metadata)
-                VStack(alignment: .leading, spacing: 3) {
-                    // Line 1: Primary Title (appName if available, else bundleID, else UUID name)
-                    let resolvedBID = entry.bundleID ?? ContainerStore.bundleID(forUUID: entry.name)
-                    let titleText: String = {
-                        if entry.isAppContainer {
-                            if let appName = entry.appName, !appName.isEmpty && appName != resolvedBID {
-                                return appName
-                            }
-                            if let bid = resolvedBID, !bid.isEmpty {
-                                return bid
-                            }
-                            return entry.name
-                        }
-                        return entry.name
-                    }()
-
-                    Text(titleText)
-                        .font(.system(size: 15, weight: .bold))
+                // Text Column: Full folder/app title + Bundle ID (no UDID or raw path clutter)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.displayTitle)
+                        .font(.system(size: 14.5, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
+                        .minimumScaleFactor(0.82)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     if entry.isAppContainer {
-                        VStack(alignment: .leading, spacing: 2) {
-                            // Line 2: Bundle ID (if Line 1 is appName)
-                            if let appName = entry.appName, let bid = resolvedBID,
-                               !appName.isEmpty && !bid.isEmpty && appName != bid {
-                                Text(bid)
-                                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .lineLimit(1)
-                            }
-                            
-                            // Line 3: UDID: <UUID>, [X mục], và Data: <Đường dẫn>
-                            HStack(spacing: 6) {
-                                if let shortId = entry.shortUUID {
-                                    Text("UDID: \(shortId)")
-                                        .font(.system(size: 9.5, design: .monospaced))
-                                        .foregroundStyle(TotoroxTheme.textSecondary)
-                                        .lineLimit(1)
-                                }
-                                if let count = entry.childCount {
-                                    Text("\(count) mục")
-                                        .font(.system(size: 9.5, weight: .semibold))
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                        .clipShape(Capsule())
-                                        .lineLimit(1)
-                                }
-                                Text("Data: \(entry.path)")
-                                    .font(.system(size: 9.5, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.85))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let bid = entry.bundleID, !bid.isEmpty {
+                            Text(bid)
+                                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .minimumScaleFactor(0.85)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } else {
-                        // Regular metadata HStack
+                        // Regular folder/file metadata HStack
                         HStack(spacing: 6) {
                             if entry.isDirectory {
                                 HStack(spacing: 4) {
@@ -528,145 +526,98 @@ struct FolderExplorerView: View {
                     inspectingEntry = entry
                 } label: {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 18))
+                        .font(.system(size: 17))
                         .foregroundStyle(TotoroxTheme.mintAccent)
-                        .frame(width: 30, height: 32)
+                        .frame(width: 26, height: 30)
                 }
                 .buttonStyle(.plain)
 
                 // Context Menu trigger
                 Menu {
-                    Button {
-                        inspectingEntry = entry
-                    } label: {
-                        Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
-                    }
-
-                    let lower = entry.name.lowercased()
-                    if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
-                        Divider()
-                        Button {
-                            extractArchive(entry: entry, intoNewFolder: false)
-                        } label: {
-                            Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
-                        }
-                        Button {
-                            extractArchive(entry: entry, intoNewFolder: true)
-                        } label: {
-                            Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
-                        }
-                    }
-
-                    Divider()
-
-                    Button {
-                        let itemURL = currentURL.appendingPathComponent(entry.name)
-                        clipboardItem = ClipboardItem(url: itemURL, isCut: false)
-                    } label: {
-                        Label("Sao chép (Copy)", systemImage: "doc.on.doc")
-                    }
-
-                    Button {
-                        let itemURL = currentURL.appendingPathComponent(entry.name)
-                        clipboardItem = ClipboardItem(url: itemURL, isCut: true)
-                    } label: {
-                        Label("Cắt (Cut)", systemImage: "scissors")
-                    }
-
-                    Button {
-                        itemToRename = entry
-                        newRenameName = entry.name
-                        showRenameDialog = true
-                    } label: {
-                        Label("Đổi tên", systemImage: "pencil")
-                    }
-
-                    Button {
-                        shareURL = currentURL.appendingPathComponent(entry.name)
-                        showShareSheet = true
-                    } label: {
-                        Label("Chia sẻ", systemImage: "square.and.arrow.up")
-                    }
-
-                    Divider()
-
-                    Button(role: .destructive) {
-                        itemToDelete = entry
-                        showDeleteConfirmation = true
-                    } label: {
-                        Label("Xóa", systemImage: "trash")
-                    }
+                    entryMenuItems(for: entry)
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textSecondary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 26, height: 30)
                 }
             }
-            .totoroxCard()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(TotoroxTheme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(TotoroxTheme.borderSubtle, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button {
-                inspectingEntry = entry
-            } label: {
-                Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
-            }
+            entryMenuItems(for: entry)
+        }
+    }
 
-            let lower = entry.name.lowercased()
-            if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
-                Divider()
-                Button {
-                    extractArchive(entry: entry, intoNewFolder: false)
-                } label: {
-                    Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
-                }
-                Button {
-                    extractArchive(entry: entry, intoNewFolder: true)
-                } label: {
-                    Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
-                }
-            }
+    @ViewBuilder
+    private func entryMenuItems(for entry: FileEntry) -> some View {
+        Button {
+            inspectingEntry = entry
+        } label: {
+            Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
+        }
 
+        let lower = entry.name.lowercased()
+        if lower.hasSuffix(".zip") || lower.hasSuffix(".3105") {
             Divider()
-
             Button {
-                let itemURL = currentURL.appendingPathComponent(entry.name)
-                clipboardItem = ClipboardItem(url: itemURL, isCut: false)
+                extractArchive(entry: entry, intoNewFolder: false)
             } label: {
-                Label("Sao chép (Copy)", systemImage: "doc.on.doc")
+                Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
             }
-
             Button {
-                let itemURL = currentURL.appendingPathComponent(entry.name)
-                clipboardItem = ClipboardItem(url: itemURL, isCut: true)
+                extractArchive(entry: entry, intoNewFolder: true)
             } label: {
-                Label("Cắt (Cut)", systemImage: "scissors")
+                Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
             }
+        }
 
-            Button {
-                itemToRename = entry
-                newRenameName = entry.name
-                showRenameDialog = true
-            } label: {
-                Label("Đổi tên", systemImage: "pencil")
-            }
+        Divider()
 
-            Button {
-                shareURL = currentURL.appendingPathComponent(entry.name)
-                showShareSheet = true
-            } label: {
-                Label("Chia sẻ", systemImage: "square.and.arrow.up")
-            }
+        Button {
+            let itemURL = URL(fileURLWithPath: entry.path)
+            clipboardItem = ClipboardItem(url: itemURL, isCut: false)
+        } label: {
+            Label("Sao chép (Copy)", systemImage: "doc.on.doc")
+        }
 
-            Divider()
+        Button {
+            let itemURL = URL(fileURLWithPath: entry.path)
+            clipboardItem = ClipboardItem(url: itemURL, isCut: true)
+        } label: {
+            Label("Cắt (Cut)", systemImage: "scissors")
+        }
 
-            Button(role: .destructive) {
-                itemToDelete = entry
-                showDeleteConfirmation = true
-            } label: {
-                Label("Xóa", systemImage: "trash")
-            }
+        Button {
+            itemToRename = entry
+            newRenameName = entry.name
+            showRenameDialog = true
+        } label: {
+            Label("Đổi tên", systemImage: "pencil")
+        }
+
+        Button {
+            shareURL = URL(fileURLWithPath: entry.path)
+            showShareSheet = true
+        } label: {
+            Label("Chia sẻ", systemImage: "square.and.arrow.up")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            itemToDelete = entry
+            showDeleteConfirmation = true
+        } label: {
+            Label("Xóa", systemImage: "trash")
         }
     }
 
@@ -689,7 +640,6 @@ struct FolderExplorerView: View {
 
             Spacer()
 
-            // Paste button
             Button {
                 executePasteAction(clip)
             } label: {
@@ -702,7 +652,6 @@ struct FolderExplorerView: View {
                     .clipShape(Capsule())
             }
 
-            // Cancel button
             Button {
                 clipboardItem = nil
             } label: {
@@ -720,28 +669,104 @@ struct FolderExplorerView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - Navigation & Loading
-    private var filteredEntries: [FileEntry] {
-        if searchText.isEmpty { return entries }
-        return entries.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    // MARK: - Search & Sort Filtering
+    private var displayedEntries: [FileEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filtered: [FileEntry]
+        if query.isEmpty {
+            filtered = entries
+        } else {
+            filtered = entries.filter { entry in
+                if entry.displayTitle.localizedCaseInsensitiveContains(query) { return true }
+                if let bid = entry.bundleID, bid.localizedCaseInsensitiveContains(query) { return true }
+                if let appName = entry.appName, appName.localizedCaseInsensitiveContains(query) { return true }
+                if !entry.isAppContainer && entry.name.localizedCaseInsensitiveContains(query) { return true }
+                return false
+            }
+        }
+
+        switch sortOption {
+        case .nameAsc:
+            return filtered.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                let cmp = lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return (lhs.bundleID ?? lhs.name).localizedCaseInsensitiveCompare(rhs.bundleID ?? rhs.name) == .orderedAscending
+            }
+        case .nameDesc:
+            return filtered.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                let cmp = lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle)
+                if cmp != .orderedSame { return cmp == .orderedDescending }
+                return (lhs.bundleID ?? lhs.name).localizedCaseInsensitiveCompare(rhs.bundleID ?? rhs.name) == .orderedDescending
+            }
+        case .userAppsFirst:
+            return filtered.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                if lhs.isAppContainer || rhs.isAppContainer {
+                    let lhsUser = !(lhs.bundleID ?? "").hasPrefix("com.apple.")
+                    let rhsUser = !(rhs.bundleID ?? "").hasPrefix("com.apple.")
+                    if lhsUser != rhsUser { return lhsUser }
+                }
+                let cmp = lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return (lhs.bundleID ?? lhs.name).localizedCaseInsensitiveCompare(rhs.bundleID ?? rhs.name) == .orderedAscending
+            }
+        case .dateDesc:
+            return filtered.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                let d1 = lhs.modifiedAt ?? .distantPast
+                let d2 = rhs.modifiedAt ?? .distantPast
+                if d1 != d2 { return d1 > d2 }
+                return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+            }
+        }
+    }
+
+    // MARK: - Navigation & 0ms Cache-Backed Loading
+    private func navigateBack() {
+        let childURL = currentURL
+        let parent = childURL.deletingLastPathComponent()
+        let canonParent = ContainerMetadataCache.canonicalPath(parent.path)
+
+        // Ensure savedScrollItemID points to the folder we are backing out of
+        if savedScrollItemID[canonParent] == nil {
+            let childName = childURL.lastPathComponent
+            if let cachedParentList = ContainerMetadataCache.shared.cachedList(for: parent.path),
+               let matchingEntry = cachedParentList.first(where: {
+                   $0.name.caseInsensitiveCompare(childName) == .orderedSame ||
+                   ContainerMetadataCache.canonicalPath($0.path) == ContainerMetadataCache.canonicalPath(childURL.path)
+               }) {
+                savedScrollItemID[canonParent] = matchingEntry.id
+            }
+        }
+
+        navigateTo(parent)
     }
 
     private func navigateTo(_ url: URL) {
-        let destPath = url.path
-        if let savedID = savedScrollItemID[destPath] {
-            pendingScrollToID = savedID
-        } else {
-            pendingScrollToID = nil
-        }
+        let canonDest = ContainerMetadataCache.canonicalPath(url.path)
+        searchText = ""
+        pendingScrollToID = savedScrollItemID[canonDest]
         currentURL = url
         rebuildBreadcrumbs()
-        loadCurrentDirectory()
+        loadCurrentDirectory(forceRefresh: false)
+    }
+
+    private func restoreScrollIfNeeded(using scrollProxy: ScrollViewProxy) {
+        guard let targetID = pendingScrollToID else { return }
+        guard entries.contains(where: { $0.id == targetID }) else { return }
+        pendingScrollToID = nil
+        DispatchQueue.main.async {
+            scrollProxy.scrollTo(targetID, anchor: .center)
+        }
     }
 
     private func rebuildBreadcrumbs() {
         var crumbs: [URL] = []
-        var curr = currentURL.standardizedFileURL
-        while curr.path != "/" {
+        let canonical = ContainerMetadataCache.canonicalPath(currentURL.path)
+        var curr = URL(fileURLWithPath: canonical)
+        while curr.path != "/" && !curr.path.isEmpty {
             crumbs.insert(curr, at: 0)
             curr = curr.deletingLastPathComponent()
         }
@@ -753,14 +778,14 @@ struct FolderExplorerView: View {
         let name = crumb.lastPathComponent
         if name.isEmpty || name == "/" { return "Root" }
         if UUID(uuidString: name) != nil {
-            if let bid = ContainerStore.bundleID(forUUID: name), !bid.isEmpty {
+            if let bid = ContainerMetadataCache.shared.bundleID(forUUID: name), !bid.isEmpty {
                 return bid
             }
             if let app = AppContainerScanner.shared.getCachedInfo(forUDID: name), !app.bundleID.isEmpty {
                 return app.bundleID
             }
-            if name.count > 16 {
-                return "\(name.prefix(8))...\(name.suffix(4))"
+            if let bid = ContainerStore.bundleID(forUUID: name), !bid.isEmpty {
+                return bid
             }
         }
         return name
@@ -768,29 +793,87 @@ struct FolderExplorerView: View {
 
     private func loadCurrentDirectory(forceRefresh: Bool = false) {
         let path = currentURL.path
-        if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: path) {
+        let canonPath = ContainerMetadataCache.canonicalPath(path)
+        let isAppContainersRoot = ContainerMetadataCache.isApplicationContainersRoot(canonPath)
+
+        // 0ms Instant Cache Hit!
+        if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: canonPath), !cached.isEmpty {
             self.entries = cached
             self.isLoading = false
-            if let targetID = self.pendingScrollToID {
-                self.pendingScrollToID = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
-                    // Triggers change handler or direct scrollTo if needed
+
+            // When returning to /var/mobile/Containers/Data/Application from cache,
+            // do NOT re-scan the filesystem on every back navigation!
+            if isAppContainersRoot {
+                AppContainerScanner.shared.prewarmOnLaunch()
+                return
+            }
+
+            // For normal folders, silently verify in background and only update if changed
+            Task.detached(priority: .utility) {
+                _ = ContainerStore.ensureContainerAccess(for: path)
+                let loaded = ContainerStore.listFiles(at: path)
+                ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
+                if loaded != cached {
+                    await MainActor.run {
+                        if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
+                            self.entries = loaded
+                        }
+                    }
                 }
             }
-        } else {
-            self.isLoading = true
+            return
         }
 
-        Task.detached(priority: .userInitiated) {
-            _ = ContainerStore.ensureContainerAccess(for: path)
-            _ = ContainerStore.grantContainerAccess(path)
+        self.isLoading = true
 
+        Task.detached(priority: .userInitiated) {
+            if isAppContainersRoot {
+                if forceRefresh {
+                    _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: true)
+                } else {
+                    self.loadApplicationContainersNonBlocking(for: canonPath)
+                    return
+                }
+                let built = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+                await MainActor.run {
+                    if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
+                        self.entries = built
+                        self.isLoading = false
+                    }
+                }
+                return
+            }
+
+            _ = ContainerStore.ensureContainerAccess(for: path)
             let loaded = ContainerStore.listFiles(at: path)
-            ContainerMetadataCache.shared.storeList(loaded, for: path)
+            ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
 
             await MainActor.run {
-                if self.currentURL.path == path {
+                if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
                     self.entries = loaded
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    private nonisolated func loadApplicationContainersNonBlocking(for canonPath: String) {
+        AppContainerScanner.shared.performFastPassSync()
+        let initial = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+        Task { @MainActor in
+            if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
+                if !initial.isEmpty {
+                    self.entries = initial
+                    self.isLoading = false
+                }
+            }
+        }
+        Task.detached(priority: .userInitiated) {
+            _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
+            let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+            await MainActor.run {
+                if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
+                    self.entries = finalEntries
                     self.isLoading = false
                 }
             }
@@ -816,8 +899,8 @@ struct FolderExplorerView: View {
         let newName = newRenameName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let item = itemToRename, !newName.isEmpty else { return }
         let baseDir = currentURL
-        let src = baseDir.appendingPathComponent(item.name)
-        let dst = baseDir.appendingPathComponent(newName)
+        let src = URL(fileURLWithPath: item.path)
+        let dst = src.deletingLastPathComponent().appendingPathComponent(newName)
         Task.detached(priority: .userInitiated) {
             try? await FileIOEngine.shared.renameItem(at: src, to: dst)
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
@@ -830,7 +913,7 @@ struct FolderExplorerView: View {
     private func applyDelete() {
         guard let item = itemToDelete else { return }
         let baseDir = currentURL
-        let src = baseDir.appendingPathComponent(item.name)
+        let src = URL(fileURLWithPath: item.path)
         Task.detached(priority: .userInitiated) {
             try? await FileIOEngine.shared.deleteItem(at: src)
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
@@ -1053,7 +1136,7 @@ struct FileInfoInspectorSheet: View {
                             }
                         }
 
-                        Text(entry.appName ?? entry.name)
+                        Text(entry.displayTitle)
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textPrimary)
                             .multilineTextAlignment(.center)

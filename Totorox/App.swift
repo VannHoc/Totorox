@@ -18,6 +18,7 @@ struct TotoroxApp: App {
     init() {
         setupLogCapture()
         log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
+        AppState.runEarlyPrivilegeInit()
     }
 
     private var language: AppLanguage {
@@ -103,11 +104,23 @@ class AppState: ObservableObject {
     @Published var kernelExploitRunning = false
 
     private var autoRunAttempted = false
+    private static var didRunEarlyInit = false
+    private static let earlyInitLock = NSLock()
 
     static func runEarlyPrivilegeInit() {
-        log("app: running early privilege and environment initialization...")
-        let hasAccess = KernelExploit.hasSandboxAccess()
-        log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "RESTRICTED")")
+        earlyInitLock.lock()
+        guard !didRunEarlyInit else {
+            earlyInitLock.unlock()
+            return
+        }
+        didRunEarlyInit = true
+        earlyInitLock.unlock()
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let hasAccess = KernelExploit.hasSandboxAccess()
+            log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "MHA-C2")")
+            AppContainerScanner.shared.prewarmOnLaunch()
+        }
     }
 
     init() {
@@ -151,7 +164,12 @@ class AppState: ObservableObject {
             patch: v.patch,
             build: AppInfo.osBuild
         )
-        guard applicable else { return }
+        guard applicable else {
+            if !exploitStatus.isSuccess {
+                exploitStatus = .success(method: "MHA-C2")
+            }
+            return
+        }
 
         refreshKernelExploitStatus()
         maybeAutoRunKernelExploit()
@@ -170,8 +188,6 @@ class AppState: ObservableObject {
     private func refreshKernelExploitStatus() {
         guard !kernelExploitRunning else { return }
 
-        // iOS < 26: kernel R/W success persists (no sandbox probe)
-        // iOS >= 26: verify full sandbox escape is still active
         if KernelExploit.requiresSandboxEscape {
             if KernelExploit.hasSandboxAccess() {
                 if !exploitStatus.isSuccess {

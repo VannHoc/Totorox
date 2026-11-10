@@ -95,7 +95,7 @@ struct OverwriteFileView: View {
         }
         .task {
             if scanner.apps.isEmpty {
-                _ = await scanner.scanAllContainers(forceRefresh: false)
+                scanner.prewarmOnLaunch()
             }
         }
     }
@@ -617,28 +617,18 @@ struct OverwriteFileView: View {
                                     
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(app.appName)
-                                            .font(.system(size: 15, weight: .bold))
+                                            .font(.system(size: 14.5, weight: .bold))
                                             .foregroundStyle(TotoroxTheme.textPrimary)
                                             .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .minimumScaleFactor(0.82)
                                         
-                                        if app.appName != app.bundleID {
-                                            Text(app.bundleID)
-                                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                                .foregroundStyle(TotoroxTheme.mintAccent)
-                                                .lineLimit(1)
-                                        }
-                                        
-                                        HStack(spacing: 6) {
-                                            Text("UDID: \(app.shortUDID)")
-                                                .font(.system(size: 9.5, design: .monospaced))
-                                                .foregroundStyle(TotoroxTheme.textSecondary)
-                                                .lineLimit(1)
-                                            Text("Data: \(app.dataPath)")
-                                                .font(.system(size: 9.5, design: .monospaced))
-                                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.75))
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                        }
+                                        Text(app.bundleID)
+                                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(app.appName != app.bundleID ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .minimumScaleFactor(0.85)
                                     }
                                     
                                     Spacer()

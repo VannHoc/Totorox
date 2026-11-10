@@ -175,11 +175,13 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var statusMessage: String = ""
 
-    private let cacheLock = NSLock()
+    private let cacheLock = NSRecursiveLock()
     private var cacheByBundleID: [String: AppContainerInfo] = [:]
     private var cacheByUDID: [String: AppContainerInfo] = [:]
     private var _cachedAppsSnapshot: [AppContainerInfo] = []
-    private var hasScanned: Bool = false
+    private var hasCompletedFullScan: Bool = false
+    private var hasCompletedFastPass: Bool = false
+    private var activeScanTask: Task<[AppContainerInfo], Never>? = nil
 
     private init() {}
 
@@ -191,9 +193,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         guard let found = cacheByUDID[clean.uppercased()] ?? cacheByUDID[clean.lowercased()] ?? cacheByUDID[clean] else {
             return nil
         }
-        guard !found.bundleID.isEmpty,
-              UUID(uuidString: found.bundleID) == nil,
-              found.bundleID.caseInsensitiveCompare(clean) != .orderedSame else {
+        guard ContainerStore.isValidAppBundleID(found.bundleID, uuid: clean) else {
             return nil
         }
         return found
@@ -201,7 +201,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
     func getCachedInfo(forBundleID bundleID: String) -> AppContainerInfo? {
         let clean = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, UUID(uuidString: clean) == nil else { return nil }
+        guard ContainerStore.isValidAppBundleID(clean) else { return nil }
         cacheLock.lock()
         defer { cacheLock.unlock() }
         return cacheByBundleID[clean] ?? cacheByBundleID[clean.lowercased()]
@@ -213,10 +213,53 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         return _cachedAppsSnapshot
     }
 
+    @discardableResult
+    private func registerResolvedApp(
+        bundleID: String,
+        containerPath: String,
+        preferredName: String? = nil,
+        preferredBundlePath: String? = nil,
+        preferredIcon: UIImage? = nil,
+        bundleCatalog: [String: ApplicationBundleMetadata] = [:]
+    ) -> AppContainerInfo? {
+        let cleanBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canonicalPath = ContainerDiscoveryMerger.canonicalPath(containerPath)
+        let finalPath = canonicalPath.isEmpty ? containerPath : canonicalPath
+        guard !finalPath.isEmpty else { return nil }
+
+        let udid = (finalPath as NSString).lastPathComponent
+        guard ContainerStore.isValidAppBundleID(cleanBundleID, uuid: udid) else {
+            return nil
+        }
+
+        let proxyInfo = appInfoForBundleID(cleanBundleID) as? [String: Any] ?? [:]
+        let proxyName = proxyInfo["name"] as? String
+        let catalogMeta = bundleCatalog[cleanBundleID]
+
+        let resolvedName = AppDisplayNamePolicy.resolve(
+            bundleID: cleanBundleID,
+            candidates: [preferredName, catalogMeta?.displayName, proxyName]
+        )
+        let bPath = preferredBundlePath ?? (proxyInfo["bundlePath"] as? String)
+        let icon = preferredIcon
+            ?? (proxyInfo["icon"] as? UIImage)
+            ?? ContainerMetadataCache.shared.cachedIcon(for: cleanBundleID)
+            ?? iconForBundleID(cleanBundleID)
+
+        let info = AppContainerInfo(
+            appName: resolvedName,
+            bundleID: cleanBundleID,
+            udid: udid,
+            dataPath: finalPath,
+            bundlePath: bPath,
+            appIcon: icon
+        )
+        storeInCache(info)
+        return info
+    }
+
     private func storeInCache(_ app: AppContainerInfo) {
-        guard !app.bundleID.isEmpty,
-              UUID(uuidString: app.bundleID) == nil,
-              app.bundleID.caseInsensitiveCompare(app.udid) != .orderedSame else {
+        guard ContainerStore.isValidAppBundleID(app.bundleID, uuid: app.udid) else {
             return
         }
         cacheLock.lock()
@@ -244,28 +287,152 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func readScanSnapshot() -> (alreadyScanned: Bool, existing: [AppContainerInfo]) {
+    private func buildSortedSnapshotFromCache() -> [AppContainerInfo] {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        return (hasScanned && !_cachedAppsSnapshot.isEmpty, _cachedAppsSnapshot)
-    }
-
-    private func writeScanSnapshot(_ scanned: [AppContainerInfo]) {
-        cacheLock.lock()
-        _cachedAppsSnapshot = scanned
-        hasScanned = true
+        var uniqueByBundleID: [String: AppContainerInfo] = [:]
+        for (k, v) in cacheByBundleID where k == v.bundleID {
+            uniqueByBundleID[v.bundleID.lowercased()] = v
+        }
+        if uniqueByBundleID.isEmpty {
+            for v in cacheByBundleID.values {
+                uniqueByBundleID[v.bundleID.lowercased()] = v
+            }
+        }
+        let sorted = Array(uniqueByBundleID.values).sorted { a, b in
+            let aIsSystem = a.bundleID.hasPrefix("com.apple.")
+            let bIsSystem = b.bundleID.hasPrefix("com.apple.")
+            if aIsSystem != bIsSystem {
+                return !aIsSystem
+            }
+            let cmp = a.appName.localizedCaseInsensitiveCompare(b.appName)
+            if cmp != .orderedSame {
+                return cmp == .orderedAscending
+            }
+            return a.bundleID.localizedCaseInsensitiveCompare(b.bundleID) == .orderedAscending
+        }
+        _cachedAppsSnapshot = sorted
         cacheLock.unlock()
+        ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+        return sorted
     }
 
-    /// Scans all application containers on a background thread by parsing
-    /// `.com.apple.mobile_container_manager.metadata.plist` (`MCMMetadataIdentifier`)
-    /// directly in each container, combined with MCM & LaunchServices discovery.
-    func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
-        let snapshot = readScanSnapshot()
-        let alreadyScanned = snapshot.alreadyScanned
-        let existing = snapshot.existing
+    /// Starts a non-blocking background container scan if not already running or completed.
+    func prewarmOnLaunch() {
+        cacheLock.lock()
+        if hasCompletedFullScan || activeScanTask != nil {
+            cacheLock.unlock()
+            return
+        }
+        cacheLock.unlock()
+        Task.detached(priority: .userInitiated) {
+            _ = await self.scanAllContainers(forceRefresh: false)
+        }
+    }
 
-        if !forceRefresh && alreadyScanned {
+    /// Fast synchronous pass (<100ms) for immediate container resolution without running
+    /// 2,000,000-inode brute-force or 12 MB .csstore scans. Must be called from a background thread.
+    func performFastPassSync() {
+        cacheLock.lock()
+        if hasCompletedFastPass && !_cachedAppsSnapshot.isEmpty {
+            cacheLock.unlock()
+            return
+        }
+        hasCompletedFastPass = true
+        cacheLock.unlock()
+
+        // 1. Direct POSIX opendir of /var/mobile/Containers/Data/Application (if accessible without inode scan)
+        for root in ["/var/mobile/Containers/Data/Application", "/private/var/mobile/Containers/Data/Application"] {
+            if let dir = opendir(root) {
+                defer { closedir(dir) }
+                while let dp = readdir(dir) {
+                    let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                        String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+                    }
+                    guard UUID(uuidString: name) != nil else { continue }
+                    let full = (root as NSString).appendingPathComponent(name)
+                    if let meta = ContainerStore.readContainerMetadata(containerPath: full),
+                       ContainerStore.isValidAppBundleID(meta.bundleID, uuid: name) {
+                        _ = registerResolvedApp(
+                            bundleID: meta.bundleID,
+                            containerPath: full,
+                            preferredName: meta.displayName
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. MCM Class-2 Enumeration & Lease Activation
+        var mcmError: NSString? = nil
+        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmError)
+        for bundleID in mcmIDs where ContainerStore.isValidAppBundleID(bundleID) {
+            if getCachedInfo(forBundleID: bundleID) != nil { continue }
+            var actError: NSString? = nil
+            if let path = MCMActivateContainerPath(2, bundleID, false, &actError)
+                ?? MCMContainerPathForIdentifier(2, bundleID, false, &actError),
+               !path.isEmpty {
+                ContainerMetadataCache.shared.markBundleActivated(bundleID)
+                let meta = ContainerStore.readContainerMetadata(containerPath: path)
+                let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
+                    ? meta!.bundleID
+                    : bundleID
+                _ = registerResolvedApp(
+                    bundleID: actualBundleID,
+                    containerPath: path,
+                    preferredName: meta?.displayName
+                )
+            }
+        }
+
+        // 3. LaunchServices / MobileInstallation API
+        let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
+        for (bundleID, info) in lsInfo where ContainerStore.isValidAppBundleID(bundleID) {
+            if getCachedInfo(forBundleID: bundleID) != nil { continue }
+            var dataPath = info["container"] as? String ?? ""
+            if dataPath.isEmpty {
+                var lookupError: NSString?
+                if let mcmPath = MCMActivateContainerPath(2, bundleID, false, &lookupError)
+                    ?? MCMContainerPathForIdentifier(2, bundleID, false, &lookupError) {
+                    dataPath = mcmPath
+                    ContainerMetadataCache.shared.markBundleActivated(bundleID)
+                }
+            }
+            guard !dataPath.isEmpty else { continue }
+            let meta = ContainerStore.readContainerMetadata(containerPath: dataPath)
+            _ = registerResolvedApp(
+                bundleID: meta?.bundleID ?? bundleID,
+                containerPath: dataPath,
+                preferredName: meta?.displayName ?? (info["name"] as? String),
+                preferredBundlePath: info["bundlePath"] as? String,
+                preferredIcon: info["icon"] as? UIImage
+            )
+        }
+
+        // 4. Built-in Research / Common iOS App Identifiers via MCM
+        for candidateID in ContainerStore.researchAppIdentifiers where ContainerStore.isValidAppBundleID(candidateID) {
+            if getCachedInfo(forBundleID: candidateID) != nil { continue }
+            var actError: NSString? = nil
+            if let path = MCMActivateContainerPath(2, candidateID, false, &actError),
+               ContainerStore.isApplicationContainerPath(path) {
+                ContainerMetadataCache.shared.markBundleActivated(candidateID)
+                let meta = ContainerStore.readContainerMetadata(containerPath: path)
+                _ = registerResolvedApp(
+                    bundleID: meta?.bundleID ?? candidateID,
+                    containerPath: path,
+                    preferredName: meta?.displayName
+                )
+            }
+        }
+
+        _ = buildSortedSnapshotFromCache()
+    }
+
+    /// Scans all application containers on a background thread using a deduplicated two-stage pipeline.
+    func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
+        cacheLock.lock()
+        if !forceRefresh && hasCompletedFullScan && !_cachedAppsSnapshot.isEmpty {
+            let existing = _cachedAppsSnapshot
+            cacheLock.unlock()
             await MainActor.run {
                 if self.apps.isEmpty {
                     self.apps = existing
@@ -273,206 +440,77 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
             return existing
         }
-
-        await MainActor.run {
-            self.isLoading = true
-            self.statusMessage = "Đang quét danh sách ứng dụng..."
+        if !forceRefresh, let inFlight = activeScanTask {
+            cacheLock.unlock()
+            return await inFlight.value
         }
 
-        let scanned = await Task.detached(priority: .userInitiated) { [weak self] () -> [AppContainerInfo] in
-            var resultsByBundleID: [String: AppContainerInfo] = [:]
-            var resolvedUDIDs = Set<String>()
+        let task = Task.detached(priority: .userInitiated) { [weak self] () -> [AppContainerInfo] in
+            guard let self = self else { return [] }
 
-            let bundleCatalog = ContainerStore.applicationBundleMetadataCatalog()
-
-            func registerApp(
-                bundleID: String,
-                containerPath: String,
-                preferredName: String? = nil,
-                preferredBundlePath: String? = nil,
-                preferredIcon: UIImage? = nil
-            ) {
-                let cleanBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !cleanBundleID.isEmpty,
-                      UUID(uuidString: cleanBundleID) == nil,
-                      !cleanBundleID.hasPrefix("systemgroup.") else {
-                    return
-                }
-                let canonicalPath = ContainerDiscoveryMerger.canonicalPath(containerPath)
-                let finalPath = canonicalPath.isEmpty ? containerPath : canonicalPath
-                guard !finalPath.isEmpty else { return }
-
-                let udid = (finalPath as NSString).lastPathComponent
-                guard UUID(uuidString: udid) == nil || cleanBundleID.caseInsensitiveCompare(udid) != .orderedSame else {
-                    return
-                }
-
-                let proxyInfo = appInfoForBundleID(cleanBundleID) as? [String: Any] ?? [:]
-                let proxyName = proxyInfo["name"] as? String
-                let catalogMeta = bundleCatalog[cleanBundleID]
-
-                let resolvedName = AppDisplayNamePolicy.resolve(
-                    bundleID: cleanBundleID,
-                    candidates: [preferredName, catalogMeta?.displayName, proxyName]
-                )
-                let bPath = preferredBundlePath ?? (proxyInfo["bundlePath"] as? String)
-                let icon = preferredIcon
-                    ?? (proxyInfo["icon"] as? UIImage)
-                    ?? ContainerMetadataCache.shared.cachedIcon(for: cleanBundleID)
-                    ?? iconForBundleID(cleanBundleID)
-
-                let info = AppContainerInfo(
-                    appName: resolvedName,
-                    bundleID: cleanBundleID,
-                    udid: udid,
-                    dataPath: finalPath,
-                    bundlePath: bPath,
-                    appIcon: icon
-                )
-                resultsByBundleID[cleanBundleID] = info
-                if UUID(uuidString: udid) != nil {
-                    resolvedUDIDs.insert(udid.uppercased())
-                }
-                self?.storeInCache(info)
+            await MainActor.run {
+                self.isLoading = true
+                self.statusMessage = "Đang quét danh sách ứng dụng..."
             }
 
-            // 1. PRIMARY SOURCE: Direct Filesystem Scan of /var/mobile/Containers/Data/Application
-            // Parsing .com.apple.mobile_container_manager.metadata.plist (MCMMetadataIdentifier)
-            let containerRoots = [
-                "/var/mobile/Containers/Data/Application",
-                "/private/var/mobile/Containers/Data/Application"
-            ]
-            var discoveredContainerDirs: [String] = []
-            var seenDirs = Set<String>()
-
-            for root in containerRoots {
-                let grantedDirs = ContainerStore.enumerateDirectoriesWithTraversalGrant(path: root)
-                let dirs = grantedDirs.isEmpty ? ContainerStore.enumerateDirectories(path: root) : grantedDirs
-                for dir in dirs {
-                    let udid = (dir as NSString).lastPathComponent
-                    guard UUID(uuidString: udid) != nil else { continue }
-                    let key = udid.uppercased()
-                    if seenDirs.insert(key).inserted {
-                        discoveredContainerDirs.append(dir)
-                    }
+            // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX
+            self.performFastPassSync()
+            let stage1Snapshot = self.buildSortedSnapshotFromCache()
+            if !stage1Snapshot.isEmpty {
+                await MainActor.run {
+                    self.apps = stage1Snapshot
+                    NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
                 }
             }
 
-            var unresolvedContainerDirs: [String] = []
-            for dirPath in discoveredContainerDirs {
-                if let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
-                   !meta.bundleID.isEmpty,
-                   UUID(uuidString: meta.bundleID) == nil {
-                    registerApp(
-                        bundleID: meta.bundleID,
-                        containerPath: dirPath,
-                        preferredName: meta.displayName
-                    )
-                } else {
-                    unresolvedContainerDirs.append(dirPath)
-                }
-            }
-
-            // 2. SECONDARY SOURCE: MCM Class-2 Enumeration & Lease Activation
-            var mcmError: NSString? = nil
-            let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmError)
-            for bundleID in mcmIDs where !bundleID.isEmpty && UUID(uuidString: bundleID) == nil {
-                if resultsByBundleID[bundleID] != nil { continue }
-                var actError: NSString? = nil
-                if let path = MCMActivateContainerPath(2, bundleID, false, &actError)
-                    ?? MCMContainerPathForIdentifier(2, bundleID, false, &actError),
-                   !path.isEmpty {
-                    let meta = ContainerStore.readContainerMetadata(containerPath: path)
-                    let actualBundleID = (meta != nil && !meta!.bundleID.isEmpty && UUID(uuidString: meta!.bundleID) == nil)
-                        ? meta!.bundleID
-                        : bundleID
-                    registerApp(
-                        bundleID: actualBundleID,
-                        containerPath: path,
-                        preferredName: meta?.displayName
-                    )
-                }
-            }
-
-            // 3. TERTIARY SOURCE: LaunchServices / MobileInstallation API
-            let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
-            for (bundleID, info) in lsInfo where !bundleID.isEmpty && UUID(uuidString: bundleID) == nil {
-                if resultsByBundleID[bundleID] != nil { continue }
-                var dataPath = info["container"] as? String ?? ""
-                if dataPath.isEmpty {
-                    var lookupError: NSString?
-                    if let mcmPath = MCMActivateContainerPath(2, bundleID, false, &lookupError)
-                        ?? MCMContainerPathForIdentifier(2, bundleID, false, &lookupError) {
-                        dataPath = mcmPath
-                    }
-                }
-                guard !dataPath.isEmpty else { continue }
-                let meta = ContainerStore.readContainerMetadata(containerPath: dataPath)
-                registerApp(
-                    bundleID: meta?.bundleID ?? bundleID,
-                    containerPath: dataPath,
-                    preferredName: meta?.displayName ?? (info["name"] as? String),
-                    preferredBundlePath: info["bundlePath"] as? String,
-                    preferredIcon: info["icon"] as? UIImage
-                )
-            }
-
-            // 4. QUATERNARY SOURCE: LaunchServices Store (.csstore) + Bundle Catalog Candidates via MCM
+            // STAGE 2: Progressive MHA-C2 Discovery via LaunchServices Store (.csstore)
             let lsStoreCandidates = ContainerStore.launchServicesStoreIdentifiers()
-            var mhaCandidates: [String] = []
-            var seenCandidates = Set<String>()
-            for sourceList in [
-                lsStoreCandidates,
-                Array(lsInfo.keys),
-                mcmIDs,
-                Array(bundleCatalog.keys),
-                ContainerStore.researchAppIdentifiers
-            ] {
-                for id in sourceList {
-                    let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty, UUID(uuidString: trimmed) == nil else { continue }
-                    if seenCandidates.insert(trimmed).inserted {
-                        mhaCandidates.append(trimmed)
-                    }
-                }
-            }
-            for candidateID in mhaCandidates where resultsByBundleID[candidateID] == nil {
+            let prioritizedCandidates = MHAIdentifierCatalog.prioritizedCandidates(
+                from: [lsStoreCandidates, ContainerStore.researchAppIdentifiers]
+            )
+
+            var newlyResolvedInStage2 = 0
+            for candidateID in prioritizedCandidates {
+                guard ContainerStore.isValidAppBundleID(candidateID) else { continue }
+                if self.getCachedInfo(forBundleID: candidateID) != nil { continue }
+
                 var actError: NSString? = nil
                 if let path = MCMActivateContainerPath(2, candidateID, false, &actError),
                    ContainerStore.isApplicationContainerPath(path) {
+                    ContainerMetadataCache.shared.markBundleActivated(candidateID)
                     let meta = ContainerStore.readContainerMetadata(containerPath: path)
-                    registerApp(
-                        bundleID: meta?.bundleID ?? candidateID,
+                    let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
+                        ? meta!.bundleID
+                        : candidateID
+                    if self.registerResolvedApp(
+                        bundleID: actualBundleID,
                         containerPath: path,
                         preferredName: meta?.displayName
-                    )
+                    ) != nil {
+                        newlyResolvedInStage2 += 1
+                        if newlyResolvedInStage2.isMultiple(of: 30) {
+                            let partial = self.buildSortedSnapshotFromCache()
+                            await MainActor.run {
+                                self.apps = partial
+                                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
+                            }
+                        }
+                    }
                 }
             }
 
-            // 5. FINAL PASS: Re-check any unresolved container directories via metadata plist or content inference
+            // STAGE 3: Filesystem Container Discovery for any remaining UUID containers
+            let dirs = ContainerStore.enumerateDirectories(path: ContainerStore.appDataRoot)
             let lsSet = Set(lsStoreCandidates)
-            let knownInstalledApps = resultsByBundleID.values.map {
-                InstalledApp(
-                    bundleID: $0.bundleID,
-                    name: $0.appName,
-                    containerPath: $0.dataPath,
-                    version: "",
-                    icon: $0.appIcon
-                )
-            }
-            let knownByBundleID = Dictionary(
-                knownInstalledApps.map { ($0.bundleID, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-
-            for dirPath in unresolvedContainerDirs {
+            for dirPath in dirs {
                 let udid = (dirPath as NSString).lastPathComponent
-                if resolvedUDIDs.contains(udid.uppercased()) { continue }
+                guard UUID(uuidString: udid) != nil else { continue }
+                if self.getCachedInfo(forUDID: udid) != nil { continue }
+                if ContainerMetadataCache.shared.isUnresolved(uuid: udid) { continue }
 
                 if let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
-                   !meta.bundleID.isEmpty,
-                   UUID(uuidString: meta.bundleID) == nil {
-                    registerApp(
+                   ContainerStore.isValidAppBundleID(meta.bundleID, uuid: udid) {
+                    _ = self.registerResolvedApp(
                         bundleID: meta.bundleID,
                         containerPath: dirPath,
                         preferredName: meta.displayName
@@ -489,49 +527,45 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 )
                 if let inferred = ContainerStore.inferredApp(
                     for: fallback,
-                    knownAppsByBundleID: knownByBundleID,
+                    knownAppsByBundleID: [:],
                     launchServicesIdentifiers: lsSet
                 ),
-                   UUID(uuidString: inferred.bundleID) == nil {
-                    registerApp(
+                   ContainerStore.isValidAppBundleID(inferred.bundleID, uuid: udid) {
+                    _ = self.registerResolvedApp(
                         bundleID: inferred.bundleID,
                         containerPath: dirPath,
                         preferredName: inferred.name,
                         preferredIcon: inferred.icon
                     )
+                } else {
+                    ContainerMetadataCache.shared.markUnresolved(uuid: udid)
                 }
             }
 
-            // Sort: non-system (user) apps first, then alphabetical by appName / bundleID
-            let sorted = Array(resultsByBundleID.values).sorted { a, b in
-                let aIsSystem = a.bundleID.hasPrefix("com.apple.")
-                let bIsSystem = b.bundleID.hasPrefix("com.apple.")
-                if aIsSystem != bIsSystem {
-                    return !aIsSystem
-                }
-                let cmp = a.appName.localizedCaseInsensitiveCompare(b.appName)
-                if cmp != .orderedSame {
-                    return cmp == .orderedAscending
-                }
-                return a.bundleID.localizedCaseInsensitiveCompare(b.bundleID) == .orderedAscending
+            let finalSorted = self.buildSortedSnapshotFromCache()
+            self.cacheLock.lock()
+            self.hasCompletedFullScan = true
+            self.activeScanTask = nil
+            self.cacheLock.unlock()
+
+            await MainActor.run {
+                self.apps = finalSorted
+                self.isLoading = false
+                self.statusMessage = "Đã tìm thấy \(finalSorted.count) ứng dụng."
+                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
             }
-            return sorted
-        }.value
-
-        writeScanSnapshot(scanned)
-
-        await MainActor.run {
-            self.apps = scanned
-            self.isLoading = false
-            self.statusMessage = "Đã tìm thấy \(scanned.count) ứng dụng."
+            return finalSorted
         }
-        return scanned
+
+        activeScanTask = task
+        cacheLock.unlock()
+        return await task.value
     }
 
     /// Resolves a container by Bundle ID strictly on a background thread (never blocking Main Thread).
     func resolveContainer(bundleID: String) async -> AppContainerInfo? {
         let clean = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, UUID(uuidString: clean) == nil else { return nil }
+        guard ContainerStore.isValidAppBundleID(clean) else { return nil }
 
         if let cached = getCachedInfo(forBundleID: clean) {
             return cached
@@ -547,30 +581,17 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 return nil
             }
 
+            ContainerMetadataCache.shared.markBundleActivated(clean)
             _ = ContainerStore.ensureContainerAccess(for: mcmPath)
             let meta = ContainerStore.readContainerMetadata(containerPath: mcmPath)
-            let actualBundleID = (meta != nil && !meta!.bundleID.isEmpty && UUID(uuidString: meta!.bundleID) == nil)
+            let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
                 ? meta!.bundleID
                 : clean
-            let udid = (mcmPath as NSString).lastPathComponent
-            let proxyInfo = appInfoForBundleID(actualBundleID) as? [String: Any] ?? [:]
-            let name = AppDisplayNamePolicy.resolve(
+            return self?.registerResolvedApp(
                 bundleID: actualBundleID,
-                candidates: [meta?.displayName, proxyInfo["name"] as? String]
+                containerPath: mcmPath,
+                preferredName: meta?.displayName
             )
-            let icon = (proxyInfo["icon"] as? UIImage) ?? iconForBundleID(actualBundleID)
-            let bPath = proxyInfo["bundlePath"] as? String
-
-            let info = AppContainerInfo(
-                appName: name,
-                bundleID: actualBundleID,
-                udid: udid,
-                dataPath: mcmPath,
-                bundlePath: bPath,
-                appIcon: icon
-            )
-            self?.storeInCache(info)
-            return info
         }.value
 
         if let directResolved {

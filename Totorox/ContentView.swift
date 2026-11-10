@@ -40,11 +40,7 @@ struct ContentView: View {
                 .preferredColorScheme(.light)
         }
         .onAppear {
-            Task.detached(priority: .userInitiated) {
-                // Pre-warm UUID to Bundle ID mappings
-                ContainerStore.refreshUUIDMap()
-                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
-            }
+            AppContainerScanner.shared.prewarmOnLaunch()
         }
     }
 }
