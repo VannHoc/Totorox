@@ -150,6 +150,30 @@ struct SettingsView: View {
 
                         Divider()
 
+                        // 2. Link Telegram 
+                        if let telegramURL = URL(string: "https://t.me/DucThaiAOV") {
+                            Link(destination: telegramURL) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "paperplane.fill")
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Telegram đối tác")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(TotoroxTheme.textPrimary)
+                                        Text("Mod IOS")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+                            }
+                        }
+                        Divider()
+
                         Text("@2026 Totorox. Được phát triển bởi VannHoc.")
                             .font(.system(size: 11))
                             .foregroundStyle(TotoroxTheme.textSecondary)
