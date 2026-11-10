@@ -93,23 +93,7 @@ enum PatchProjectLibrary {
                         fileManager: fileManager
                     )
                 )
-                if summary.schemaVersion >= 2, let project = decoded?.project {
-                    if PatchProjectAccessPolicy.shouldMaterializeWorkspace(
-                        project: project,
-                        isAuthorCopy: isAuthorCopy
-                    ) {
-                        do {
-                            _ = try PatchWorkspaceService.ensureWorkspace(for: project)
-                        } catch {
-                            log("patch: workspace unavailable for \(project.id.uuidString)")
-                        }
-                    } else {
-                        try? PatchWorkspaceService.deleteWorkspace(
-                            projectID: project.id,
-                            fileManager: fileManager
-                        )
-                    }
-                }
+                // Strictly Read-Only: Never materialize, create, rename, or delete folders in /Documents/Patches during load()
                 byID[summary.packageID] = item
             } catch {
                 log("patch: skipped invalid local package \(url.lastPathComponent)")

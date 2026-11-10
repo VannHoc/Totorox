@@ -121,6 +121,7 @@ class AppState: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
+            PatchWorkspaceService.cleanupGhostDuplicateWorkspaces()
             let hasAccess = KernelExploit.hasSandboxAccess()
             log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "MHA-C2")")
             AppContainerScanner.shared.prewarmOnLaunch()

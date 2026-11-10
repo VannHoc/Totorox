@@ -214,6 +214,7 @@ struct SettingsView: View {
                     try? fm.removeItem(at: item)
                 }
             }
+            PatchWorkspaceService.cleanupGhostDuplicateWorkspaces(fileManager: fm)
             ContainerMetadataCache.shared.clear()
             await MainActor.run {
                 self.cacheClearedMessage = true

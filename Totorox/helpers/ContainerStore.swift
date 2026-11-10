@@ -963,6 +963,9 @@ enum ContainerStore {
     @discardableResult
     static func ensureContainerAccess(for path: String) -> String {
         guard !path.isEmpty else { return path }
+        #if targetEnvironment(simulator)
+        return path
+        #else
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         let targetPath = resolved.isEmpty ? path : resolved
 
@@ -970,7 +973,13 @@ enum ContainerStore {
             return targetPath
         }
 
-        // Fast path: if POSIX access is already granted, avoid redundant XPC calls
+        // Fast path: own sandbox container or already accessible path
+        let homeCanon = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
+        let targetCanon = ContainerMetadataCache.canonicalPath(targetPath)
+        if !homeCanon.isEmpty && (targetCanon == homeCanon || targetCanon.hasPrefix(homeCanon + "/")) {
+            return targetPath
+        }
+
         if access(targetPath, R_OK) == 0 {
             return targetPath
         }
@@ -984,6 +993,9 @@ enum ContainerStore {
                 let idOrUUID = String(after.split(separator: "/").first ?? "")
                 if !idOrUUID.isEmpty {
                     let containerRoot = prefixPath + idOrUUID
+                    if access(containerRoot, R_OK) == 0 {
+                        return targetPath
+                    }
                     if root.contains("AppGroup") {
                         var actErr: NSString?
                         _ = MCMActivateContainerPath(7, idOrUUID, true, &actErr)
@@ -1003,6 +1015,7 @@ enum ContainerStore {
                     if access(containerRoot, R_OK) != 0 {
                         _ = grantContainerAccess(containerRoot)
                     }
+                    return targetPath
                 }
             }
         }
@@ -1010,6 +1023,7 @@ enum ContainerStore {
             _ = grantContainerAccess(targetPath)
         }
         return targetPath
+        #endif
     }
 
     static func containersFromFilesystem() -> [InstalledApp] {
@@ -1334,7 +1348,10 @@ enum ContainerStore {
         }
         defer { closedir(dir) }
 
-        let isAppContainerDirectory = clean.contains("Containers/Data/Application") || clean.contains("Bundle/Application")
+        let canonClean = ContainerMetadataCache.canonicalPath(clean)
+        let isAppDataRoot = ContainerMetadataCache.isApplicationContainersRoot(canonClean)
+        let isBundleRoot = (canonClean == "/var/containers/Bundle/Application")
+        let isAppContainerDirectory = isAppDataRoot || isBundleRoot
 
         var entries: [FileEntry] = []
         while let dp = readdir(dir) {
@@ -1385,8 +1402,8 @@ enum ContainerStore {
                 bundleID = resolved.bundleID
                 appName = resolved.appName
                 appIcon = resolved.appIcon
-                // Only show app containers with valid bundle IDs
-                if clean.contains("Containers/Data/Application"), !isValidAppBundleID(bundleID, uuid: name) {
+                // Only show app containers with valid bundle IDs at the exact AppData root
+                if isAppDataRoot, !isValidAppBundleID(bundleID, uuid: name) {
                     continue
                 }
             }
@@ -1414,8 +1431,40 @@ enum ContainerStore {
         return entries
     }
 
+    /// Strictly reads directory contents directly from disk (POSIX opendir/readdir or FileManager)
+    /// based on the exact absolute path. Never triggers AppContainerScanner or replaces an empty
+    /// directory with the installed apps list.
+    static func readDirectoryEntriesFromDisk(at path: String) -> [FileEntry] {
+        let accessPath = ensureContainerAccess(for: path)
+        let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
+
+        var candidates: [String] = []
+        for candidate in [resolved, accessPath, path] where !candidate.isEmpty && !candidates.contains(candidate) {
+            candidates.append(candidate)
+        }
+
+        // 1. Try POSIX opendir/readdir first (returns [] immediately if directory is genuinely empty)
+        for p in candidates {
+            if let posixEntries = posixListDirectory(at: p) {
+                return sortedEntries(posixEntries)
+            }
+        }
+
+        // 2. Fallback to FileManager (returns [] immediately if directory is genuinely empty)
+        for p in candidates {
+            if let fallback = fileManagerListFiles(at: p) {
+                return sortedEntries(fallback)
+            }
+        }
+
+        log("readDirectoryEntriesFromDisk: FAILED for \(path) errno=\(errno)")
+        return []
+    }
+
     static func listFiles(at path: String) -> [FileEntry] {
-        // Fast path for /var/mobile/Containers/Data/Application
+        // ONLY when the exact canonical path is /var/mobile/Containers/Data/Application
+        // do we return the App Container list. Any subdirectory inside a container
+        // (e.g., /Documents/Patches/Patch1) is read strictly from disk.
         if ContainerMetadataCache.isApplicationContainersRoot(path) {
             if let cached = ContainerMetadataCache.shared.cachedList(for: path), !cached.isEmpty {
                 AppContainerScanner.shared.prewarmOnLaunch()
@@ -1429,33 +1478,7 @@ enum ContainerStore {
             }
         }
 
-        let accessPath = ensureContainerAccess(for: path)
-        let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
-
-        // 1. Try POSIX opendir/readdir first
-        for p in [resolved, accessPath, path] {
-            if let posixEntries = posixListDirectory(at: p), !posixEntries.isEmpty {
-                return sortedEntries(posixEntries)
-            }
-        }
-
-        // 2. Fallback to FileManager
-        for p in [resolved, accessPath, path] {
-            if let fallback = fileManagerListFiles(at: p), !fallback.isEmpty {
-                return sortedEntries(fallback)
-            }
-        }
-
-        // 3. Fallback for /var/mobile/Containers/Data/Application
-        if path.contains("Containers/Data/Application") {
-            let built = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-            if !built.isEmpty {
-                return built
-            }
-        }
-
-        log("listFiles: FAILED for \(path) errno=\(errno)")
-        return []
+        return readDirectoryEntriesFromDisk(at: path)
     }
 
     public static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
@@ -1490,7 +1513,10 @@ enum ContainerStore {
         guard let items = try? fm.contentsOfDirectory(atPath: path) else {
             return nil
         }
-        let isAppContainerDirectory = path.contains("Containers/Data/Application") || path.contains("Bundle/Application")
+        let canonPath = ContainerMetadataCache.canonicalPath(path)
+        let isAppDataRoot = ContainerMetadataCache.isApplicationContainersRoot(canonPath)
+        let isBundleRoot = (canonPath == "/var/containers/Bundle/Application")
+        let isAppContainerDirectory = isAppDataRoot || isBundleRoot
         var entries: [FileEntry] = []
         for item in items {
             if item.hasPrefix(".") { continue }
@@ -1519,7 +1545,7 @@ enum ContainerStore {
                 bundleID = resolved.bundleID
                 appName = resolved.appName
                 appIcon = resolved.appIcon
-                if path.contains("Containers/Data/Application"), !isValidAppBundleID(bundleID, uuid: item) {
+                if isAppDataRoot, !isValidAppBundleID(bundleID, uuid: item) {
                     continue
                 }
             }

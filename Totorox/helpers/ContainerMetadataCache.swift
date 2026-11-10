@@ -211,17 +211,18 @@ final class ContainerMetadataCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let canon = Self.canonicalPath(path)
-        if let list = directoryListCache[canon], !list.isEmpty {
-            return list
-        }
         if Self.isApplicationContainersRoot(canon) {
+            if let list = directoryListCache[canon], !list.isEmpty {
+                return list
+            }
             let built = buildApplicationDirectoryEntriesLocked()
             if !built.isEmpty {
                 directoryListCache[canon] = built
                 return built
             }
+            return nil
         }
-        return nil
+        return directoryListCache[canon]
     }
 
     func storeList(_ entries: [FileEntry], for path: String) {

@@ -304,4 +304,71 @@ final class FileIOEngineTests: XCTestCase {
         XCTAssertTrue(result.skipped.contains(srcFile.standardizedFileURL))
         XCTAssertEqual(try String(contentsOf: destFile), "Old Data", "Destination must remain untouched on Skip")
     }
+
+    // MARK: - 6. Regression Test Bug 1: Không Hijack sang danh sách App khi thư mục con rỗng hoặc có tên giống Bundle ID
+    func testSubfolderInsideContainer_DoesNotHijackToAppListWhenEmptyOrBundleIDNamed() throws {
+        // Seed a fake app in ContainerMetadataCache to ensure the cache is non-empty
+        ContainerMetadataCache.shared.store(
+            app: AppContainerMetadata(
+                uuid: UUID().uuidString,
+                containerPath: "/var/mobile/Containers/Data/Application/\(UUID().uuidString)",
+                bundleID: "ai.x.GrokApp",
+                appName: "ai.x.GrokApp",
+                icon: nil,
+                isUserApp: true,
+                modificationDate: nil
+            )
+        )
+        ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+
+        let fakeContainerSubdir = tempDirectory
+            .appendingPathComponent("Containers/Data/Application/\(UUID().uuidString)/Documents/Patches/Patch1", isDirectory: true)
+        let bundleNamedFolder = fakeContainerSubdir.appendingPathComponent("com.apple.AAUIViewService", isDirectory: true)
+        try fileManager.createDirectory(at: bundleNamedFolder, withIntermediateDirectories: true)
+
+        let beforeDelete = ContainerStore.listFiles(at: fakeContainerSubdir.path)
+        XCTAssertEqual(beforeDelete.count, 1)
+        XCTAssertEqual(beforeDelete.first?.name, "com.apple.AAUIViewService")
+        XCTAssertFalse(beforeDelete.first?.isAppContainer ?? true, "Regular subfolder must never be marked as an App Container")
+
+        // Delete the subfolder so Patch1 is now empty
+        try fileManager.removeItem(at: bundleNamedFolder)
+        let afterDelete = ContainerStore.listFiles(at: fakeContainerSubdir.path)
+        XCTAssertTrue(afterDelete.isEmpty, "Empty subfolder inside container must return [] and NEVER hijack into the installed apps list")
+    }
+
+    // MARK: - 7. Regression Test Bug 2: Không tự động nhân bản thư mục ma "... 2"
+    func testPatchWorkspace_DoesNotCreateGhostDuplicateSuffix2() throws {
+        let patchesRoot = tempDirectory.appendingPathComponent("Patches", isDirectory: true)
+        let existingFolder = patchesRoot.appendingPathComponent("Amily Đông Hải Long Vương", isDirectory: true)
+        try fileManager.createDirectory(at: existingFolder, withIntermediateDirectories: true)
+
+        let rule = PatchRule(
+            id: UUID(),
+            bundleID: "com.garena.game.kgvn",
+            relativePath: "Documents/test.bin",
+            replacementFilename: "test.bin",
+            replacementData: Data([0x01, 0x02])
+        )
+        let project = PatchProject(
+            id: UUID(),
+            name: "Amily Đông Hải Long Vương",
+            author: "VannHoc",
+            isPrivate: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            bundleIdentifiers: ["com.garena.game.kgvn"],
+            directories: [],
+            rules: [rule]
+        )
+
+        let workspace = try PatchWorkspaceService.createWorkspace(
+            for: project,
+            patchesRoot: patchesRoot,
+            fileManager: fileManager
+        )
+        XCTAssertEqual(workspace.lastPathComponent, "Amily Đông Hải Long Vương")
+        let ghostDuplicate = patchesRoot.appendingPathComponent("Amily Đông Hải Long Vương 2")
+        XCTAssertFalse(fileManager.fileExists(atPath: ghostDuplicate.path), "Ghost duplicate ' 2' folder must never be created")
+    }
 }

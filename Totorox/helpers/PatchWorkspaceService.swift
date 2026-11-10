@@ -47,6 +47,9 @@ enum PatchWorkspaceService {
             in: root,
             fileManager: fileManager
         )
+        if fileManager.fileExists(atPath: destination.path) {
+            return destination
+        }
         let staging = root.appendingPathComponent(
             ".3105-workspace-\(UUID().uuidString)",
             isDirectory: true
@@ -366,13 +369,41 @@ enum PatchWorkspaceService {
         fileManager: FileManager
     ) -> URL {
         let base = sanitizedName(rawName)
-        var candidate = root.appendingPathComponent(base, isDirectory: true)
-        var suffix = 2
-        while fileManager.fileExists(atPath: candidate.path) {
-            candidate = root.appendingPathComponent("\(base) \(suffix)", isDirectory: true)
-            suffix += 1
+        return root.appendingPathComponent(base, isDirectory: true)
+    }
+
+    /// Cleans up ghost duplicate folders (e.g. "Name 2", "Name 3") in /Documents/Patches
+    /// that were previously auto-generated with a hidden .3105-project.plist manifest when
+    /// the original folder "Name" already existed on disk.
+    static func cleanupGhostDuplicateWorkspaces(fileManager: FileManager = .default) {
+        guard let documents = try? documentsRootURL(fileManager: fileManager) else { return }
+        let root = documents.appendingPathComponent("Patches", isDirectory: true)
+        guard fileManager.fileExists(atPath: root.path),
+              let candidates = try? fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let existingNames = Set(candidates.map { $0.lastPathComponent })
+        for candidate in candidates {
+            let name = candidate.lastPathComponent
+            // Match "<BaseName> <Number>" where <Number> >= 2
+            guard let spaceIndex = name.lastIndex(of: " ") else { continue }
+            let baseName = String(name[..<spaceIndex]).trimmingCharacters(in: .whitespaces)
+            let suffixStr = String(name[name.index(after: spaceIndex)...])
+            guard !baseName.isEmpty,
+                  let suffixNum = Int(suffixStr),
+                  suffixNum >= 2,
+                  existingNames.contains(baseName) else {
+                continue
+            }
+            // Only remove if it has the auto-generated .3105-project.plist manifest
+            let manifestURL = candidate.appendingPathComponent(manifestFilename)
+            if fileManager.fileExists(atPath: manifestURL.path) {
+                try? fileManager.removeItem(at: candidate)
+            }
         }
-        return candidate
     }
 
     private static func sanitizedName(_ rawName: String) -> String {

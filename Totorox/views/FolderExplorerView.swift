@@ -15,13 +15,150 @@ enum FolderSortOption: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+// MARK: - DirectoryViewModel (Pure Read-Only Disk Directory Browser by Absolute Path)
+
+@MainActor
+final class DirectoryViewModel: ObservableObject {
+    @Published private(set) var entries: [FileEntry] = []
+    @Published var isLoading: Bool = false
+    private(set) var activeCanonicalPath: String = ""
+
+    /// Strictly Read-Only directory loader. Never executes mkdir/copyItem/moveItem
+    /// and never invokes AppContainerScanner. Always clears old entries before assigning
+    /// fresh results from disk.
+    func loadDirectory(at url: URL, forceRefresh: Bool = false) {
+        let path = url.path
+        let canonPath = ContainerMetadataCache.canonicalPath(path)
+
+        if activeCanonicalPath != canonPath {
+            entries.removeAll()
+            activeCanonicalPath = canonPath
+        }
+
+        // 0ms Instant Cache Hit (including valid empty directories `[]`)
+        if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: canonPath) {
+            entries.removeAll()
+            entries = cached
+            isLoading = false
+
+            // Background read-only verification
+            Task.detached(priority: .utility) {
+                let loaded = ContainerStore.readDirectoryEntriesFromDisk(at: path)
+                ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
+                if loaded != cached {
+                    await MainActor.run {
+                        guard self.activeCanonicalPath == canonPath else { return }
+                        self.entries.removeAll()
+                        self.entries = loaded
+                    }
+                }
+            }
+            return
+        }
+
+        entries.removeAll()
+        isLoading = true
+
+        Task.detached(priority: .userInitiated) {
+            let loaded = ContainerStore.readDirectoryEntriesFromDisk(at: path)
+            ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
+
+            await MainActor.run {
+                guard self.activeCanonicalPath == canonPath else { return }
+                self.entries.removeAll()
+                self.entries = loaded
+                self.isLoading = false
+            }
+        }
+    }
+}
+
+// MARK: - AppListViewModel (Dedicated App Container List ViewModel for /var/mobile/Containers/Data/Application)
+
+@MainActor
+final class AppListViewModel: ObservableObject {
+    @Published private(set) var entries: [FileEntry] = []
+    @Published var isLoading: Bool = false
+
+    func loadAppContainers(forceRefresh: Bool = false) {
+        let canonRoot = "/var/mobile/Containers/Data/Application"
+
+        if !forceRefresh,
+           let cached = ContainerMetadataCache.shared.cachedList(for: canonRoot),
+           !cached.isEmpty {
+            entries.removeAll()
+            entries = cached
+            isLoading = false
+            AppContainerScanner.shared.prewarmOnLaunch()
+            return
+        }
+
+        entries.removeAll()
+        isLoading = true
+
+        if forceRefresh {
+            Task.detached(priority: .userInitiated) {
+                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: true)
+                let built = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+                await MainActor.run {
+                    self.entries.removeAll()
+                    self.entries = built
+                    self.isLoading = false
+                }
+            }
+        } else {
+            Task.detached(priority: .userInitiated) {
+                AppContainerScanner.shared.performFastPassSync()
+                let initial = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+                if !initial.isEmpty {
+                    await MainActor.run {
+                        self.entries.removeAll()
+                        self.entries = initial
+                        self.isLoading = false
+                    }
+                }
+                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
+                let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+                await MainActor.run {
+                    self.entries.removeAll()
+                    self.entries = finalEntries
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    func applyUpdatedCacheIfNeeded() {
+        let canonRoot = "/var/mobile/Containers/Data/Application"
+        if let updated = ContainerMetadataCache.shared.cachedList(for: canonRoot),
+           !updated.isEmpty,
+           updated.count != entries.count {
+            entries.removeAll()
+            entries = updated
+            isLoading = false
+        }
+    }
+}
+
 struct FolderExplorerView: View {
+    @StateObject private var directoryVM = DirectoryViewModel()
+    @StateObject private var appListVM = AppListViewModel()
     @State private var currentURL: URL
     @State private var breadcrumbs: [URL] = []
-    @State private var entries: [FileEntry] = []
     @State private var searchText: String = ""
     @State private var sortOption: FolderSortOption = .nameAsc
-    @State private var isLoading: Bool = false
+
+    private var isAtAppContainersRoot: Bool {
+        ContainerMetadataCache.isApplicationContainersRoot(currentURL.path)
+    }
+
+    private var entries: [FileEntry] {
+        isAtAppContainersRoot ? appListVM.entries : directoryVM.entries
+    }
+
+    private var isLoading: Bool {
+        isAtAppContainersRoot ? appListVM.isLoading : directoryVM.isLoading
+    }
 
     // Clipboard state
     @State private var clipboardItem: ClipboardItem? = nil
@@ -324,13 +461,8 @@ struct FolderExplorerView: View {
             loadCurrentDirectory()
         }
         .onReceive(NotificationCenter.default.publisher(for: .totoroxContainersDidUpdate)) { _ in
-            guard ContainerMetadataCache.isApplicationContainersRoot(currentURL.path) else { return }
-            if let updated = ContainerMetadataCache.shared.cachedList(for: currentURL.path),
-               !updated.isEmpty,
-               updated.count != entries.count {
-                self.entries = updated
-                self.isLoading = false
-            }
+            guard isAtAppContainersRoot else { return }
+            appListVM.applyUpdatedCacheIfNeeded()
         }
         .onReceive(AppNavigationCoordinator.shared.$folderExplorerTargetURL) { targetURL in
             if let url = targetURL {
@@ -770,7 +902,10 @@ struct FolderExplorerView: View {
     private func breadcrumbTitle(for crumb: URL) -> String {
         let name = crumb.lastPathComponent
         if name.isEmpty || name == "/" { return "Root" }
-        if UUID(uuidString: name) != nil {
+        let parentCanon = ContainerMetadataCache.canonicalPath(crumb.deletingLastPathComponent().path)
+        let isInsideContainersRoot = ContainerMetadataCache.isApplicationContainersRoot(parentCanon)
+            || parentCanon == "/var/containers/Bundle/Application"
+        if isInsideContainersRoot, UUID(uuidString: name) != nil {
             if let bid = ContainerMetadataCache.shared.bundleID(forUUID: name), !bid.isEmpty {
                 return bid
             }
@@ -785,91 +920,10 @@ struct FolderExplorerView: View {
     }
 
     private func loadCurrentDirectory(forceRefresh: Bool = false) {
-        let path = currentURL.path
-        let canonPath = ContainerMetadataCache.canonicalPath(path)
-        let isAppContainersRoot = ContainerMetadataCache.isApplicationContainersRoot(canonPath)
-
-        // 0ms Instant Cache Hit!
-        if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: canonPath), !cached.isEmpty {
-            self.entries = cached
-            self.isLoading = false
-
-            // When returning to /var/mobile/Containers/Data/Application from cache,
-            // do NOT re-scan the filesystem on every back navigation!
-            if isAppContainersRoot {
-                AppContainerScanner.shared.prewarmOnLaunch()
-                return
-            }
-
-            // For normal folders, silently verify in background and only update if changed
-            Task.detached(priority: .utility) {
-                _ = ContainerStore.ensureContainerAccess(for: path)
-                let loaded = ContainerStore.listFiles(at: path)
-                ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
-                if loaded != cached {
-                    await MainActor.run {
-                        if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
-                            self.entries = loaded
-                        }
-                    }
-                }
-            }
-            return
-        }
-
-        self.isLoading = true
-
-        Task.detached(priority: .userInitiated) {
-            if isAppContainersRoot {
-                if forceRefresh {
-                    _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: true)
-                } else {
-                    self.loadApplicationContainersNonBlocking(for: canonPath)
-                    return
-                }
-                let built = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-                await MainActor.run {
-                    if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
-                        self.entries = built
-                        self.isLoading = false
-                    }
-                }
-                return
-            }
-
-            _ = ContainerStore.ensureContainerAccess(for: path)
-            let loaded = ContainerStore.listFiles(at: path)
-            ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
-
-            await MainActor.run {
-                if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
-                    self.entries = loaded
-                    self.isLoading = false
-                }
-            }
-        }
-    }
-
-    private nonisolated func loadApplicationContainersNonBlocking(for canonPath: String) {
-        AppContainerScanner.shared.performFastPassSync()
-        let initial = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-        Task { @MainActor in
-            if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
-                if !initial.isEmpty {
-                    self.entries = initial
-                    self.isLoading = false
-                }
-            }
-        }
-        Task.detached(priority: .userInitiated) {
-            _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
-            let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-            await MainActor.run {
-                if ContainerMetadataCache.canonicalPath(self.currentURL.path) == canonPath {
-                    self.entries = finalEntries
-                    self.isLoading = false
-                }
-            }
+        if isAtAppContainersRoot {
+            appListVM.loadAppContainers(forceRefresh: forceRefresh)
+        } else {
+            directoryVM.loadDirectory(at: currentURL, forceRefresh: forceRefresh)
         }
     }
 
@@ -990,7 +1044,7 @@ struct FolderExplorerView: View {
             destinationDir = baseDir
         }
 
-        isLoading = true
+        directoryVM.isLoading = true
         Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
             let tempStaging = FileManager.default.temporaryDirectory.appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
@@ -1040,14 +1094,14 @@ struct FolderExplorerView: View {
 
                 ContainerMetadataCache.shared.invalidate(path: baseDir.path)
                 await MainActor.run {
-                    self.isLoading = false
+                    self.directoryVM.isLoading = false
                     self.selectedArchiveForExtraction = nil
                     self.outcomeResult = FileIOResultWrapper(result: result)
                     self.loadCurrentDirectory(forceRefresh: true)
                 }
             } catch {
                 await MainActor.run {
-                    self.isLoading = false
+                    self.directoryVM.isLoading = false
                     self.selectedArchiveForExtraction = nil
                     log("extraction failed: \(error.localizedDescription)")
                 }
