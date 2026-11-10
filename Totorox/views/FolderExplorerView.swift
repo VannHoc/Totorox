@@ -542,14 +542,7 @@ struct FolderExplorerView: View {
                         .frame(width: 26, height: 30)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .background(TotoroxTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(TotoroxTheme.borderSubtle, lineWidth: 1)
-            )
+            .totoroxCard(cornerRadius: 14, padding: 12)
         }
         .buttonStyle(.plain)
         .contextMenu {

@@ -465,8 +465,12 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             // STAGE 2: Progressive MHA-C2 Discovery via LaunchServices Store (.csstore)
             let lsStoreCandidates = ContainerStore.launchServicesStoreIdentifiers()
-            let prioritizedCandidates = MHAIdentifierCatalog.prioritizedCandidates(
-                from: [lsStoreCandidates, ContainerStore.researchAppIdentifiers]
+            let prioritizedCandidates = MHAIdentifierCatalog.identifiers(
+                dynamic: [],
+                installed: [],
+                research: ContainerStore.researchAppIdentifiers,
+                custom: [],
+                launchServices: lsStoreCandidates
             )
 
             var newlyResolvedInStage2 = 0
