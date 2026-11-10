@@ -56,9 +56,9 @@ struct SettingsView: View {
                         Divider()
                         settingsRow(label: "Tên ứng dụng", value: "Totorox", icon: "app.badge.fill")
                         Divider()
-                        settingsRow(label: "Bundle Identifier", value: "com.apple.mobile.MobileHouseArrest", icon: "barcode")
+                        settingsRow(label: "Bundle Identifier", value: "com.apple.mobile.MobileHouseArrest", icon: "barcode", isVertical: true)
                         Divider()
-                        settingsRow(label: "Hệ thống hỗ trợ", value: "iOS \(AppInfo.osVersion) (\(AppInfo.osBuild))", icon: "iphone")
+                        settingsRow(label: "Hệ thống hỗ trợ", value: "iOS \(AppInfo.osVersion) (\(AppInfo.osBuild))", icon: "iphone", isVertical: true)
                     }
                     .totoroxCard()
 
@@ -143,8 +143,7 @@ struct SettingsView: View {
                         TotoroxLinkRow(
                             urlString: "https://t.me/DucThaiAOV",
                             title: "Telegram đối tác",
-                            subtitle: "Mod IOS",
-                            icon: "paperplane.fill"
+                            subtitle: "Mod IOS"
                         )
 
                         Divider()
@@ -185,23 +184,49 @@ struct SettingsView: View {
         }
     }
 
-    private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
-                .frame(width: 24)
+    private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false, isVertical: Bool = false) -> some View {
+        Group {
+            if isVertical {
+                // Bố cục 2 tầng cho các dòng có chữ dài (Bundle ID, Hệ thống)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        Image(systemName: icon)
+                            .font(.system(size: 16))
+                            .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                            .frame(width: 24)
 
-            Text(label)
-                .font(.system(size: 14))
-                .foregroundStyle(TotoroxTheme.textPrimary)
+                        Text(label)
+                            .font(.system(size: 14))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                    }
 
-            Spacer()
+                    Text(value)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                        .padding(.leading, 34) // Thụt lề thẳng hàng với chữ nhãn
+                        .textSelection(.enabled) // Cho phép nhấn giữ sao chép mã nếu cần
+                }
+                .padding(.vertical, 2)
+            } else {
+                // Bố cục 1 tầng ngang như cũ cho các dòng ngắn
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 16))
+                        .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                        .frame(width: 24)
 
-            Text(value)
-                .font(.system(size: 13, weight: isAccent ? .bold : .regular, design: .monospaced))
-                .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
-                .lineLimit(1)
+                    Text(label)
+                        .font(.system(size: 14))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+
+                    Spacer()
+
+                    Text(value)
+                        .font(.system(size: 13, weight: isAccent ? .bold : .regular, design: .monospaced))
+                        .foregroundStyle(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
