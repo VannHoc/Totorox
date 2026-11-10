@@ -116,6 +116,10 @@ class AppState: ObservableObject {
         didRunEarlyInit = true
         earlyInitLock.unlock()
 
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            return
+        }
+
         DispatchQueue.global(qos: .userInitiated).async {
             let hasAccess = KernelExploit.hasSandboxAccess()
             log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "MHA-C2")")

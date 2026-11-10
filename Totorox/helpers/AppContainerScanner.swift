@@ -318,6 +318,12 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
     /// Starts a non-blocking background container scan if not already running or completed.
     func prewarmOnLaunch() {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
+        #if targetEnvironment(simulator)
+        return
+        #else
         cacheLock.lock()
         if hasCompletedFullScan || activeScanTask != nil {
             cacheLock.unlock()
@@ -327,6 +333,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         Task.detached(priority: .userInitiated) {
             _ = await self.scanAllContainers(forceRefresh: false)
         }
+        #endif
     }
 
     /// Fast synchronous pass (<100ms) for immediate container resolution without running
@@ -459,11 +466,13 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             if !stage1Snapshot.isEmpty {
                 await MainActor.run {
                     self.apps = stage1Snapshot
+                    self.isLoading = false
                     NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
                 }
             }
 
             // STAGE 2: Progressive MHA-C2 Discovery via LaunchServices Store (.csstore)
+            #if !targetEnvironment(simulator)
             let lsStoreCandidates = ContainerStore.launchServicesStoreIdentifiers()
             let prioritizedCandidates = MHAIdentifierCatalog.identifiers(
                 dynamic: [],
@@ -492,10 +501,11 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                         preferredName: meta?.displayName
                     ) != nil {
                         newlyResolvedInStage2 += 1
-                        if newlyResolvedInStage2.isMultiple(of: 30) {
+                        if newlyResolvedInStage2 == 10 || newlyResolvedInStage2.isMultiple(of: 25) {
                             let partial = self.buildSortedSnapshotFromCache()
                             await MainActor.run {
                                 self.apps = partial
+                                self.isLoading = false
                                 NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
                             }
                         }
@@ -503,48 +513,62 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 }
             }
 
-            // STAGE 3: Filesystem Container Discovery for any remaining UUID containers
-            let dirs = ContainerStore.enumerateDirectories(path: ContainerStore.appDataRoot)
-            let lsSet = Set(lsStoreCandidates)
-            for dirPath in dirs {
-                let udid = (dirPath as NSString).lastPathComponent
-                guard UUID(uuidString: udid) != nil else { continue }
-                if self.getCachedInfo(forUDID: udid) != nil { continue }
-                if ContainerMetadataCache.shared.isUnresolved(uuid: udid) { continue }
-
-                if let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
-                   ContainerStore.isValidAppBundleID(meta.bundleID, uuid: udid) {
-                    _ = self.registerResolvedApp(
-                        bundleID: meta.bundleID,
-                        containerPath: dirPath,
-                        preferredName: meta.displayName
-                    )
-                    continue
+            // STAGE 3: Filesystem Container Discovery (only when sandbox escape is active or iOS < 26,
+            // since on iOS 26+ without kernel sandbox escape raw UUID paths cannot be granted without a Bundle ID)
+            let canOpenRootDirectly: Bool = {
+                if let d = opendir(ContainerStore.appDataRoot) {
+                    closedir(d)
+                    return true
                 }
+                return false
+            }()
+            let canReadRawUUIDContainers = ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26
+                || KernelExploit.hasSandboxAccess()
+                || canOpenRootDirectly
+            if canReadRawUUIDContainers {
+                let dirs = ContainerStore.enumerateDirectories(path: ContainerStore.appDataRoot)
+                let lsSet = Set(lsStoreCandidates)
+                for dirPath in dirs {
+                    let udid = (dirPath as NSString).lastPathComponent
+                    guard UUID(uuidString: udid) != nil else { continue }
+                    if self.getCachedInfo(forUDID: udid) != nil { continue }
+                    if ContainerMetadataCache.shared.isUnresolved(uuid: udid) { continue }
 
-                let fallback = InstalledApp(
-                    bundleID: udid,
-                    name: udid,
-                    containerPath: dirPath,
-                    version: "",
-                    icon: nil
-                )
-                if let inferred = ContainerStore.inferredApp(
-                    for: fallback,
-                    knownAppsByBundleID: [:],
-                    launchServicesIdentifiers: lsSet
-                ),
-                   ContainerStore.isValidAppBundleID(inferred.bundleID, uuid: udid) {
-                    _ = self.registerResolvedApp(
-                        bundleID: inferred.bundleID,
+                    if let meta = ContainerStore.readContainerMetadata(containerPath: dirPath),
+                       ContainerStore.isValidAppBundleID(meta.bundleID, uuid: udid) {
+                        _ = self.registerResolvedApp(
+                            bundleID: meta.bundleID,
+                            containerPath: dirPath,
+                            preferredName: meta.displayName
+                        )
+                        continue
+                    }
+
+                    let fallback = InstalledApp(
+                        bundleID: udid,
+                        name: udid,
                         containerPath: dirPath,
-                        preferredName: inferred.name,
-                        preferredIcon: inferred.icon
+                        version: "",
+                        icon: nil
                     )
-                } else {
-                    ContainerMetadataCache.shared.markUnresolved(uuid: udid)
+                    if let inferred = ContainerStore.inferredApp(
+                        for: fallback,
+                        knownAppsByBundleID: [:],
+                        launchServicesIdentifiers: lsSet
+                    ),
+                       ContainerStore.isValidAppBundleID(inferred.bundleID, uuid: udid) {
+                        _ = self.registerResolvedApp(
+                            bundleID: inferred.bundleID,
+                            containerPath: dirPath,
+                            preferredName: inferred.name,
+                            preferredIcon: inferred.icon
+                        )
+                    } else {
+                        ContainerMetadataCache.shared.markUnresolved(uuid: udid)
+                    }
                 }
             }
+            #endif
 
             let finalSorted = self.buildSortedSnapshotFromCache()
             self.cacheLock.lock()
