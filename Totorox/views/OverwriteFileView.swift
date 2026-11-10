@@ -22,11 +22,9 @@ struct OverwriteFileView: View {
     
     // Execution State
     @State private var isExecuting: Bool = false
-    @State private var executionLogs: [String] = [
-        "● [SẴN SÀNG] Hệ thống đè file container Totorox đã sẵn sàng."
-    ]
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: FileIOResultWrapper? = nil
+    @State private var alertMessage: String? = nil
     
     // Scanner
     @ObservedObject private var scanner = AppContainerScanner.shared
@@ -51,9 +49,6 @@ struct OverwriteFileView: View {
                     
                     // MARK: - Nút Thực thi
                     executeButton
-                    
-                    // MARK: - Khối 4: Nhật ký (Thiết kế nền trắng)
-                    whiteBackgroundLogCard
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -64,12 +59,11 @@ struct OverwriteFileView: View {
             // MARK: - Lớp Conflict Dialog (Nổi trên cùng, không bị che khuất)
             if let conflict = activeConflict {
                 ZStack {
-                    Color.black.opacity(0.4)
+                    Color.black.opacity(0.35)
                         .ignoresSafeArea()
                         .onTapGesture { }
 
                     WindowsConflictDialog(conflict: conflict)
-                        .padding(.horizontal, 24)
                 }
                 .zIndex(999)
                 .transition(.opacity)
@@ -92,6 +86,19 @@ struct OverwriteFileView: View {
             ) { url in
                 handleSelectedPatch(url: url)
             }
+        }
+        .sheet(item: $outcomeResult) { wrapper in
+            OverwriteOutcomeView(result: wrapper.result) {
+                outcomeResult = nil
+            }
+        }
+        .alert("Thông báo", isPresented: Binding(
+            get: { alertMessage != nil },
+            set: { if !$0 { alertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { alertMessage = nil }
+        } message: {
+            Text(alertMessage ?? "")
         }
         .task {
             if scanner.apps.isEmpty {
@@ -477,82 +484,6 @@ struct OverwriteFileView: View {
         .disabled(!isReadyToExecute)
     }
     
-    // MARK: - Card 4: Nhật ký (Thiết kế theo nền trắng theo yêu cầu)
-    private var whiteBackgroundLogCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Header nhật ký
-            HStack {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
-                
-                Text("Nhật ký xử lý")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                
-                Spacer()
-                
-                Button {
-                    copyLogsToClipboard()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .padding(6)
-                        .background(TotoroxTheme.searchBackground)
-                        .clipShape(Circle())
-                }
-                
-                Button {
-                    executionLogs.removeAll()
-                    executionLogs.append("● [SẴN SÀNG] Đã xóa toàn bộ nhật ký.")
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .padding(6)
-                        .background(TotoroxTheme.searchBackground)
-                        .clipShape(Circle())
-                }
-            }
-            
-            Divider()
-                .background(TotoroxTheme.dividerColor)
-            
-            // Log Content Box trên NỀN TRẮNG
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(Array(executionLogs.enumerated()), id: \.offset) { index, log in
-                            HStack(alignment: .top, spacing: 6) {
-                                Text(log)
-                                    .font(.system(size: 11.5, design: .monospaced))
-                                    .foregroundStyle(logTextColor(for: log))
-                                    .lineSpacing(2)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .id(index)
-                        }
-                    }
-                    .padding(10)
-                }
-                .frame(height: 190)
-                .background(Color.white) // BẮT BUỘC NỀN TRẮNG
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                )
-                .onChange(of: executionLogs.count) { _ in
-                    if let lastIndex = executionLogs.indices.last {
-                        proxy.scrollTo(lastIndex, anchor: .bottom)
-                    }
-                }
-            }
-        }
-        .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
-    }
-    
     // MARK: - Modal Sheet: Chọn ứng dụng đã cài đặt
     private var installedAppsPickerSheet: some View {
         NavigationView {
@@ -694,7 +625,7 @@ struct OverwriteFileView: View {
                         Button {
                             selectedTargetFolder = folder
                             showCustomFolderSheet = false
-                            appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(folder)")
+                            log("overwrite: target folder -> \(folder)")
                         } label: {
                             HStack {
                                 Image(systemName: "folder.fill")
@@ -738,7 +669,7 @@ struct OverwriteFileView: View {
                             if !clean.isEmpty {
                                 selectedTargetFolder = clean
                                 showCustomFolderSheet = false
-                                appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(clean)")
+                                log("overwrite: target folder -> \(clean)")
                             }
                         }
                         .font(.system(size: 13, weight: .bold))
@@ -783,12 +714,16 @@ struct OverwriteFileView: View {
     private func selectApp(_ app: AppContainerInfo) {
         selectedApp = app
         targetBundleIDInput = app.bundleID
-        appendLog("[CHỌN APP] Đã chọn: \(app.appName) (\(app.bundleID))")
+        log("overwrite: selected app \(app.appName) (\(app.bundleID))")
     }
 
     private func handleSelectedPatch(url: URL) {
         selectedPatchURL = url
+        let hasSecurityAccess = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
+            defer {
+                if hasSecurityAccess { url.stopAccessingSecurityScopedResource() }
+            }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
             let sizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
             var autoBundleID: String? = nil
@@ -801,14 +736,13 @@ struct OverwriteFileView: View {
             }
             await MainActor.run {
                 self.patchFileSizeText = sizeText
-                self.appendLog("[TỆP BẢN VÁ] Đã chọn: \(url.lastPathComponent) (\(sizeText))")
+                log("overwrite: selected patch \(url.lastPathComponent) (\(sizeText))")
             }
             if let bid = autoBundleID {
                 let currentSelected = await MainActor.run { self.selectedApp }
                 if currentSelected == nil, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
                     await MainActor.run {
                         self.selectApp(resolved)
-                        self.appendLog("[TỰ ĐỘNG] Đã nhận diện ứng dụng từ bản vá .3105: \(resolved.appName) (\(bid))")
                     }
                 }
             }
@@ -823,50 +757,30 @@ struct OverwriteFileView: View {
             if let resolved = await scanner.resolveContainer(bundleID: clean) {
                 await MainActor.run {
                     self.selectApp(resolved)
-                    self.appendLog("[NHẬP TAY] Đã tìm thấy container cho: \(clean)")
                 }
             } else {
                 await MainActor.run {
-                    self.appendLog("[CẢNH BÁO] Không tìm thấy App có Bundle ID '\(clean)'")
+                    self.alertMessage = "Không tìm thấy ứng dụng có Bundle ID '\(clean)'."
                 }
             }
         }
-    }
-    
-    private func appendLog(_ message: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        let timestamp = formatter.string(from: Date())
-        executionLogs.append("[\(timestamp)] \(message)")
-    }
-    
-    private func copyLogsToClipboard() {
-        UIPasteboard.general.string = executionLogs.joined(separator: "\n")
-        appendLog("[THÔNG BÁO] Đã sao chép nhật ký vào Clipboard.")
-    }
-    
-    private func logTextColor(for text: String) -> Color {
-        if text.contains("[THÀNH CÔNG]") {
-            return Color(red: 0.05, green: 0.65, blue: 0.35)
-        } else if text.contains("[LỖI]") || text.contains("[THẤT BẠI]") {
-            return Color(red: 0.85, green: 0.20, blue: 0.20)
-        } else if text.contains("[CẢNH BÁO]") {
-            return Color(red: 0.85, green: 0.55, blue: 0.10)
-        }
-        return Color(red: 0.15, green: 0.18, blue: 0.22) // Chuẩn chữ tối trên nền trắng
     }
     
     // MARK: - Thực thi Ghi đè Tệp
     private func executePatch() {
         guard let app = selectedApp, let patchURL = selectedPatchURL else { return }
         let targetSubfolder = selectedTargetFolder
+        let promptCoordinator = ConflictPromptCoordinator()
+        let hasSecurityAccess = patchURL.startAccessingSecurityScopedResource()
 
         isExecuting = true
-        appendLog("[BẮT ĐẦU] Bắt đầu quá trình đè file vào: \(app.appName)")
-        appendLog("  - Thư mục đích: \(targetSubfolder)")
-        appendLog("  - Gói bản vá: \(patchURL.lastPathComponent)")
+        log("overwrite: starting patch into \(app.bundleID) target=\(targetSubfolder) file=\(patchURL.lastPathComponent)")
 
         Task.detached(priority: .userInitiated) {
+            defer {
+                if hasSecurityAccess { patchURL.stopAccessingSecurityScopedResource() }
+            }
+
             // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
             var actError: NSString? = nil
             let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
@@ -882,7 +796,7 @@ struct OverwriteFileView: View {
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
             } catch {
                 await MainActor.run {
-                    self.appendLog("[LỖI] Không thể tạo thư mục đích: \(error.localizedDescription)")
+                    self.alertMessage = "Không thể tạo thư mục đích: \(error.localizedDescription)"
                     self.isExecuting = false
                 }
                 return
@@ -907,14 +821,18 @@ struct OverwriteFileView: View {
                     try converter.convertPatch3105ToZip(inputURL: patchURL, outputZipURL: zipOutput)
                     let payloadDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                     try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: zipOutput, into: payloadDir)
-                    rawExtractedRoot = payloadDir
-                    await MainActor.run {
-                        self.appendLog("[GIẢI MÃ] Giải mã thành công gói tệp .3105.")
+                    do {
+                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: zipOutput, into: payloadDir)
+                    } catch {
+                        let result = try ZIPArchiveExtractor.extract(archiveURL: zipOutput, into: payloadDir)
+                        rawExtractedRoot = result.destinationURL
+                    }
+                    if rawExtractedRoot == stagingDir {
+                        rawExtractedRoot = payloadDir
                     }
                 } catch {
                     await MainActor.run {
-                        self.appendLog("[LỖI] Giải mã gói .3105 thất bại: \(error.localizedDescription)")
+                        self.alertMessage = "Giải mã gói .3105 thất bại: \(error.localizedDescription)"
                         self.isExecuting = false
                     }
                     return
@@ -923,14 +841,35 @@ struct OverwriteFileView: View {
                 do {
                     let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                     try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
-                    _ = try ZIPArchiveExtractor.extract(archiveURL: patchURL, into: extractedDir)
-                    rawExtractedRoot = extractedDir
-                    await MainActor.run {
-                        self.appendLog("[GIẢI NÉN] Giải nén thành công tệp ZIP.")
+                    do {
+                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: patchURL, into: extractedDir)
+                    } catch {
+                        let zipData = try Data(contentsOf: patchURL)
+                        let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
+                        for (relPath, fileData) in entries {
+                            let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
+                            let parts = normalized
+                                .split(separator: "/", omittingEmptySubsequences: true)
+                                .map(String.init)
+                                .filter { $0 != "." }
+                            guard !parts.isEmpty,
+                                  !parts.contains(".."),
+                                  parts.first != "__MACOSX",
+                                  parts.last != ".DS_Store" else {
+                                continue
+                            }
+                            var targetFile = extractedDir
+                            for (idx, part) in parts.enumerated() {
+                                targetFile.appendPathComponent(part, isDirectory: idx < parts.count - 1)
+                            }
+                            try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                            try fileData.write(to: targetFile, options: .atomic)
+                        }
                     }
+                    rawExtractedRoot = extractedDir
                 } catch {
                     await MainActor.run {
-                        self.appendLog("[LỖI] Giải nén tệp ZIP thất bại: \(error.localizedDescription)")
+                        self.alertMessage = "Giải nén tệp ZIP thất bại: \(error.localizedDescription)"
                         self.isExecuting = false
                     }
                     return
@@ -966,32 +905,24 @@ struct OverwriteFileView: View {
 
             // 2. Ghi đè và hợp nhất tệp qua FileIOEngine trên Background Thread
             let result = await engine.copyAndMerge(from: sourceToCopy, to: effectiveDestination) { s, d, k in
-                await withCheckedContinuation { cont in
-                    Task { @MainActor in
-                        self.activeConflict = FileConflictInfo(
-                            sourceURL: s,
-                            destinationURL: d,
-                            conflictKind: k,
-                            continuation: { r in
-                                self.activeConflict = nil
-                                cont.resume(returning: r)
-                            }
-                        )
+                await promptCoordinator.resolveConflict(
+                    source: s,
+                    destination: d,
+                    kind: k,
+                    presentModal: { info in
+                        self.activeConflict = info
+                    },
+                    dismissModal: {
+                        self.activeConflict = nil
                     }
-                }
+                )
             }
             
             await MainActor.run {
                 self.isExecuting = false
                 ContainerMetadataCache.shared.invalidate(path: app.dataPath)
                 self.outcomeResult = FileIOResultWrapper(result: result)
-                if result.succeeded.count > 0 {
-                    self.appendLog("[THÀNH CÔNG] Đã đè thành công \(result.succeeded.count) tệp vào container.")
-                } else if result.isCancelled {
-                    self.appendLog("[HỦY BỎ] Người dùng đã hủy thao tác.")
-                } else {
-                    self.appendLog("[CẢNH BÁO] Hoàn tất với \(result.failed.count) lỗi.")
-                }
+                log("overwrite: completed succeeded=\(result.succeeded.count) skipped=\(result.skipped.count) failed=\(result.failed.count) cancelled=\(result.isCancelled)")
             }
         }
     }

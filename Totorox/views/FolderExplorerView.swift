@@ -535,7 +535,7 @@ struct FolderExplorerView: View {
         .overlay {
             if let conflict = activeConflict {
                 ZStack {
-                    Color.black.opacity(0.4)
+                    Color.black.opacity(0.35)
                         .ignoresSafeArea()
                     WindowsConflictDialog(conflict: conflict)
                 }
@@ -970,26 +970,39 @@ struct FolderExplorerView: View {
         }
     }
 
-    private func importFileIntoCurrentDirectory(_ src: URL) {
-        let baseDir = currentURL
-        let dst = baseDir.appendingPathComponent(src.lastPathComponent)
-        Task.detached(priority: .userInitiated) {
-            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
-            let result = await FileIOEngine.shared.copyAndMerge(from: src, to: dst) { s, d, k in
-                await withCheckedContinuation { cont in
-                    Task { @MainActor in
-                        self.activeConflict = FileConflictInfo(
-                            sourceURL: s,
-                            destinationURL: d,
-                            conflictKind: k,
-                            continuation: { r in
-                                self.activeConflict = nil
-                                cont.resume(returning: r)
-                            }
-                        )
-                    }
+    private func makeConflictResolver(
+        using coordinator: ConflictPromptCoordinator
+    ) -> FileIOConflictResolver {
+        { source, destination, kind in
+            await coordinator.resolveConflict(
+                source: source,
+                destination: destination,
+                kind: kind,
+                presentModal: { info in
+                    self.activeConflict = info
+                },
+                dismissModal: {
+                    self.activeConflict = nil
                 }
+            )
+        }
+    }
+
+    private func importFileIntoCurrentDirectory(_ src: URL) {
+        let baseDir = currentURL.standardizedFileURL
+        let fileName = src.lastPathComponent
+        guard !fileName.isEmpty, fileName != "/", fileName != "." else { return }
+        let dst = baseDir.appendingPathComponent(fileName, isDirectory: false)
+        let hasSecurityAccess = src.startAccessingSecurityScopedResource()
+        let promptCoordinator = ConflictPromptCoordinator()
+        let resolver = makeConflictResolver(using: promptCoordinator)
+
+        Task.detached(priority: .userInitiated) {
+            defer {
+                if hasSecurityAccess { src.stopAccessingSecurityScopedResource() }
             }
+            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
+            let result = await FileIOEngine.shared.copyAndMerge(from: src, to: dst, conflictResolver: resolver)
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
                 self.outcomeResult = FileIOResultWrapper(result: result)
@@ -999,25 +1012,16 @@ struct FolderExplorerView: View {
     }
 
     private func executePasteAction(_ clip: ClipboardItem) {
-        let baseDir = currentURL
-        let dest = baseDir.appendingPathComponent(clip.url.lastPathComponent)
+        let baseDir = currentURL.standardizedFileURL
+        let destName = clip.url.lastPathComponent
+        guard !destName.isEmpty, destName != "/", destName != "." else { return }
+        let dest = baseDir.appendingPathComponent(destName)
+        let promptCoordinator = ConflictPromptCoordinator()
+        let resolver = makeConflictResolver(using: promptCoordinator)
+
         Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
-            let result = await FileIOEngine.shared.copyAndMerge(from: clip.url, to: dest) { s, d, k in
-                await withCheckedContinuation { cont in
-                    Task { @MainActor in
-                        self.activeConflict = FileConflictInfo(
-                            sourceURL: s,
-                            destinationURL: d,
-                            conflictKind: k,
-                            continuation: { r in
-                                self.activeConflict = nil
-                                cont.resume(returning: r)
-                            }
-                        )
-                    }
-                }
-            }
+            let result = await FileIOEngine.shared.copyAndMerge(from: clip.url, to: dest, conflictResolver: resolver)
 
             if clip.isCut && result.failed.isEmpty && !result.isCancelled {
                 try? await FileIOEngine.shared.deleteItem(at: clip.url)
@@ -1035,7 +1039,7 @@ struct FolderExplorerView: View {
 
     private func extractArchive(entry: FileEntry, intoNewFolder: Bool) {
         let srcURL = URL(fileURLWithPath: entry.path)
-        let baseDir = currentURL
+        let baseDir = currentURL.standardizedFileURL
         let destinationDir: URL
         if intoNewFolder {
             let baseName = srcURL.deletingPathExtension().lastPathComponent
@@ -1044,53 +1048,67 @@ struct FolderExplorerView: View {
             destinationDir = baseDir
         }
 
+        let promptCoordinator = ConflictPromptCoordinator()
+        let resolver = makeConflictResolver(using: promptCoordinator)
+
         directoryVM.isLoading = true
         Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
-            let tempStaging = FileManager.default.temporaryDirectory.appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
+            let tempStaging = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempStaging, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempStaging) }
 
             do {
                 let ext = srcURL.pathExtension.lowercased()
                 if ext == "zip" {
-                    let zipData = try Data(contentsOf: srcURL)
-                    let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
-                    for (relPath, fileData) in entries {
-                        let targetFileURL = tempStaging.appendingPathComponent(relPath)
-                        try FileManager.default.createDirectory(at: targetFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                        try fileData.write(to: targetFileURL, options: .atomic)
+                    // Prefer low-memory C streaming extractor so multi-hundred-MB ZIPs never bloat RAM;
+                    // fallback to PatchZipConverter for ZIP64 archives.
+                    do {
+                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: srcURL, into: tempStaging)
+                    } catch {
+                        let zipData = try Data(contentsOf: srcURL)
+                        let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
+                        for (relPath, fileData) in entries {
+                            let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
+                            let parts = normalized
+                                .split(separator: "/", omittingEmptySubsequences: true)
+                                .map(String.init)
+                                .filter { $0 != "." }
+                            guard !parts.isEmpty,
+                                  !parts.contains(".."),
+                                  parts.first != "__MACOSX",
+                                  parts.last != ".DS_Store" else {
+                                continue
+                            }
+                            var targetFileURL = tempStaging
+                            for (idx, part) in parts.enumerated() {
+                                targetFileURL.appendPathComponent(part, isDirectory: idx < parts.count - 1)
+                            }
+                            try FileManager.default.createDirectory(at: targetFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                            try fileData.write(to: targetFileURL, options: .atomic)
+                        }
                     }
                 } else if ext == "3105" {
                     let patchData = try Data(contentsOf: srcURL)
                     let decoded = try PatchPackageCodec.decode(patchData, password: nil)
                     for dir in decoded.project.directories {
-                        let targetDir = tempStaging.appendingPathComponent(dir.relativePath)
+                        let targetDir = tempStaging.appendingPathComponent(dir.relativePath, isDirectory: true)
                         try? FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
                     }
                     for rule in decoded.project.rules {
-                        let targetFile = tempStaging.appendingPathComponent(rule.relativePath)
+                        let targetFile = tempStaging.appendingPathComponent(rule.relativePath, isDirectory: false)
                         try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try rule.replacementData.write(to: targetFile, options: .atomic)
                     }
                 }
 
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
-                let result = await FileIOEngine.shared.copyAndMerge(from: tempStaging, to: destinationDir) { s, d, k in
-                    await withCheckedContinuation { cont in
-                        Task { @MainActor in
-                            self.activeConflict = FileConflictInfo(
-                                sourceURL: s,
-                                destinationURL: d,
-                                conflictKind: k,
-                                continuation: { r in
-                                    self.activeConflict = nil
-                                    cont.resume(returning: r)
-                                }
-                            )
-                        }
-                    }
-                }
+                let result = await FileIOEngine.shared.copyAndMerge(
+                    from: tempStaging,
+                    to: destinationDir,
+                    conflictResolver: resolver
+                )
 
                 ContainerMetadataCache.shared.invalidate(path: baseDir.path)
                 await MainActor.run {

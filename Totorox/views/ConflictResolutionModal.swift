@@ -15,13 +15,66 @@ struct FileIOResultWrapper: Identifiable {
     let result: FileIOResult
 }
 
+/// Thread-safe per-operation coordinator preventing any duplicate conflict popup once
+/// "Ghi đè tất cả (Replace All)" or "Hủy (Cancel)" has been selected in the current session.
+final class ConflictPromptCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var shouldReplaceAllConflicts = false
+    private var isCancelled = false
+
+    func resolveConflict(
+        source: URL,
+        destination: URL,
+        kind: FileIOConflictKind,
+        presentModal: @escaping @MainActor (FileConflictInfo) -> Void,
+        dismissModal: @escaping @MainActor () -> Void
+    ) async -> FileIOConflictResolution {
+        lock.lock()
+        if isCancelled {
+            lock.unlock()
+            return .cancel
+        }
+        if shouldReplaceAllConflicts {
+            lock.unlock()
+            return .replace
+        }
+        lock.unlock()
+
+        return await withCheckedContinuation { cont in
+            Task { @MainActor in
+                let info = FileConflictInfo(
+                    sourceURL: source,
+                    destinationURL: destination,
+                    conflictKind: kind,
+                    continuation: { choice in
+                        self.lock.lock()
+                        if choice == .replaceAll {
+                            self.shouldReplaceAllConflicts = true
+                        } else if choice == .cancel {
+                            self.isCancelled = true
+                        }
+                        self.lock.unlock()
+                        dismissModal()
+                        cont.resume(returning: choice)
+                    }
+                )
+                presentModal(info)
+            }
+        }
+    }
+}
+
 struct WindowsConflictDialog: View {
     let conflict: FileConflictInfo
+
+    private static let pastelRed = Color(red: 1.0, green: 107.0 / 255.0, blue: 107.0 / 255.0)
+    private static let pastelRedBorder = Color(red: 224.0 / 255.0, green: 68.0 / 255.0, blue: 68.0 / 255.0)
+    private static let mintColor = Color(red: 91.0 / 255.0, green: 185.0 / 255.0, blue: 168.0 / 255.0)
 
     private var dialogTitle: String {
         switch conflict.conflictKind {
         case .fileExists:
-            return "Trùng lặp tệp (File Collision)"
+            return "Trùng lặp tệp"
         case .fileOverwritingFolder, .folderOverwritingFile:
             return "Xung đột tệp & thư mục"
         }
@@ -30,7 +83,7 @@ struct WindowsConflictDialog: View {
     private var dialogSubtitle: String {
         switch conflict.conflictKind {
         case .fileExists:
-            return "Tệp '\(conflict.sourceURL.lastPathComponent)' đã tồn tại trong thư mục đích."
+            return "Tệp đích đã tồn tại tại đường dẫn này."
         case .fileOverwritingFolder:
             return "Nguồn là Tệp nhưng Đích là Thư mục cùng tên."
         case .folderOverwritingFile:
@@ -39,130 +92,156 @@ struct WindowsConflictDialog: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            // Header with Icon
-            HStack(spacing: 14) {
+        VStack(spacing: 14) {
+            // Compact Header
+            HStack(spacing: 12) {
                 ZStack {
                     Circle()
-                        .fill(Color.orange.opacity(0.15))
-                        .frame(width: 48, height: 48)
+                        .fill(Self.pastelRed.opacity(0.14))
+                        .frame(width: 40, height: 40)
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(Color.orange)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Self.pastelRed)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(dialogTitle)
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
 
                     Text(dialogSubtitle)
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundStyle(TotoroxTheme.textSecondary)
-                }
-                Spacer()
-            }
-
-            Divider()
-
-            // Path details
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top) {
-                    Text("Nguồn:")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(TotoroxTheme.textSecondary)
-                        .frame(width: 50, alignment: .leading)
-                    Text(conflict.sourceURL.lastPathComponent)
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundColor(TotoroxTheme.textPrimary)
-                }
-
-                HStack(alignment: .top) {
-                    Text("Đích:")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(TotoroxTheme.textSecondary)
-                        .frame(width: 50, alignment: .leading)
-                    Text(conflict.destinationURL.path)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(TotoroxTheme.textPrimary)
                         .lineLimit(2)
                 }
+                Spacer(minLength: 0)
             }
-            .padding(12)
+
+            // Compact Path Summary (single-line middle truncation so paths never overflow)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Nguồn:")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .frame(width: 48, alignment: .leading)
+                    Text(conflict.sourceURL.lastPathComponent)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Đích:")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .frame(width: 48, alignment: .leading)
+                    Text(conflict.destinationURL.path)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
             .background(TotoroxTheme.searchBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            Text(conflict.conflictKind == .fileExists
-                 ? "Chọn thao tác bạn muốn thực hiện đối với tệp bị trùng lặp này."
-                 : "Tuyệt đối không tự ý xóa mục đích nếu chưa có sự xác nhận của bạn.")
-                .font(.system(size: 12))
-                .foregroundColor(TotoroxTheme.textSecondary)
-                .multilineTextAlignment(.center)
-
-            // Windows-style options
-            VStack(spacing: 9) {
-                // 1. Replace (Ghi đè)
-                Button(action: { conflict.continuation(.replace) }) {
-                    HStack {
+            // Clean Compact Action Buttons
+            VStack(spacing: 8) {
+                // 1. Replace (Ghi đè) - Pastel Red
+                Button {
+                    conflict.continuation(.replace)
+                } label: {
+                    HStack(spacing: 6) {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("Ghi đè tệp này (Replace)")
-                            .fontWeight(.semibold)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Ghi đè (Replace)")
+                            .font(.system(size: 14, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(TotoroxTheme.mintAccent)
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .frame(height: 42)
+                    .background(Self.pastelRed)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .buttonStyle(.plain)
 
-                // 2. Replace All (Ghi đè tất cả)
-                Button(action: { conflict.continuation(.replaceAll) }) {
-                    HStack {
-                        Image(systemName: "checkmark.circle.badge.questionmark.fill")
-                        Text("Ghi đè tất cả các tệp trùng (Replace All)")
-                            .fontWeight(.semibold)
+                // 2. Replace All (Ghi đè tất cả) - Pastel Red with highlighted border & icon
+                Button {
+                    conflict.continuation(.replaceAll)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("Ghi đè tất cả (Replace All)")
+                            .font(.system(size: 14, weight: .bold))
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(Color(red: 0.15, green: 0.55, blue: 0.45))
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .frame(height: 42)
+                    .background(Self.pastelRed)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Self.pastelRedBorder, lineWidth: 1.8)
+                    )
+                    .shadow(color: Self.pastelRed.opacity(0.28), radius: 5, y: 2)
                 }
+                .buttonStyle(.plain)
 
-                // 3. Skip (Bỏ qua)
-                Button(action: { conflict.continuation(.skip) }) {
-                    HStack {
+                // 3. Skip (Bỏ qua) - Mint Accent
+                Button {
+                    conflict.continuation(.skip)
+                } label: {
+                    HStack(spacing: 6) {
                         Image(systemName: "forward.fill")
-                        Text("Bỏ qua tệp này (Skip)")
-                            .fontWeight(.medium)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Bỏ qua (Skip)")
+                            .font(.system(size: 14, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
-                    .background(Color(red: 0.92, green: 0.93, blue: 0.96))
-                    .foregroundColor(TotoroxTheme.textPrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .background(Self.mintColor)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .buttonStyle(.plain)
 
-                // 4. Cancel (Hủy toàn bộ)
-                Button(action: { conflict.continuation(.cancel) }) {
-                    HStack {
-                        Image(systemName: "xmark")
-                        Text("Hủy toàn bộ thao tác (Cancel)")
-                            .fontWeight(.medium)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(Color.red.opacity(0.1))
-                    .foregroundColor(Color.red)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                // 4. Cancel (Hủy) - Text only, gray, no background
+                Button {
+                    conflict.continuation(.cancel)
+                } label: {
+                    Text("Hủy (Cancel)")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
-        .padding(24)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.12), radius: 20, y: 10)
+        .padding(18)
+        .frame(maxWidth: 340)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.88))
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.14), radius: 18, y: 8)
         .padding(.horizontal, 24)
+        .presentationDetents([.fraction(0.55), .medium])
     }
 }
 

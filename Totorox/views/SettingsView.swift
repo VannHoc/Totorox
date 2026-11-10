@@ -150,7 +150,7 @@ struct SettingsView: View {
 
                         Divider()
 
-                        Text("© 2026 Totorox. Mọi quyền được bảo lưu.\nĐược phát triển bởi VannHoc & Totorox Team.")
+                        Text("@2026 Totorox. Được phát triển bởi VannHoc.")
                             .font(.system(size: 11))
                             .foregroundStyle(TotoroxTheme.textSecondary)
                     }

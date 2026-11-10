@@ -371,4 +371,89 @@ final class FileIOEngineTests: XCTestCase {
         let ghostDuplicate = patchesRoot.appendingPathComponent("Amily Đông Hải Long Vương 2")
         XCTAssertFalse(fileManager.fileExists(atPath: ghostDuplicate.path), "Ghost duplicate ' 2' folder must never be created")
     }
+
+    // MARK: - 8. Regression Test: Không báo xung đột giả khi copy vào thư mục đích hoặc thư mục rỗng
+    func testCopySingleFile_IntoParentDirectoryWithoutFilename_DoesNotFalseConflict() async throws {
+        let patchesDir = tempDirectory.appendingPathComponent("Patches", isDirectory: true)
+        try fileManager.createDirectory(at: patchesDir, withIntermediateDirectories: true)
+
+        let srcZip = tempDirectory.appendingPathComponent("NgoKhongVoTuong.zip")
+        try "ZIP_BYTES".data(using: .utf8)!.write(to: srcZip)
+
+        var promptCount = 0
+        let result = await engine.copyAndMerge(
+            from: srcZip,
+            to: patchesDir,
+            conflictResolver: { _, _, _ in
+                promptCount += 1
+                return .cancel
+            }
+        )
+
+        XCTAssertEqual(promptCount, 0, "Copying a new file into parent directory must NEVER prompt for fileOverwritingFolder conflict")
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertTrue(fileManager.fileExists(atPath: patchesDir.appendingPathComponent("NgoKhongVoTuong.zip").path))
+    }
+
+    func testCopyDirectory_IntoExistingNonCollidingFolder_AutoMergesWithoutPrompt() async throws {
+        let stagingDir = tempDirectory.appendingPathComponent("ExtractStaging", isDirectory: true)
+        let patchesDir = tempDirectory.appendingPathComponent("PatchesExisting", isDirectory: true)
+        try fileManager.createDirectory(at: stagingDir.appendingPathComponent("files/sub"), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: patchesDir.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try "NEW_CONTENT".data(using: .utf8)!.write(to: stagingDir.appendingPathComponent("files/sub/hero.bytes"))
+        try "EXISTING_OTHER".data(using: .utf8)!.write(to: patchesDir.appendingPathComponent("files/keep.txt"))
+
+        var promptCount = 0
+        let result = await engine.copyAndMerge(
+            from: stagingDir,
+            to: patchesDir,
+            conflictResolver: { _, _, _ in
+                promptCount += 1
+                return .cancel
+            }
+        )
+
+        XCTAssertEqual(promptCount, 0, "Directory-over-directory merge with non-colliding children must NEVER prompt")
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertEqual(try String(contentsOf: patchesDir.appendingPathComponent("files/sub/hero.bytes")), "NEW_CONTENT")
+        XCTAssertEqual(try String(contentsOf: patchesDir.appendingPathComponent("files/keep.txt")), "EXISTING_OTHER")
+    }
+
+    // MARK: - 9. Regression Test: Replace All phải triệt tiêu mọi popup tiếp theo (cả File-vs-File và Type Conflict)
+    func testReplaceAllConflicts_SuppressesAllSubsequentPrompts_IncludingTypeConflicts() async throws {
+        let srcDir = tempDirectory.appendingPathComponent("SrcReplaceAll", isDirectory: true)
+        let destDir = tempDirectory.appendingPathComponent("DestReplaceAll", isDirectory: true)
+        try fileManager.createDirectory(at: srcDir.appendingPathComponent("a_nested"), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        // Multiple colliding items: file-vs-file AND folder-vs-file AND file-vs-folder
+        try "new_a".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("file1.txt"))
+        try "new_b".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("file2.txt"))
+        try "new_nested".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("a_nested/inner.txt"))
+        try "new_type".data(using: .utf8)!.write(to: srcDir.appendingPathComponent("type_item"))
+
+        try "old_a".data(using: .utf8)!.write(to: destDir.appendingPathComponent("file1.txt"))
+        try "old_b".data(using: .utf8)!.write(to: destDir.appendingPathComponent("file2.txt"))
+        try "old_file_where_folder_goes".data(using: .utf8)!.write(to: destDir.appendingPathComponent("a_nested"))
+        try fileManager.createDirectory(at: destDir.appendingPathComponent("type_item"), withIntermediateDirectories: true)
+        try "inside_old_dir".data(using: .utf8)!.write(to: destDir.appendingPathComponent("type_item/stale.txt"))
+
+        var promptCount = 0
+        let result = await engine.copyAndMerge(
+            from: srcDir,
+            to: destDir,
+            conflictResolver: { _, _, _ in
+                promptCount += 1
+                return .replaceAll
+            }
+        )
+
+        XCTAssertTrue(result.failed.isEmpty, "Errors: \(result.failed)")
+        XCTAssertEqual(promptCount, 1, "Selecting Replace All on the first conflict must suppress ALL subsequent prompts including type conflicts")
+        XCTAssertTrue(engine.shouldReplaceAllConflicts)
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("file1.txt")), "new_a")
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("file2.txt")), "new_b")
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("a_nested/inner.txt")), "new_nested")
+        XCTAssertEqual(try String(contentsOf: destDir.appendingPathComponent("type_item")), "new_type")
+    }
 }

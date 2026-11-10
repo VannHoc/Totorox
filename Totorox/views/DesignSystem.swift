@@ -214,7 +214,7 @@ struct TotoroxPillSelector<T: Hashable>: View {
 enum AppTheme {
     static var accent: Color { TotoroxTheme.mintAccent }
     static var pageBackground: Color { TotoroxTheme.pageBackground }
-    static var consoleBackground: Color { Color(red: 0.12, green: 0.14, blue: 0.18) }
+    static var consoleBackground: Color { TotoroxTheme.pageBackground }
     static let pageInset: CGFloat = 16
     static let rowIconSize: CGFloat = 17
     static let rowIconFrame: CGFloat = 28

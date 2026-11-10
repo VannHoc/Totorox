@@ -138,6 +138,169 @@ enum ZIPArchiveExtractor {
         }
     }
 
+    /// Streams all ZIP entries directly into `stagingDirectory` without wrapping them in an extra
+    /// archive-named subfolder and without loading the entire archive into RAM.
+    /// Ideal for multi-hundred-MB archives in FolderExplorerView.
+    static func extractFlatContents(
+        archiveURL: URL,
+        into stagingDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> Int {
+        let archive = archiveURL.standardizedFileURL
+        let staging = stagingDirectory.standardizedFileURL
+        let archiveValues = try archive.resourceValues(
+            forKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        )
+        guard archiveValues.isRegularFile == true,
+              archiveValues.isDirectory != true,
+              archiveValues.isSymbolicLink != true,
+              let archiveSizeValue = archiveValues.fileSize,
+              archiveSizeValue >= 22 else {
+            throw ZIPArchiveExtractorError.invalidArchive
+        }
+
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        let handle = try FileHandle(forReadingFrom: archive)
+        defer { try? handle.close() }
+        let entries = try readEntriesForFlatExtraction(handle: handle, archiveSize: UInt64(archiveSizeValue))
+
+        var extractedFiles = 0
+        for entry in entries {
+            let target = try destinationURL(
+                components: entry.components,
+                root: staging,
+                isDirectory: entry.isDirectory
+            )
+            if entry.isDirectory {
+                try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+                continue
+            }
+            try fileManager.createDirectory(
+                at: target.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if fileManager.fileExists(atPath: target.path) {
+                try? fileManager.removeItem(at: target)
+            }
+            let status = archive.path.withCString { archivePath in
+                target.path.withCString { targetPath in
+                    browserZIPExtractEntry(
+                        archivePath,
+                        entry.dataOffset,
+                        entry.compressedSize,
+                        entry.compressionMethod,
+                        targetPath,
+                        entry.uncompressedSize,
+                        entry.crc32
+                    )
+                }
+            }
+            guard status == 0 else {
+                throw ZIPArchiveExtractorError.extractionFailed
+            }
+            extractedFiles += 1
+        }
+        return extractedFiles
+    }
+
+    private static func readEntriesForFlatExtraction(
+        handle: FileHandle,
+        archiveSize: UInt64
+    ) throws -> [Entry] {
+        let tailSize = min(archiveSize, 65_557)
+        let tailOffset = archiveSize - tailSize
+        let tail = try read(handle: handle, offset: tailOffset, count: Int(tailSize))
+        guard let relativeEndOffset = lastSignature(endSignature, in: tail),
+              relativeEndOffset + 22 <= tail.count else {
+            throw ZIPArchiveExtractorError.invalidArchive
+        }
+        let endOffset = tailOffset + UInt64(relativeEndOffset)
+        let entryCount = u16(tail, relativeEndOffset + 10)
+        let centralSize = u32(tail, relativeEndOffset + 12)
+        let centralOffset = u32(tail, relativeEndOffset + 16)
+        guard entryCount != 0xffff,
+              centralSize != 0xffff_ffff,
+              centralOffset != 0xffff_ffff,
+              UInt64(centralOffset) + UInt64(centralSize) <= endOffset else {
+            throw ZIPArchiveExtractorError.invalidArchive
+        }
+
+        var entries: [Entry] = []
+        var cursor = UInt64(centralOffset)
+        let centralEnd = cursor + UInt64(centralSize)
+        for _ in 0..<Int(entryCount) {
+            let header = try read(handle: handle, offset: cursor, count: 46)
+            guard u32(header, 0) == centralHeaderSignature else {
+                throw ZIPArchiveExtractorError.invalidArchive
+            }
+            let flags = u16(header, 8)
+            let method = u16(header, 10)
+            let checksum = u32(header, 16)
+            let compressedSize = u32(header, 20)
+            let uncompressedSize = u32(header, 24)
+            let nameLength = Int(u16(header, 28))
+            let extraLength = Int(u16(header, 30))
+            let itemCommentLength = Int(u16(header, 32))
+            let externalAttributes = u32(header, 38)
+            let localOffset = u32(header, 42)
+            let variableCount = nameLength + extraLength + itemCommentLength
+            guard nameLength > 0,
+                  cursor + 46 + UInt64(variableCount) <= centralEnd,
+                  flags & 0x0001 == 0,
+                  method == 0 || method == 8,
+                  compressedSize != 0xffff_ffff,
+                  uncompressedSize != 0xffff_ffff,
+                  localOffset != 0xffff_ffff else {
+                throw ZIPArchiveExtractorError.invalidArchive
+            }
+
+            let nameData = try read(handle: handle, offset: cursor + 46, count: nameLength)
+            let rawName = String(data: nameData, encoding: .utf8)
+                ?? String(data: nameData, encoding: .isoLatin1)
+                ?? ""
+            cursor += 46 + UInt64(variableCount)
+
+            let normalized = rawName.replacingOccurrences(of: "\\", with: "/")
+            let isDirectory = normalized.hasSuffix("/") || ((UInt16((externalAttributes >> 16) & 0xffff) & 0o170000) == 0o040000)
+            var components = normalized
+                .split(separator: "/", omittingEmptySubsequences: true)
+                .map(String.init)
+                .filter { $0 != "." }
+            guard !components.isEmpty,
+                  !components.contains(".."),
+                  components.first != "__MACOSX",
+                  components.last != ".DS_Store" else {
+                continue
+            }
+            // Strip any accidental leading empty components
+            components = components.filter { !$0.isEmpty }
+            guard !components.isEmpty else { continue }
+
+            let localHeader = try read(handle: handle, offset: UInt64(localOffset), count: 30)
+            guard u32(localHeader, 0) == localHeaderSignature else {
+                throw ZIPArchiveExtractorError.invalidArchive
+            }
+            let localNameLength = Int(u16(localHeader, 26))
+            let localExtraLength = UInt64(u16(localHeader, 28))
+            let dataOffset = UInt64(localOffset) + 30 + UInt64(localNameLength) + localExtraLength
+            guard dataOffset <= UInt64(centralOffset),
+                  UInt64(compressedSize) <= UInt64(centralOffset) - dataOffset else {
+                throw ZIPArchiveExtractorError.invalidArchive
+            }
+            entries.append(Entry(
+                components: components,
+                isDirectory: isDirectory,
+                compressionMethod: method,
+                crc32: checksum,
+                compressedSize: UInt64(compressedSize),
+                uncompressedSize: UInt64(uncompressedSize),
+                dataOffset: dataOffset
+            ))
+        }
+        return entries
+    }
+
     private static func readEntries(
         handle: FileHandle,
         archiveSize: UInt64

@@ -66,9 +66,43 @@ private final class FileIOCancellationState: @unchecked Sendable {
     }
 }
 
+private final class FileIOConflictSession: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _shouldReplaceAllConflicts = false
+
+    var shouldReplaceAllConflicts: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _shouldReplaceAllConflicts
+    }
+
+    func enableReplaceAll() {
+        lock.lock()
+        _shouldReplaceAllConflicts = true
+        lock.unlock()
+    }
+}
+
 public final class FileIOEngine: @unchecked Sendable {
     public static let shared = FileIOEngine()
     private let fileManager: FileManager
+    private let replaceAllLock = NSLock()
+    private var _shouldReplaceAllConflicts: Bool = false
+
+    /// Reset to `false` at the beginning of each `copyAndMerge` operation and flipped to `true`
+    /// as soon as the user selects `.replaceAll` on any conflict.
+    public var shouldReplaceAllConflicts: Bool {
+        get {
+            replaceAllLock.lock()
+            defer { replaceAllLock.unlock() }
+            return _shouldReplaceAllConflicts
+        }
+        set {
+            replaceAllLock.lock()
+            _shouldReplaceAllConflicts = newValue
+            replaceAllLock.unlock()
+        }
+    }
 
     public init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -78,30 +112,32 @@ public final class FileIOEngine: @unchecked Sendable {
     /// according to Windows Merge rules:
     /// 1. Folder -> Folder: Recursive merge. Destination folder is never deleted; recurses inside.
     /// 2. File not existing at destination: Standard copy.
-    /// 3. File already existing at destination:
-    ///    - If isReplaceAll == true: Overwrites directly without prompting.
-    ///    - If isReplaceAll == false: Pauses background execution (async/await) and invokes conflictResolver for prompt:
+    /// 3. Exact destination file/item already existing on disk:
+    ///    - If `shouldReplaceAllConflicts == true`: Overwrites directly without prompting.
+    ///    - If `shouldReplaceAllConflicts == false`: Pauses background execution (async/await) and invokes `conflictResolver`:
     ///      - Replace: Overwrite current file, continue.
-    ///      - Skip: Do nothing for current file, continue.
-    ///      - Replace All: Set isReplaceAll = true, overwrite current and all future colliding files without asking.
+    ///      - Skip: Do nothing for current item, continue.
+    ///      - Replace All: Set `shouldReplaceAllConflicts = true`, overwrite current and all future colliding items without asking.
     public func copyAndMerge(
         from sourceURL: URL,
         to destinationURL: URL,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
         let cancelState = FileIOCancellationState()
+        let conflictSession = FileIOConflictSession()
+        self.shouldReplaceAllConflicts = false
+
         if Task.isCancelled {
             cancelState.cancel()
         }
 
         let workerTask = Task.detached(priority: .userInitiated) { [self] () -> FileIOResult in
             var result = FileIOResult()
-            var isReplaceAll = false
             let standardizedSource = sourceURL.standardizedFileURL
-            let standardizedDest = destinationURL.standardizedFileURL
+            let initialDest = destinationURL.standardizedFileURL
 
             _ = ContainerStore.ensureContainerAccess(for: standardizedSource.path)
-            _ = ContainerStore.ensureContainerAccess(for: standardizedDest.path)
+            _ = ContainerStore.ensureContainerAccess(for: initialDest.path)
 
             var isDir: ObjCBool = false
             var st = stat()
@@ -120,11 +156,29 @@ public final class FileIOEngine: @unchecked Sendable {
                 return result
             }
 
+            // Guard against copying a single file into a parent directory path without appending the filename.
+            // Only treat it as a type collision (.fileOverwritingFolder) if the names genuinely collide or
+            // destination is NOT a different-named parent directory.
+            var resolvedDest = initialDest
+            if !isDir.boolValue {
+                var destIsDir: ObjCBool = false
+                if self.fileManager.fileExists(atPath: initialDest.path, isDirectory: &destIsDir),
+                   destIsDir.boolValue,
+                   initialDest.lastPathComponent != standardizedSource.lastPathComponent {
+                    resolvedDest = initialDest.appendingPathComponent(standardizedSource.lastPathComponent)
+                }
+            }
+
+            if standardizedSource == resolvedDest {
+                result.succeeded.append(resolvedDest)
+                return result
+            }
+
             await self.processItem(
                 source: standardizedSource,
                 sourceIsDir: isDir.boolValue,
-                destination: standardizedDest,
-                isReplaceAll: &isReplaceAll,
+                destination: resolvedDest,
+                conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
                 conflictResolver: conflictResolver
@@ -145,7 +199,7 @@ public final class FileIOEngine: @unchecked Sendable {
         source: URL,
         sourceIsDir: Bool,
         destination: URL,
-        isReplaceAll: inout Bool,
+        conflictSession: FileIOConflictSession,
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         conflictResolver: FileIOConflictResolver
@@ -156,14 +210,15 @@ public final class FileIOEngine: @unchecked Sendable {
             return
         }
 
-        _ = ContainerStore.ensureContainerAccess(for: destination.path)
+        let exactDestination = destination.standardizedFileURL
+        _ = ContainerStore.ensureContainerAccess(for: exactDestination.path)
 
         var destIsDir: ObjCBool = false
         var destStat = stat()
         let destExists: Bool
-        if fileManager.fileExists(atPath: destination.path, isDirectory: &destIsDir) {
+        if fileManager.fileExists(atPath: exactDestination.path, isDirectory: &destIsDir) {
             destExists = true
-        } else if lstat(destination.path, &destStat) == 0 {
+        } else if lstat(exactDestination.path, &destStat) == 0 {
             destExists = true
             destIsDir = ObjCBool((destStat.st_mode & S_IFMT) == S_IFDIR)
         } else {
@@ -171,125 +226,157 @@ public final class FileIOEngine: @unchecked Sendable {
         }
 
         if !destExists {
-            // Item does not exist at destination
+            // Final destination path does NOT exist on disk -> copy/create directly without any conflict prompt
             if sourceIsDir {
                 do {
-                    try Self.createDirectoryIfNeeded(at: destination)
-                    result.succeeded.append(destination)
+                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    result.succeeded.append(exactDestination)
                 } catch {
-                    result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
+                    result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                     return
                 }
 
                 await copyChildrenRecursively(
                     from: source,
-                    to: destination,
-                    isReplaceAll: &isReplaceAll,
+                    to: exactDestination,
+                    conflictSession: conflictSession,
                     result: &result,
                     cancelState: cancelState,
                     conflictResolver: conflictResolver
                 )
             } else {
                 do {
-                    try copySingleFile(from: source, to: destination)
-                    result.succeeded.append(destination)
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
                 } catch {
-                    result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
+                    result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
             }
-        } else {
-            // Item already exists at destination
-            if sourceIsDir && destIsDir.boolValue {
-                // 1. Folder -> Folder: Recursive merge without deleting destination directory
-                result.succeeded.append(destination)
-                await copyChildrenRecursively(
-                    from: source,
-                    to: destination,
-                    isReplaceAll: &isReplaceAll,
-                    result: &result,
-                    cancelState: cancelState,
-                    conflictResolver: conflictResolver
-                )
-            } else if !sourceIsDir && !destIsDir.boolValue {
-                // 2. File -> File collision
-                if isReplaceAll {
-                    do {
-                        try copySingleFile(from: source, to: destination)
-                        result.succeeded.append(destination)
-                    } catch {
-                        result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
-                    }
-                } else {
-                    let userChoice = await conflictResolver(source, destination, .fileExists)
-                    switch userChoice {
-                    case .replace:
-                        do {
-                            try copySingleFile(from: source, to: destination)
-                            result.succeeded.append(destination)
-                        } catch {
-                            result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
-                        }
-                    case .skip:
-                        result.skipped.append(source)
-                    case .replaceAll:
-                        isReplaceAll = true
-                        do {
-                            try copySingleFile(from: source, to: destination)
-                            result.succeeded.append(destination)
-                        } catch {
-                            result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
-                        }
-                    case .cancel:
-                        result.isCancelled = true
-                        result.skipped.append(source)
-                    }
-                }
-            } else {
-                // 3. Type conflict (File vs Folder or Folder vs File)
-                let conflictKind: FileIOConflictKind = (!sourceIsDir && destIsDir.boolValue)
-                    ? .fileOverwritingFolder
-                    : .folderOverwritingFile
+            return
+        }
 
-                let userChoice = await conflictResolver(source, destination, conflictKind)
-                switch userChoice {
-                case .replace, .replaceAll:
-                    if userChoice == .replaceAll {
-                        isReplaceAll = true
-                    }
-                    do {
-                        try removeExistingItem(at: destination)
-                        if sourceIsDir {
-                            try Self.createDirectoryIfNeeded(at: destination)
-                            result.succeeded.append(destination)
-                            await copyChildrenRecursively(
-                                from: source,
-                                to: destination,
-                                isReplaceAll: &isReplaceAll,
-                                result: &result,
-                                cancelState: cancelState,
-                                conflictResolver: conflictResolver
-                            )
-                        } else {
-                            try copySingleFile(from: source, to: destination)
-                            result.succeeded.append(destination)
-                        }
-                    } catch {
-                        result.failed.append(FileIOFailureRecord(url: destination, reason: error.localizedDescription))
-                    }
-                case .skip:
-                    result.skipped.append(source)
-                case .cancel:
-                    result.isCancelled = true
-                    result.skipped.append(source)
+        // Exact destination path EXISTS on disk:
+        if sourceIsDir && destIsDir.boolValue {
+            // 1. Folder -> Folder: Automatically merge recursively (NEVER prompt for conflict)
+            result.succeeded.append(exactDestination)
+            await copyChildrenRecursively(
+                from: source,
+                to: exactDestination,
+                conflictSession: conflictSession,
+                result: &result,
+                cancelState: cancelState,
+                conflictResolver: conflictResolver
+            )
+            return
+        }
+
+        if !sourceIsDir && !destIsDir.boolValue {
+            // 2. File -> File collision
+            if conflictSession.shouldReplaceAllConflicts {
+                do {
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
+                } catch {
+                    result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
+                return
             }
+
+            let userChoice = await conflictResolver(source, exactDestination, .fileExists)
+            switch userChoice {
+            case .replace:
+                do {
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
+                } catch {
+                    result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
+                }
+            case .replaceAll:
+                conflictSession.enableReplaceAll()
+                self.shouldReplaceAllConflicts = true
+                do {
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
+                } catch {
+                    result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
+                }
+            case .skip:
+                result.skipped.append(source)
+            case .cancel:
+                result.isCancelled = true
+                result.skipped.append(source)
+            }
+            return
+        }
+
+        // 3. Type conflict (File -> Folder or Folder -> File)
+        if conflictSession.shouldReplaceAllConflicts {
+            do {
+                try removeExistingItem(at: exactDestination)
+                if sourceIsDir {
+                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    result.succeeded.append(exactDestination)
+                    await copyChildrenRecursively(
+                        from: source,
+                        to: exactDestination,
+                        conflictSession: conflictSession,
+                        result: &result,
+                        cancelState: cancelState,
+                        conflictResolver: conflictResolver
+                    )
+                } else {
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
+                }
+            } catch {
+                result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
+            }
+            return
+        }
+
+        let conflictKind: FileIOConflictKind = (!sourceIsDir && destIsDir.boolValue)
+            ? .fileOverwritingFolder
+            : .folderOverwritingFile
+
+        let userChoice = await conflictResolver(source, exactDestination, conflictKind)
+        switch userChoice {
+        case .replace, .replaceAll:
+            if userChoice == .replaceAll {
+                conflictSession.enableReplaceAll()
+                self.shouldReplaceAllConflicts = true
+            }
+            do {
+                try removeExistingItem(at: exactDestination)
+                if sourceIsDir {
+                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    result.succeeded.append(exactDestination)
+                    await copyChildrenRecursively(
+                        from: source,
+                        to: exactDestination,
+                        conflictSession: conflictSession,
+                        result: &result,
+                        cancelState: cancelState,
+                        conflictResolver: conflictResolver
+                    )
+                } else {
+                    try copySingleFile(from: source, to: exactDestination)
+                    result.succeeded.append(exactDestination)
+                }
+            } catch {
+                result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
+            }
+        case .skip:
+            result.skipped.append(source)
+        case .cancel:
+            result.isCancelled = true
+            result.skipped.append(source)
         }
     }
 
     private func copyChildrenRecursively(
         from sourceDir: URL,
         to destinationDir: URL,
-        isReplaceAll: inout Bool,
+        conflictSession: FileIOConflictSession,
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         conflictResolver: FileIOConflictResolver
@@ -346,7 +433,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 source: childSource,
                 sourceIsDir: isDir.boolValue,
                 destination: childDest,
-                isReplaceAll: &isReplaceAll,
+                conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
                 conflictResolver: conflictResolver

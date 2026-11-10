@@ -43,7 +43,7 @@ struct LogView: View {
                                     VStack(spacing: 0) {
                                         Text(entry)
                                             .font(.system(.caption, design: .monospaced))
-                                            .foregroundStyle(.primary)
+                                            .foregroundStyle(TotoroxTheme.textPrimary)
                                             .textSelection(.enabled)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .padding(.vertical, 11)
@@ -57,7 +57,9 @@ struct LogView: View {
                                 }
                             }
                             .padding(AppTheme.pageInset)
-                            .background(AppTheme.consoleBackground)
+                            .background(TotoroxTheme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .padding(12)
                         }
                         .onChange(of: appLog.entries.count) { count in
                             guard count > 0 else { return }
@@ -72,7 +74,8 @@ struct LogView: View {
                     }
                 }
             }
-            .background(AppTheme.consoleBackground.ignoresSafeArea())
+            .background(TotoroxTheme.pageBackground.ignoresSafeArea())
+            .preferredColorScheme(.light)
             .navigationTitle(language.text("logs.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
