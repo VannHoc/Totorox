@@ -157,11 +157,6 @@ struct WindowsConflictDialog: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-                    .background(Color.red.opacity(0.1))
-                    .foregroundColor(Color.red)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-            }
         }
         .padding(24)
         .background(Color.white)
