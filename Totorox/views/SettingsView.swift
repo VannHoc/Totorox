@@ -139,7 +139,16 @@ struct SettingsView: View {
 
                         Divider()
 
-                        // Link 2: Đối tác Telegram
+                        // Link 2: Telegram tác giả
+                        TotoroxLinkRow(
+                            urlString: "https://t.me/milototoro",
+                            title: "Telegram tác giả",
+                            subtitle: "@milototoro"
+                        )
+
+                        Divider()
+
+                        // Link 3: Đối tác Telegram
                         TotoroxLinkRow(
                             urlString: "https://t.me/DucThaiAOV",
                             title: "Telegram đối tác",

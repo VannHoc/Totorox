@@ -4,6 +4,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
     case overwrite = 0
     case folders = 1
     case patch = 2
+    case merge = 3
 
     var id: Int { rawValue }
 
@@ -12,6 +13,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .overwrite: return "Đè file"
         case .folders: return "Thư mục"
         case .patch: return "Patch"
+        case .merge: return "Gộp file"
         }
     }
 
@@ -20,6 +22,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .overwrite: return "bolt.fill"
         case .folders: return "folder.fill"
         case .patch: return "arrow.triangle.2.circlepath"
+        case .merge: return "square.stack.3d.up.fill"
         }
     }
 }

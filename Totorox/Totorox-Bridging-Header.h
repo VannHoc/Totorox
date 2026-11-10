@@ -1,6 +1,7 @@
 #import "exploit/bad_query.h"
 #import "exploit/mcm_bridge.h"
 #import "exploit/wallpaper_zip.h"
+#import "exploit/aov_zstd.h"
 #import "kexploit/kexploit_opa334.h"
 #import "kexploit/sandbox_escape.h"
 #import "kexploit/kutils.h"

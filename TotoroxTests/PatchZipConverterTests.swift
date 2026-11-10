@@ -218,4 +218,21 @@ final class PatchZipConverterTests: XCTestCase {
             XCTAssertEqual(decoded.project.rules[0].operation, "mergePlist")
         }
     }
+
+    func testAovModMerger_PathNormalizationAndJgCryptoRoundTrip() throws {
+        let engine = AovModMergerEngine.shared
+
+        let norm1 = engine.normalizeAovRelativePath("Murad/com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes")
+        XCTAssertEqual(norm1, "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes")
+
+        let normMacOS = engine.normalizeAovRelativePath("__MACOSX/Murad/._CommonActions.pkg.bytes")
+        XCTAssertNil(normMacOS)
+
+        let plain = Data("MSES_TEST_PAYLOAD_FOR_JG_CRYPTO_1234567890".utf8)
+        let encrypted = try engine.jgEncrypt(plain, stem: "HeroSkin_1")
+        XCTAssertEqual(Array(encrypted.prefix(4)), [0x22, 0x4A, 0x67, 0x00])
+
+        let decrypted = try engine.jgDecrypt(encrypted, stem: "HeroSkin_1")
+        XCTAssertEqual(decrypted, plain)
+    }
 }

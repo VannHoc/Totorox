@@ -26,8 +26,9 @@ struct OverwriteFileView: View {
     @State private var outcomeResult: FileIOResultWrapper? = nil
     @State private var alertMessage: String? = nil
     
-    // Scanner
+    // Scanner & Navigation Coordinator
     @ObservedObject private var scanner = AppContainerScanner.shared
+    @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     
     // Form validation
     private var isReadyToExecute: Bool {
@@ -104,6 +105,10 @@ struct OverwriteFileView: View {
             if scanner.apps.isEmpty {
                 scanner.prewarmOnLaunch()
             }
+            consumePendingNavigationIfNeeded()
+        }
+        .onChange(of: navCoordinator.pendingOverwritePatchURL) { _ in
+            consumePendingNavigationIfNeeded()
         }
     }
     
@@ -715,6 +720,31 @@ struct OverwriteFileView: View {
         selectedApp = app
         targetBundleIDInput = app.bundleID
         log("overwrite: selected app \(app.appName) (\(app.bundleID))")
+    }
+
+    private func consumePendingNavigationIfNeeded() {
+        guard let pendingURL = navCoordinator.pendingOverwritePatchURL else { return }
+        let targetBundle = navCoordinator.pendingOverwriteBundleID
+        navCoordinator.pendingOverwritePatchURL = nil
+        navCoordinator.pendingOverwriteBundleID = nil
+
+        selectedTargetFolder = "Documents"
+        handleSelectedPatch(url: pendingURL)
+
+        if let bid = targetBundle, !bid.isEmpty {
+            targetBundleIDInput = bid
+            if let existing = scanner.apps.first(where: { $0.bundleID == bid }) {
+                selectApp(existing)
+            } else {
+                Task {
+                    if let resolved = await scanner.resolveContainer(bundleID: bid) {
+                        await MainActor.run {
+                            self.selectApp(resolved)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func handleSelectedPatch(url: URL) {

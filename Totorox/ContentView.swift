@@ -22,6 +22,8 @@ struct ContentView: View {
                     FolderExplorerView()
                 case .patch:
                     PatchConverterView()
+                case .merge:
+                    MergeFileView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
