@@ -14,7 +14,6 @@ struct OverwriteFileView: View {
     // Custom folder dialog
     @State private var showCustomFolderSheet: Bool = false
     @State private var customFolderInput: String = ""
-    @State private var availableSubfolders: [String] = ["Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"]
     
     // Modal Sheets
     @State private var showInstalledAppsSheet: Bool = false
@@ -699,37 +698,34 @@ struct OverwriteFileView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
                 
-                // Gợi ý nhanh từ cấu trúc thực tế của Container
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 8) {
-                        ForEach(availableSubfolders, id: \.self) { folder in
-                            Button {
-                                selectedTargetFolder = folder
-                                showCustomFolderSheet = false
-                                appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(folder)")
-                            } label: {
-                                HStack {
-                                    Image(systemName: "folder.fill")
+                // Gợi ý nhanh
+                VStack(spacing: 8) {
+                    ForEach(["Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"], id: \.self) { folder in
+                        Button {
+                            selectedTargetFolder = folder
+                            showCustomFolderSheet = false
+                            appendLog("[THƯ MỤC] Đã chuyển thư mục đích sang: \(folder)")
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.fill")
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                Text(folder)
+                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                Spacer()
+                                if selectedTargetFolder == folder {
+                                    Image(systemName: "checkmark")
                                         .foregroundStyle(TotoroxTheme.mintAccent)
-                                    Text(folder)
-                                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(TotoroxTheme.textPrimary)
-                                    Spacer()
-                                    if selectedTargetFolder == folder {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(TotoroxTheme.mintAccent)
-                                    }
                                 }
-                                .padding(.horizontal, 14)
-                                .frame(height: 44)
-                                .background(TotoroxTheme.searchBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
+                            .padding(.horizontal, 14)
+                            .frame(height: 44)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                     }
-                    .padding(.horizontal, 16)
                 }
-                .frame(maxHeight: 280)
+                .padding(.horizontal, 16)
                 
                 // Nhập tùy chỉnh
                 VStack(alignment: .leading, spacing: 8) {
@@ -798,12 +794,6 @@ struct OverwriteFileView: View {
         selectedApp = app
         targetBundleIDInput = app.bundleID
         appendLog("[CHỌN APP] Đã chọn: \(app.appName) (\(app.bundleID))")
-        Task {
-            let subfolders = await scanner.scanContainerSubdirectories(for: app)
-            await MainActor.run {
-                self.availableSubfolders = subfolders
-            }
-        }
     }
 
     private func handleSelectedPatch(url: URL) {
@@ -813,12 +803,11 @@ struct OverwriteFileView: View {
             let sizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
             var autoBundleID: String? = nil
             if url.pathExtension.lowercased() == "3105",
-               let decoded = try? PatchPackageCodec.decode(from: url) {
-                defer { try? FileManager.default.removeItem(at: decoded.stagingRootURL) }
-                let bid = decoded.manifest.appBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !bid.isEmpty {
-                    autoBundleID = bid
-                }
+               let data = try? Data(contentsOf: url),
+               let decoded = try? PatchPackageCodec.decode(data, password: nil),
+               let bid = decoded.project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !bid.isEmpty {
+                autoBundleID = bid
             }
             await MainActor.run {
                 self.patchFileSizeText = sizeText

@@ -803,18 +803,34 @@ enum ContainerStore {
         }
 
         guard let data = plistData,
-              let metadata = ContainerMetadataReader.metadata(from: data) else {
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
             return nil
         }
 
-        let cleanBundleID = metadata.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawBundleID = (plist["MCMMetadataIdentifier"] as? String)
+            ?? (plist["CFBundleIdentifier"] as? String)
+            ?? (plist["BundleIdentifier"] as? String)
+            ?? ""
+        let cleanBundleID = rawBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanBundleID.isEmpty else { return nil }
+
+        var displayName = ""
+        if let info = plist["MCMMetadataInfo"] as? [String: Any] {
+            displayName = (info["CFBundleDisplayName"] as? String)
+                ?? (info["CFBundleName"] as? String)
+                ?? ""
+        }
+        if displayName.isEmpty {
+            displayName = (plist["CFBundleDisplayName"] as? String)
+                ?? (plist["CFBundleName"] as? String)
+                ?? ""
+        }
 
         let uuid = (cleanContainer as NSString).lastPathComponent
         if UUID(uuidString: uuid) != nil && UUID(uuidString: cleanBundleID) == nil {
             setCachedMapping(uuid: uuid, bundleID: cleanBundleID)
         }
-        return ContainerMetadata(bundleID: cleanBundleID, displayName: metadata.displayName)
+        return ContainerMetadata(bundleID: cleanBundleID, displayName: displayName)
     }
 
     static func enumerateDirectoryNames(path: String) -> [String] {
@@ -1452,7 +1468,7 @@ enum ContainerStore {
                 appIcon = resolved.appIcon
             }
 
-            let childrenCount = (isDirectory && !isAppContainer) ? shallowChildCount(atPath: full) : nil
+            let childrenCount = isDirectory ? shallowChildCount(atPath: full) : nil
             entries.append(
                 FileEntry(
                     name: item,

@@ -6,25 +6,71 @@ struct PatchRule: Codable, Identifiable, Hashable {
     var relativePath: String
     var replacementFilename: String
     var replacementData: Data
+    var operation: String
+    var containerKind: String
 
     init(
         id: UUID = UUID(),
         bundleID: String,
         relativePath: String,
         replacementFilename: String,
-        replacementData: Data
+        replacementData: Data,
+        operation: String = "replace",
+        containerKind: String = "application"
     ) {
         self.id = id
         self.bundleID = bundleID
         self.relativePath = relativePath
-        self.replacementFilename = replacementFilename
+        self.replacementFilename = replacementFilename.isEmpty
+            ? (relativePath as NSString).lastPathComponent
+            : replacementFilename
         self.replacementData = replacementData
+        self.operation = operation.isEmpty ? "replace" : operation
+        self.containerKind = containerKind.isEmpty ? "application" : containerKind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case bundleID
+        case relativePath
+        case replacementFilename
+        case replacementData
+        case operation
+        case containerKind
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        bundleID = (try? container.decodeIfPresent(String.self, forKey: .bundleID)) ?? "com.apple.mobile.MobileHouseArrest"
+        let rel = (try? container.decodeIfPresent(String.self, forKey: .relativePath)) ?? ""
+        relativePath = rel
+        let decodedFilename = (try? container.decodeIfPresent(String.self, forKey: .replacementFilename)) ?? ""
+        replacementFilename = decodedFilename.isEmpty ? (rel as NSString).lastPathComponent : decodedFilename
+        replacementData = (try? container.decodeIfPresent(Data.self, forKey: .replacementData)) ?? Data()
+        operation = (try? container.decodeIfPresent(String.self, forKey: .operation)) ?? "replace"
+        containerKind = (try? container.decodeIfPresent(String.self, forKey: .containerKind)) ?? "application"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(bundleID, forKey: .bundleID)
+        try container.encode(relativePath, forKey: .relativePath)
+        try container.encode(replacementFilename, forKey: .replacementFilename)
+        try container.encode(replacementData, forKey: .replacementData)
+        if !operation.isEmpty && operation != "replace" {
+            try container.encode(operation, forKey: .operation)
+        }
+        if !containerKind.isEmpty && containerKind != "application" {
+            try container.encode(containerKind, forKey: .containerKind)
+        }
     }
 
     /// A zero-byte file is a valid replacement; the filename records that the
     /// user explicitly supplied a payload for this path-only draft rule.
     var hasReplacement: Bool {
-        !replacementFilename.isEmpty
+        !replacementFilename.isEmpty || !replacementData.isEmpty
     }
 }
 
@@ -41,6 +87,19 @@ struct PatchDirectory: Codable, Identifiable, Hashable {
         self.id = id
         self.bundleID = bundleID
         self.relativePath = relativePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case bundleID
+        case relativePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        bundleID = (try? container.decodeIfPresent(String.self, forKey: .bundleID)) ?? "com.apple.mobile.MobileHouseArrest"
+        relativePath = (try? container.decodeIfPresent(String.self, forKey: .relativePath)) ?? ""
     }
 }
 
@@ -97,21 +156,31 @@ struct PatchProject: Codable, Identifiable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
-        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        bundleIdentifiers = try container.decodeIfPresent(
-            [String].self,
-            forKey: .bundleIdentifiers
-        ) ?? []
-        directories = try container.decodeIfPresent(
+        id = (try? container.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        let decodedName = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? "Patch"
+        name = decodedName.isEmpty ? "Patch" : decodedName
+        author = (try? container.decodeIfPresent(String.self, forKey: .author)) ?? ""
+        isPrivate = (try? container.decodeIfPresent(Bool.self, forKey: .isPrivate)) ?? false
+        createdAt = (try? container.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
+        updatedAt = (try? container.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? Date()
+        let decodedDirs = (try? container.decodeIfPresent(
             [PatchDirectory].self,
             forKey: .directories
-        ) ?? []
-        rules = try container.decode([PatchRule].self, forKey: .rules)
+        )) ?? []
+        directories = decodedDirs
+        let decodedRules = (try? container.decodeIfPresent([PatchRule].self, forKey: .rules)) ?? []
+        rules = decodedRules
+        let decodedBundles = (try? container.decodeIfPresent(
+            [String].self,
+            forKey: .bundleIdentifiers
+        )) ?? []
+        if !decodedBundles.isEmpty {
+            bundleIdentifiers = decodedBundles
+        } else {
+            var seen = Set<String>()
+            bundleIdentifiers = (decodedDirs.map(\.bundleID) + decodedRules.map(\.bundleID))
+                .filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -243,11 +312,11 @@ extension PatchPackageError: LocalizedError {
 
 enum PatchPackageLimits {
     static let maximumPathBytes = 4_096
-    static let maximumAuthorBytes = 160
+    static let maximumAuthorBytes = 512
     static let maximumPasswordBytes = 1_024
-    static let minimumKDFIterations = 100_000
+    static let minimumKDFIterations = 1_000
     static let defaultKDFIterations = 250_000
-    static let maximumKDFIterations = 1_000_000
+    static let maximumKDFIterations = 10_000_000
 }
 
 enum PatchPathValidator {

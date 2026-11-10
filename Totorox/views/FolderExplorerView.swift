@@ -75,7 +75,6 @@ struct FolderExplorerView: View {
                             Text("Lùi")
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .foregroundStyle(canGoBack ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
                         .padding(.horizontal, 10)
@@ -105,7 +104,6 @@ struct FolderExplorerView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
@@ -159,36 +157,53 @@ struct FolderExplorerView: View {
                 .padding(.top, 4)
 
                 // Breadcrumb Navigation Bar
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(Array(breadcrumbs.enumerated()), id: \.offset) { index, crumb in
-                            Button {
-                                navigateTo(crumb)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    if index == 0 {
-                                        Image(systemName: "internaldrive.fill")
-                                            .font(.system(size: 12))
+                ScrollViewReader { crumbProxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Array(breadcrumbs.enumerated()), id: \.offset) { index, crumb in
+                                Button {
+                                    navigateTo(crumb)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        if index == 0 {
+                                            Image(systemName: "internaldrive.fill")
+                                                .font(.system(size: 12))
+                                        }
+                                        Text(breadcrumbTitle(for: crumb))
+                                            .font(.system(size: 12, weight: index == breadcrumbs.count - 1 ? .bold : .medium))
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
                                     }
-                                    Text(crumb.lastPathComponent.isEmpty ? "Root" : crumb.lastPathComponent)
-                                        .font(.system(size: 12, weight: index == breadcrumbs.count - 1 ? .bold : .medium))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(index == breadcrumbs.count - 1 ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                    .foregroundColor(index == breadcrumbs.count - 1 ? .white : TotoroxTheme.textPrimary)
+                                    .clipShape(Capsule())
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(index == breadcrumbs.count - 1 ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
-                                .foregroundColor(index == breadcrumbs.count - 1 ? .white : TotoroxTheme.textPrimary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
+                                .buttonStyle(.plain)
+                                .id(index)
 
-                            if index < breadcrumbs.count - 1 {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
+                                if index < breadcrumbs.count - 1 {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .onChange(of: breadcrumbs) { newCrumbs in
+                        if !newCrumbs.isEmpty {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                crumbProxy.scrollTo(newCrumbs.count - 1, anchor: .trailing)
                             }
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .onAppear {
+                        if !breadcrumbs.isEmpty {
+                            crumbProxy.scrollTo(breadcrumbs.count - 1, anchor: .trailing)
+                        }
+                    }
                 }
 
                 // Filter search
@@ -259,6 +274,8 @@ struct FolderExplorerView: View {
                 .background(TotoroxTheme.pageBackground)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .gesture(
             DragGesture(minimumDistance: 25, coordinateSpace: .local)
                 .onEnded { value in
@@ -377,7 +394,7 @@ struct FolderExplorerView: View {
                 }
             }
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 // Icon: Uniform default icon (all folders identical mint squircle, matching original design)
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -425,7 +442,7 @@ struct FolderExplorerView: View {
                             }
                             
                             // Line 3: UDID: <UUID>, [X mục], và Data: <Đường dẫn>
-                            HStack(spacing: 8) {
+                            HStack(spacing: 6) {
                                 if let shortId = entry.shortUUID {
                                     Text("UDID: \(shortId)")
                                         .font(.system(size: 9.5, design: .monospaced))
@@ -440,6 +457,7 @@ struct FolderExplorerView: View {
                                         .padding(.vertical, 1)
                                         .background(TotoroxTheme.mintAccent.opacity(0.12))
                                         .clipShape(Capsule())
+                                        .lineLimit(1)
                                 }
                                 Text("Data: \(entry.path)")
                                     .font(.system(size: 9.5, design: .monospaced))
@@ -447,6 +465,7 @@ struct FolderExplorerView: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } else {
                         // Regular metadata HStack
@@ -467,13 +486,13 @@ struct FolderExplorerView: View {
                                 .background(TotoroxTheme.mintAccent.opacity(0.12))
                                 .clipShape(Capsule())
                                 .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
+                                .layoutPriority(1)
                             } else {
                                 Text(entry.sizeText)
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                     .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
+                                    .layoutPriority(1)
 
                                 if !entry.extensionBadge.isEmpty {
                                     Text(entry.extensionBadge)
@@ -484,7 +503,7 @@ struct FolderExplorerView: View {
                                         .background(TotoroxTheme.mintAccent.opacity(0.12))
                                         .clipShape(Capsule())
                                         .lineLimit(1)
-                                        .fixedSize(horizontal: true, vertical: false)
+                                        .layoutPriority(1)
                                 }
                             }
 
@@ -492,19 +511,17 @@ struct FolderExplorerView: View {
                                 Text("•")
                                     .font(.system(size: 9))
                                     .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
-                                    .fixedSize(horizontal: true, vertical: false)
                                 Text(mod)
                                     .font(.system(size: 11))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                     .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                         .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-
-                Spacer(minLength: 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Info (i) Button
                 Button {
@@ -513,7 +530,7 @@ struct FolderExplorerView: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 18))
                         .foregroundStyle(TotoroxTheme.mintAccent)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 30, height: 32)
                 }
                 .buttonStyle(.plain)
 
@@ -730,6 +747,23 @@ struct FolderExplorerView: View {
         }
         crumbs.insert(URL(fileURLWithPath: "/"), at: 0)
         self.breadcrumbs = crumbs
+    }
+
+    private func breadcrumbTitle(for crumb: URL) -> String {
+        let name = crumb.lastPathComponent
+        if name.isEmpty || name == "/" { return "Root" }
+        if UUID(uuidString: name) != nil {
+            if let bid = ContainerStore.bundleID(forUUID: name), !bid.isEmpty {
+                return bid
+            }
+            if let app = AppContainerScanner.shared.getCachedInfo(forUDID: name), !app.bundleID.isEmpty {
+                return app.bundleID
+            }
+            if name.count > 16 {
+                return "\(name.prefix(8))...\(name.suffix(4))"
+            }
+        }
+        return name
     }
 
     private func loadCurrentDirectory(forceRefresh: Bool = false) {

@@ -244,14 +244,26 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func readScanSnapshot() -> (alreadyScanned: Bool, existing: [AppContainerInfo]) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return (hasScanned && !_cachedAppsSnapshot.isEmpty, _cachedAppsSnapshot)
+    }
+
+    private func writeScanSnapshot(_ scanned: [AppContainerInfo]) {
+        cacheLock.lock()
+        _cachedAppsSnapshot = scanned
+        hasScanned = true
+        cacheLock.unlock()
+    }
+
     /// Scans all application containers on a background thread by parsing
     /// `.com.apple.mobile_container_manager.metadata.plist` (`MCMMetadataIdentifier`)
     /// directly in each container, combined with MCM & LaunchServices discovery.
     func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
-        cacheLock.lock()
-        let alreadyScanned = hasScanned && !_cachedAppsSnapshot.isEmpty
-        let existing = _cachedAppsSnapshot
-        cacheLock.unlock()
+        let snapshot = readScanSnapshot()
+        let alreadyScanned = snapshot.alreadyScanned
+        let existing = snapshot.existing
 
         if !forceRefresh && alreadyScanned {
             await MainActor.run {
@@ -407,13 +419,23 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             // 4. QUATERNARY SOURCE: LaunchServices Store (.csstore) + Bundle Catalog Candidates via MCM
             let lsStoreCandidates = ContainerStore.launchServicesStoreIdentifiers()
-            let mhaCandidates = MHAIdentifierCatalog.mergedCandidateIdentifiers(
-                launchServicesIdentifiers: lsStoreCandidates,
-                apiIdentifiers: Array(lsInfo.keys),
-                mcmIdentifiers: mcmIDs,
-                bundleMetadataIdentifiers: Array(bundleCatalog.keys),
-                researchIdentifiers: ContainerStore.researchAppIdentifiers
-            )
+            var mhaCandidates: [String] = []
+            var seenCandidates = Set<String>()
+            for sourceList in [
+                lsStoreCandidates,
+                Array(lsInfo.keys),
+                mcmIDs,
+                Array(bundleCatalog.keys),
+                ContainerStore.researchAppIdentifiers
+            ] {
+                for id in sourceList {
+                    let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty, UUID(uuidString: trimmed) == nil else { continue }
+                    if seenCandidates.insert(trimmed).inserted {
+                        mhaCandidates.append(trimmed)
+                    }
+                }
+            }
             for candidateID in mhaCandidates where resultsByBundleID[candidateID] == nil {
                 var actError: NSString? = nil
                 if let path = MCMActivateContainerPath(2, candidateID, false, &actError),
@@ -496,10 +518,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             return sorted
         }.value
 
-        cacheLock.lock()
-        _cachedAppsSnapshot = scanned
-        hasScanned = true
-        cacheLock.unlock()
+        writeScanSnapshot(scanned)
 
         await MainActor.run {
             self.apps = scanned

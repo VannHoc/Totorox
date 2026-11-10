@@ -179,4 +179,43 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(decoded.project.rules[0].replacementFilename, "dummy.txt")
         XCTAssertEqual(decoded.project.rules[0].replacementData, dummyData)
     }
+
+    func testConvertAllSchemaVersions_V1ThroughV9_WithoutVersionBlock() throws {
+        let bundleID = "com.apple.mobile.MobileHouseArrest"
+        let payloadBytes = "REMOTE_CONFIG_PAYLOAD_V9".data(using: .utf8)!
+        let rule = PatchRule(
+            id: UUID(),
+            bundleID: bundleID,
+            relativePath: "Documents/RemoteConfig.plist",
+            replacementFilename: "RemoteConfig.plist",
+            replacementData: payloadBytes,
+            operation: "mergePlist",
+            containerKind: "application"
+        )
+        let project = PatchProject(
+            id: UUID(),
+            name: "RemoteConfig MultiVersion",
+            author: "Exploitv2.3",
+            isPrivate: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            bundleIdentifiers: [bundleID],
+            directories: [],
+            rules: [rule]
+        )
+
+        for version in [1, 2, 3, 4, 5, 9] {
+            let encoded = try PatchPackageCodec.encode(
+                project: project,
+                password: nil,
+                schemaVersion: version
+            )
+            let zipData = try converter.convertPatchDataToZipData(encoded.data, password: nil)
+            let reconPatchData = try converter.convertZipDataToPatchData(zipData, password: nil)
+            let decoded = try PatchPackageCodec.decode(reconPatchData, password: nil)
+            XCTAssertEqual(decoded.project.rules.count, 1, "Failed for schemaVersion \(version)")
+            XCTAssertEqual(decoded.project.rules[0].replacementData, payloadBytes)
+            XCTAssertEqual(decoded.project.rules[0].operation, "mergePlist")
+        }
+    }
 }

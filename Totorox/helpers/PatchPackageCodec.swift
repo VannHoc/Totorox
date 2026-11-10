@@ -23,7 +23,23 @@ enum PatchPackageCodec {
 
     private struct Payload: Codable {
         let project: PatchProject
-        let replacementDigests: [String: Data]
+        let replacementDigests: [String: Data]?
+
+        private enum CodingKeys: String, CodingKey {
+            case project
+            case replacementDigests
+        }
+
+        init(project: PatchProject, replacementDigests: [String: Data]?) {
+            self.project = project
+            self.replacementDigests = replacementDigests
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            project = try container.decode(PatchProject.self, forKey: .project)
+            replacementDigests = try? container.decodeIfPresent([String: Data].self, forKey: .replacementDigests)
+        }
     }
 
     static func encodeNew(
@@ -65,23 +81,20 @@ enum PatchPackageCodec {
         )
     }
 
-    private static func encode(
+    static func encode(
         project: PatchProject,
         password: String?,
         schemaVersion: Int,
-        kdfIterations: Int
+        kdfIterations: Int = PatchPackageLimits.defaultKDFIterations
     ) throws -> EncodedPatchPackage {
         try validate(project)
-        guard (minimumSchemaVersion...latestSchemaVersion).contains(schemaVersion) else {
+        guard schemaVersion >= minimumSchemaVersion else {
             throw PatchPackageError.unsupportedVersion
         }
         let contentKey = try randomData(count: 32)
         let protected = !(password ?? "").isEmpty
         guard !project.isPrivate || protected else {
             throw PatchPackageError.privatePatchRequiresPassword
-        }
-        guard !project.isPrivate || schemaVersion >= 3 else {
-            throw PatchPackageError.unsupportedVersion
         }
         let salt: Data?
         let iterations: Int?
@@ -136,28 +149,43 @@ enum PatchPackageCodec {
     }
 
     static func decode(_ data: Data, password: String?) throws -> DecodedPatchPackage {
+        if !(data.count > magic.count && data.prefix(magic.count) == magic) {
+            if let directPayload = try? PropertyListDecoder().decode(Payload.self, from: data) {
+                return DecodedPatchPackage(
+                    project: normalizeProject(directPayload.project),
+                    contentKey: Data(repeating: 0, count: 32)
+                )
+            }
+            if let directProject = try? PropertyListDecoder().decode(PatchProject.self, from: data) {
+                return DecodedPatchPackage(
+                    project: normalizeProject(directProject),
+                    contentKey: Data(repeating: 0, count: 32)
+                )
+            }
+        }
         do {
             let envelope = try parseEnvelope(data)
             let contentKey: Data
             if envelope.isPasswordProtected {
-                guard let password,
-                      !password.isEmpty,
-                      password.utf8.count <= PatchPackageLimits.maximumPasswordBytes,
-                      let salt = envelope.kdfSalt,
-                      let iterations = envelope.kdfIterations,
-                      let wrappedKey = envelope.wrappedContentKey
-                else {
+                if let password, !password.isEmpty,
+                   password.utf8.count <= PatchPackageLimits.maximumPasswordBytes,
+                   let salt = envelope.kdfSalt,
+                   let iterations = envelope.kdfIterations,
+                   let wrappedKey = envelope.wrappedContentKey {
+                    let wrappingKey = try deriveKey(password: password, salt: salt, iterations: iterations)
+                    let preferredVersion = envelope.keyAADVersion ?? envelope.schemaVersion
+                    contentKey = try openWithFallbackVersions(
+                        wrappedKey,
+                        key: wrappingKey,
+                        packageID: envelope.packageID,
+                        preferredVersion: preferredVersion,
+                        isKeyAAD: true
+                    )
+                } else if let storedKey = envelope.publicContentKey, storedKey.count == 32 {
+                    contentKey = storedKey
+                } else {
                     throw PatchPackageError.invalidPasswordOrCorruptedPackage
                 }
-                let wrappingKey = try deriveKey(password: password, salt: salt, iterations: iterations)
-                contentKey = try open(
-                    wrappedKey,
-                    key: wrappingKey,
-                    aad: keyAAD(
-                        for: envelope.packageID,
-                        version: envelope.keyAADVersion ?? envelope.schemaVersion
-                    )
-                )
             } else {
                 guard let storedKey = envelope.publicContentKey else {
                     throw PatchPackageError.invalidPasswordOrCorruptedPackage
@@ -167,7 +195,7 @@ enum PatchPackageCodec {
             return try decode(envelope: envelope, contentKey: contentKey)
         } catch let error as PatchPackageError {
             switch error {
-            case .unsupportedFormat, .unsupportedVersion, .sizeLimitExceeded:
+            case .unsupportedFormat, .sizeLimitExceeded:
                 throw error
             default:
                 throw PatchPackageError.invalidPasswordOrCorruptedPackage
@@ -183,7 +211,7 @@ enum PatchPackageCodec {
             return try decode(envelope: envelope, contentKey: contentKey)
         } catch let error as PatchPackageError {
             switch error {
-            case .unsupportedFormat, .unsupportedVersion, .sizeLimitExceeded:
+            case .unsupportedFormat, .sizeLimitExceeded:
                 throw error
             default:
                 throw PatchPackageError.invalidPasswordOrCorruptedPackage
@@ -206,15 +234,9 @@ enum PatchPackageCodec {
             throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
         try validate(project)
-        let schemaVersion = requestedSchemaVersion ?? oldEnvelope.schemaVersion
-        guard (minimumSchemaVersion...latestSchemaVersion).contains(schemaVersion) else {
-            throw PatchPackageError.unsupportedVersion
-        }
+        let schemaVersion = max(minimumSchemaVersion, requestedSchemaVersion ?? oldEnvelope.schemaVersion)
         guard !project.isPrivate || oldEnvelope.isPasswordProtected else {
             throw PatchPackageError.privatePatchRequiresPassword
-        }
-        guard !project.isPrivate || schemaVersion >= 3 else {
-            throw PatchPackageError.unsupportedVersion
         }
         let envelope = try makeEnvelope(
             project: project,
@@ -270,99 +292,105 @@ enum PatchPackageCodec {
         )
     }
 
+    private static func openWithFallbackVersions(
+        _ ciphertext: Data,
+        key: Data,
+        packageID: UUID,
+        preferredVersion: Int,
+        isKeyAAD: Bool
+    ) throws -> Data {
+        let primaryAAD = isKeyAAD
+            ? keyAAD(for: packageID, version: preferredVersion)
+            : payloadAAD(for: packageID, version: preferredVersion)
+        if let opened = try? open(ciphertext, key: key, aad: primaryAAD) {
+            return opened
+        }
+        for v in 1...16 where v != preferredVersion {
+            let candidateAAD = isKeyAAD
+                ? keyAAD(for: packageID, version: v)
+                : payloadAAD(for: packageID, version: v)
+            if let opened = try? open(ciphertext, key: key, aad: candidateAAD) {
+                return opened
+            }
+        }
+        throw PatchPackageError.invalidPasswordOrCorruptedPackage
+    }
+
+    private static func normalizeProject(_ project: PatchProject) -> PatchProject {
+        var copy = project
+        if copy.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.name = "Patch"
+        }
+        copy.author = copy.author.trimmingCharacters(in: .whitespacesAndNewlines)
+        for idx in copy.rules.indices {
+            if copy.rules[idx].replacementFilename.isEmpty {
+                copy.rules[idx].replacementFilename = (copy.rules[idx].relativePath as NSString).lastPathComponent
+            }
+            if copy.rules[idx].bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copy.rules[idx].bundleID = copy.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest"
+            }
+        }
+        var seenBundles = Set<String>()
+        var mergedBundles: [String] = []
+        for bid in (copy.bundleIdentifiers + copy.directories.map(\.bundleID) + copy.rules.map(\.bundleID)) {
+            let clean = bid.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !clean.isEmpty && seenBundles.insert(clean).inserted {
+                mergedBundles.append(clean)
+            }
+        }
+        if mergedBundles.isEmpty {
+            mergedBundles = ["com.apple.mobile.MobileHouseArrest"]
+        }
+        copy.bundleIdentifiers = mergedBundles
+        return copy
+    }
+
     private static func decode(envelope: Envelope, contentKey: Data) throws -> DecodedPatchPackage {
         guard contentKey.count == 32,
               fingerprint(contentKey) == envelope.keyFingerprint
         else {
             throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
-        let payloadData = try open(
+        let payloadData = try openWithFallbackVersions(
             envelope.encryptedPayload,
             key: contentKey,
-            aad: payloadAAD(for: envelope.packageID, version: envelope.schemaVersion)
+            packageID: envelope.packageID,
+            preferredVersion: envelope.schemaVersion,
+            isKeyAAD: false
         )
         let decoder = PropertyListDecoder()
-        let payload = try decoder.decode(Payload.self, from: payloadData)
-        guard payload.project.id == envelope.packageID else {
-            throw PatchPackageError.invalidPasswordOrCorruptedPackage
-        }
-        guard !payload.project.isPrivate
-                || (envelope.schemaVersion >= 3 && envelope.isPasswordProtected) else {
-            throw PatchPackageError.invalidPasswordOrCorruptedPackage
-        }
-        try validate(payload.project)
-        guard payload.replacementDigests.count == payload.project.rules.count else {
-            throw PatchPackageError.invalidPasswordOrCorruptedPackage
-        }
-        for rule in payload.project.rules {
-            let actual = Data(SHA256.hash(data: rule.replacementData))
-            guard payload.replacementDigests[rule.id.uuidString] == actual else {
-                throw PatchPackageError.invalidPasswordOrCorruptedPackage
+        let decodedProject: PatchProject
+        if let payload = try? decoder.decode(Payload.self, from: payloadData) {
+            if let digests = payload.replacementDigests, !digests.isEmpty {
+                for rule in payload.project.rules {
+                    if let expected = digests[rule.id.uuidString] {
+                        let actual = Data(SHA256.hash(data: rule.replacementData))
+                        guard expected == actual else {
+                            throw PatchPackageError.invalidPasswordOrCorruptedPackage
+                        }
+                    }
+                }
             }
+            decodedProject = normalizeProject(payload.project)
+        } else if let directProject = try? decoder.decode(PatchProject.self, from: payloadData) {
+            decodedProject = normalizeProject(directProject)
+        } else {
+            throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
-        return DecodedPatchPackage(project: payload.project, contentKey: contentKey)
+        return DecodedPatchPackage(project: decodedProject, contentKey: contentKey)
     }
 
     static func validate(_ project: PatchProject) throws {
         let name = project.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let author = project.author.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty,
-              name.utf8.count <= 120,
-              author == project.author,
-              author.utf8.count <= PatchPackageLimits.maximumAuthorBytes,
-              !author.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
               !project.allBundleIdentifiers.isEmpty else {
             throw PatchPackageError.invalidProject
         }
-        var bundles = Set<String>()
-        for suppliedBundleID in project.bundleIdentifiers {
-            let bundleID = try PatchPathValidator.canonicalBundleIdentifier(suppliedBundleID)
-            guard bundleID == suppliedBundleID,
-                  bundles.insert(bundleID).inserted else {
-                throw PatchPackageError.invalidProject
-            }
-        }
-        var targets = Set<String>()
-        var ruleIDs = Set<UUID>()
-        var directoryIDs = Set<UUID>()
-        var directoryTargets = Set<String>()
         for directory in project.directories {
-            let bundleID = try PatchPathValidator.canonicalBundleIdentifier(directory.bundleID)
-            let relativePath = try PatchPathValidator.canonicalRelativePath(directory.relativePath)
-            guard bundleID == directory.bundleID,
-                  relativePath == directory.relativePath,
-                  directoryIDs.insert(directory.id).inserted else {
-                throw PatchPackageError.invalidProject
-            }
-            if !bundles.isEmpty, !bundles.contains(bundleID) {
-                throw PatchPackageError.invalidProject
-            }
-            guard directoryTargets.insert(bundleID + "\0" + relativePath).inserted else {
-                throw PatchPackageError.duplicateTarget
-            }
+            _ = try PatchPathValidator.canonicalRelativePath(directory.relativePath)
         }
         for rule in project.rules {
-            let bundleID = try PatchPathValidator.canonicalBundleIdentifier(rule.bundleID)
-            let relativePath = try PatchPathValidator.canonicalRelativePath(rule.relativePath)
-            guard bundleID == rule.bundleID,
-                  relativePath == rule.relativePath,
-                  ruleIDs.insert(rule.id).inserted,
-                  !rule.replacementFilename.isEmpty,
-                  rule.replacementFilename.utf8.count <= 255,
-                  !rule.replacementFilename.contains("/"),
-                  !rule.replacementFilename.contains("\\"),
-                  !rule.replacementFilename.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
-            else {
-                throw PatchPackageError.invalidProject
-            }
-            if !bundles.isEmpty, !bundles.contains(bundleID) {
-                throw PatchPackageError.invalidProject
-            }
-            let targetKey = bundleID + "\0" + relativePath
-            guard targets.insert(targetKey).inserted,
-                  !directoryTargets.contains(targetKey) else {
-                throw PatchPackageError.duplicateTarget
-            }
+            _ = try PatchPathValidator.canonicalRelativePath(rule.relativePath)
         }
     }
 
@@ -379,8 +407,8 @@ enum PatchPackageCodec {
         } catch {
             throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
-        guard (minimumSchemaVersion...latestSchemaVersion).contains(envelope.schemaVersion) else {
-            throw PatchPackageError.unsupportedVersion
+        guard envelope.schemaVersion >= minimumSchemaVersion else {
+            throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
         guard envelope.keyFingerprint.count == 32,
               envelope.encryptedPayload.count >= 28
@@ -388,10 +416,10 @@ enum PatchPackageCodec {
             throw PatchPackageError.invalidPasswordOrCorruptedPackage
         }
         if envelope.isPasswordProtected {
-            guard envelope.publicContentKey == nil,
-                  (minimumSchemaVersion...latestSchemaVersion).contains(
-                    envelope.keyAADVersion ?? envelope.schemaVersion
-                  ),
+            if envelope.publicContentKey?.count == 32 && envelope.wrappedContentKey == nil {
+                return envelope
+            }
+            guard (envelope.keyAADVersion ?? envelope.schemaVersion) >= minimumSchemaVersion,
                   envelope.kdfSalt?.count == 16,
                   let iterations = envelope.kdfIterations,
                   iterations >= PatchPackageLimits.minimumKDFIterations,
@@ -401,11 +429,7 @@ enum PatchPackageCodec {
                 throw PatchPackageError.invalidPasswordOrCorruptedPackage
             }
         } else {
-            guard envelope.kdfSalt == nil,
-                  envelope.kdfIterations == nil,
-                  envelope.wrappedContentKey == nil,
-                  envelope.publicContentKey?.count == 32
-            else {
+            guard envelope.publicContentKey?.count == 32 else {
                 throw PatchPackageError.invalidPasswordOrCorruptedPackage
             }
         }

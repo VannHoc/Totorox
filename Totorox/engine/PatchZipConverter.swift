@@ -30,19 +30,25 @@ public struct PatchZipManifest: Codable, Equatable {
         public let relativePath: String
         public let replacementFilename: String
         public let payloadPath: String
+        public let operation: String?
+        public let containerKind: String?
 
         public init(
             id: UUID,
             bundleID: String,
             relativePath: String,
             replacementFilename: String,
-            payloadPath: String
+            payloadPath: String,
+            operation: String? = nil,
+            containerKind: String? = nil
         ) {
             self.id = id
             self.bundleID = bundleID
             self.relativePath = relativePath
             self.replacementFilename = replacementFilename
             self.payloadPath = payloadPath
+            self.operation = operation
+            self.containerKind = containerKind
         }
     }
 
@@ -147,6 +153,12 @@ public final class PatchZipConverter {
         _ patchData: Data,
         password: String? = nil
     ) throws -> Data {
+        if patchData.count >= 4,
+           patchData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]),
+           (try? parseZipArchive(patchData)) != nil {
+            return patchData
+        }
+
         let decoded: DecodedPatchPackage
         do {
             decoded = try PatchPackageCodec.decode(patchData, password: password)
@@ -163,20 +175,35 @@ public final class PatchZipConverter {
 
         var ruleEntries: [PatchZipManifest.RuleEntry] = []
         var zipEntries: [(path: String, data: Data)] = []
+        var addedPaths = Set<String>()
 
         for rule in project.rules {
-            let payloadRelativePath = "payload/\(rule.bundleID)/\(rule.relativePath)"
+            let cleanBundle = rule.bundleID.isEmpty
+                ? (project.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest")
+                : rule.bundleID
+            let payloadRelativePath = "payload/\(cleanBundle)/\(rule.relativePath)"
+            let filename = rule.replacementFilename.isEmpty
+                ? (rule.relativePath as NSString).lastPathComponent
+                : rule.replacementFilename
             ruleEntries.append(
                 PatchZipManifest.RuleEntry(
                     id: rule.id,
-                    bundleID: rule.bundleID,
+                    bundleID: cleanBundle,
                     relativePath: rule.relativePath,
-                    replacementFilename: rule.replacementFilename,
-                    payloadPath: payloadRelativePath
+                    replacementFilename: filename,
+                    payloadPath: payloadRelativePath,
+                    operation: rule.operation == "replace" ? nil : rule.operation,
+                    containerKind: rule.containerKind == "application" ? nil : rule.containerKind
                 )
             )
-            zipEntries.append((path: payloadRelativePath, data: rule.replacementData))
+            if addedPaths.insert(payloadRelativePath).inserted {
+                zipEntries.append((path: payloadRelativePath, data: rule.replacementData))
+            }
         }
+
+        let bundleList = project.bundleIdentifiers.isEmpty
+            ? project.allBundleIdentifiers
+            : project.bundleIdentifiers
 
         let manifest = PatchZipManifest(
             schemaVersion: 3,
@@ -186,7 +213,7 @@ public final class PatchZipConverter {
             isPrivate: project.isPrivate,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
-            bundleIdentifiers: project.bundleIdentifiers,
+            bundleIdentifiers: bundleList,
             directories: directoryEntries,
             rules: ruleEntries
         )
@@ -246,6 +273,20 @@ public final class PatchZipConverter {
     ) throws -> Data {
         var entries = try parseZipArchive(zipData)
 
+        if entries["patch.json"] == nil,
+           let plistData = entries[".3105-project.plist"],
+           var plistProject = try? PropertyListDecoder().decode(PatchProject.self, from: plistData) {
+            for idx in plistProject.rules.indices {
+                let rel = plistProject.rules[idx].relativePath
+                let bid = plistProject.rules[idx].bundleID
+                if let fileData = entries[rel] ?? entries["payload/\(bid)/\(rel)"] ?? entries["\(bid)/\(rel)"] {
+                    plistProject.rules[idx].replacementData = fileData
+                }
+            }
+            let encoded = try PatchPackageCodec.encodeNew(project: plistProject, password: password)
+            return encoded.data
+        }
+
         let manifestData: Data
         if let existingManifest = entries["patch.json"] {
             manifestData = existingManifest
@@ -272,7 +313,7 @@ public final class PatchZipConverter {
         // Reconstruct PatchRules with payload bytes
         var rules: [PatchRule] = []
         for ruleEntry in manifest.rules {
-            guard let payloadData = entries[ruleEntry.payloadPath] else {
+            guard let payloadData = entries[ruleEntry.payloadPath] ?? entries[ruleEntry.relativePath] else {
                 throw PatchZipConverterError.missingPayloadFile("Payload file missing for rule at: \(ruleEntry.payloadPath)")
             }
             let rule = PatchRule(
@@ -280,7 +321,9 @@ public final class PatchZipConverter {
                 bundleID: ruleEntry.bundleID,
                 relativePath: ruleEntry.relativePath,
                 replacementFilename: ruleEntry.replacementFilename,
-                replacementData: payloadData
+                replacementData: payloadData,
+                operation: ruleEntry.operation ?? "replace",
+                containerKind: ruleEntry.containerKind ?? "application"
             )
             rules.append(rule)
         }
