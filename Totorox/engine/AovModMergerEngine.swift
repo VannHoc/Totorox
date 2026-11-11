@@ -529,25 +529,61 @@ public final class AovModMergerEngine: @unchecked Sendable {
             throw AovModMergerError.assetBundleMergeFailed("Dữ liệu AssetBundle rỗng hoặc quá ngắn.")
         }
 
-        func unpackUnityFS(_ data: Data) throws -> (header: Data, tailInfo: Data, uncompressedSize: Int, payload: [UInt8]) {
+        struct UnpackedUnityFS {
+            let sizeFieldOffset: Int
+            let headerEnd: Int
+            let header: Data
+            let tailInfo: Data
+            let uncompressedSize: Int
+            let payload: [UInt8]
+        }
+
+        func unpackUnityFS(_ data: Data) throws -> UnpackedUnityFS {
             guard data.count > 133,
                   String(data: data.subdata(in: 0..<7), encoding: .ascii) == "UnityFS" else {
                 throw AovModMergerError.assetBundleMergeFailed("Header không phải UnityFS hợp lệ.")
             }
-            let compInfoSize = Int(readUInt32BE(data, 36))
-            let uncompInfoSize = Int(readUInt32BE(data, 40))
-            guard compInfoSize > 0, compInfoSize < data.count - 64, uncompInfoSize >= 32 else {
-                throw AovModMergerError.assetBundleMergeFailed("Kích thước BlocksInfo không hợp lệ.")
+
+            // Skip "UnityFS\0" (8B) + version (4B) = 12, then skip 2 null-terminated version strings ("5.x.x\0", "2022.3.5f1\0")
+            var pos = 12
+            for _ in 0..<2 {
+                while pos < data.count && data[data.startIndex + pos] != 0 {
+                    pos += 1
+                }
+                pos += 1 // skip null terminator
             }
+            guard pos + 20 <= data.count else {
+                throw AovModMergerError.assetBundleMergeFailed("Header UnityFS bị cắt cụt tại offset \(pos).")
+            }
+
+            let compInfoSize = Int(readUInt32BE(data, pos + 8))
+            let uncompInfoSize = Int(readUInt32BE(data, pos + 12))
+            let headerEnd = ((pos + 20) + 15) & ~15
+
+            guard compInfoSize > 0, compInfoSize < data.count - headerEnd, uncompInfoSize >= 32 else {
+                throw AovModMergerError.assetBundleMergeFailed("Kích thước BlocksInfo không hợp lệ (comp=\(compInfoSize), uncomp=\(uncompInfoSize)).")
+            }
+
             let tailInfo = data.subdata(in: (data.count - compInfoSize)..<data.count)
             let infoRaw = try lz4DecompressBlock(tailInfo, uncompressedSize: uncompInfoSize)
-            let uncompBlockSize = Int(readUInt32BE(infoRaw, 28))
+            let u28 = Int(readUInt32BE(infoRaw, 28))
+            let u20 = Int(readUInt32BE(infoRaw, 20))
+            let uncompBlockSize = (u28 > 0 && u28 < 50_000_000) ? u28 : u20
+
             guard uncompBlockSize > 0 && uncompBlockSize < 50_000_000 else {
                 throw AovModMergerError.assetBundleMergeFailed("Kích thước payload giải nén không hợp lệ: \(uncompBlockSize)")
             }
-            let compBlockData = data.subdata(in: 64..<(data.count - compInfoSize))
+
+            let compBlockData = data.subdata(in: headerEnd..<(data.count - compInfoSize))
             let payloadData = try lz4DecompressBlock(compBlockData, uncompressedSize: uncompBlockSize)
-            return (data.subdata(in: 0..<64), tailInfo, uncompBlockSize, [UInt8](payloadData))
+            return UnpackedUnityFS(
+                sizeFieldOffset: pos,
+                headerEnd: headerEnd,
+                header: data.subdata(in: 0..<headerEnd),
+                tailInfo: tailInfo,
+                uncompressedSize: uncompBlockSize,
+                payload: [UInt8](payloadData)
+            )
         }
 
         let baseUnpacked = try unpackUnityFS(baseBundle)
@@ -581,7 +617,6 @@ public final class AovModMergerEngine: @unchecked Sendable {
             var idx = 0
             while idx < limit {
                 if otherBytes[idx] != baseBytes[idx] {
-                    // Check if baseBytes has KianaMod within [idx-11 ... idx]
                     let checkStart = max(0, idx - 11)
                     let checkEnd = min(limit - 8, idx)
                     var baseHasKiana = false
@@ -608,25 +643,26 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         var newHeader = baseUnpacked.header
         var newTailInfo = baseUnpacked.tailInfo
+        let sizeFieldPos = baseUnpacked.sizeFieldOffset
 
         if newTailInfo.count == 69 && newCompSize < 0x0100_0000 {
             // Direct 4-byte big-endian compressedBlockSize update inside the 69-byte BlocksInfo literal run
             writeUInt32BE(&newTailInfo, offset: 10, value: newCompSize)
         } else {
             // Fallback: decompress 93-byte BlocksInfo, update offset 24..28, wrap in LZ4 literal block (0xF0, len-15)
-            let uncompInfoSize = Int(readUInt32BE(newHeader, 40))
+            let uncompInfoSize = Int(readUInt32BE(newHeader, sizeFieldPos + 12))
             var infoRaw = try lz4DecompressBlock(newTailInfo, uncompressedSize: uncompInfoSize)
             writeUInt32BE(&infoRaw, offset: 24, value: newCompSize)
             if infoRaw.count >= 15 && infoRaw.count < 270 {
                 var litBlock = Data([0xF0, UInt8(infoRaw.count - 15)])
                 litBlock.append(infoRaw)
                 newTailInfo = litBlock
-                writeUInt32BE(&newHeader, offset: 36, value: UInt32(newTailInfo.count))
+                writeUInt32BE(&newHeader, offset: sizeFieldPos + 8, value: UInt32(newTailInfo.count))
             }
         }
 
         let newTotalFileSize = UInt64(newHeader.count + compressedPayload.count + newTailInfo.count)
-        writeUInt64BE(&newHeader, offset: 28, value: newTotalFileSize)
+        writeUInt64BE(&newHeader, offset: sizeFieldPos, value: newTotalFileSize)
 
         var finalBundle = Data(capacity: Int(newTotalFileSize))
         finalBundle.append(newHeader)
@@ -851,7 +887,59 @@ public final class AovModMergerEngine: @unchecked Sendable {
     ) -> String {
         struct ParsedTrack {
             let guid: String
+            let skel: String
+            let skins: [String]
             let rawText: String
+        }
+
+        func extractSkinIds(from trackText: String) -> [String] {
+            var ids: [String] = []
+            var searchStart = trackText.startIndex
+            while let idStart = trackText.range(of: "<SkinOrAvatarList id=\"", range: searchStart..<trackText.endIndex),
+                  let idEnd = trackText.range(of: "\"", range: idStart.upperBound..<trackText.endIndex) {
+                let idVal = String(trackText[idStart.upperBound..<idEnd.lowerBound])
+                ids.append(idVal)
+                searchStart = idEnd.upperBound
+            }
+            return ids
+        }
+
+        func trackSkeleton(from trackText: String) -> String {
+            var result = ""
+            result.reserveCapacity(trackText.count)
+            var searchStart = trackText.startIndex
+            while let tagStart = trackText.range(of: "<SkinOrAvatarList", range: searchStart..<trackText.endIndex),
+                  let tagEnd = trackText.range(of: "/>", range: tagStart.lowerBound..<trackText.endIndex) {
+                result.append(contentsOf: trackText[searchStart..<tagStart.lowerBound])
+                searchStart = tagEnd.upperBound
+            }
+            result.append(contentsOf: trackText[searchStart..<trackText.endIndex])
+            return result.filter { !$0.isWhitespace }
+        }
+
+        func replaceSkinTags(in trackText: String, with newIds: [String]) -> String {
+            guard !newIds.isEmpty else { return trackText }
+            let newSkinsBlock = newIds.map { "<SkinOrAvatarList id=\"\($0)\" />" }.joined()
+            var result = ""
+            result.reserveCapacity(trackText.count)
+            var searchStart = trackText.startIndex
+            var inserted = false
+            while let tagStart = trackText.range(of: "<SkinOrAvatarList", range: searchStart..<trackText.endIndex),
+                  let tagEnd = trackText.range(of: "/>", range: tagStart.lowerBound..<trackText.endIndex) {
+                if !inserted {
+                    result.append(contentsOf: trackText[searchStart..<tagStart.lowerBound])
+                    result.append(newSkinsBlock)
+                    inserted = true
+                } else {
+                    let between = trackText[searchStart..<tagStart.lowerBound]
+                    if !between.allSatisfy({ $0.isWhitespace }) {
+                        result.append(contentsOf: between)
+                    }
+                }
+                searchStart = tagEnd.upperBound
+            }
+            result.append(contentsOf: trackText[searchStart..<trackText.endIndex])
+            return result
         }
 
         func splitXmlIntoTracks(_ xml: String) -> (header: String, tracks: [ParsedTrack], footer: String)? {
@@ -873,63 +961,12 @@ public final class AovModMergerEngine: @unchecked Sendable {
                    let gEnd = rawTrack.range(of: "\"", range: gStart.upperBound..<rawTrack.endIndex) {
                     guid = String(rawTrack[gStart.upperBound..<gEnd.lowerBound])
                 }
-                tracks.append(ParsedTrack(guid: guid, rawText: rawTrack))
+                let skins = extractSkinIds(from: rawTrack)
+                let skel = trackSkeleton(from: rawTrack)
+                tracks.append(ParsedTrack(guid: guid, skel: skel, skins: skins, rawText: rawTrack))
                 searchStart = closeRange.upperBound
             }
             return (header, tracks, footer)
-        }
-
-        func extractSkinLines(from trackText: String) -> [(id: String, fullLine: String)] {
-            var results: [(String, String)] = []
-            for line in trackText.components(separatedBy: "\n") {
-                if let idStart = line.range(of: "<SkinOrAvatarList id=\""),
-                   let idEnd = line.range(of: "\"", range: idStart.upperBound..<line.endIndex) {
-                    let idVal = String(line[idStart.upperBound..<idEnd.lowerBound])
-                    results.append((idVal, line))
-                }
-            }
-            return results
-        }
-
-        func mergeSharedTrack(baseTrack: String, incomingTrack: String, heroPrefix: String?) -> String {
-            let baseSkins = extractSkinLines(from: baseTrack)
-            let incomingSkins = extractSkinLines(from: incomingTrack)
-            guard !baseSkins.isEmpty || !incomingSkins.isEmpty else {
-                return baseTrack
-            }
-
-            // Determine which skin IDs belong to the incoming mod
-            let incomingMergedSkinLines: [String]
-            if let hp = heroPrefix, !hp.isEmpty {
-                var keptBase = baseSkins.filter { !$0.id.hasPrefix(hp) }.map(\.fullLine)
-                let newHeroSkins = incomingSkins.filter { $0.id.hasPrefix(hp) }.map(\.fullLine)
-                keptBase.append(contentsOf: newHeroSkins)
-                incomingMergedSkinLines = keptBase
-            } else {
-                var seen = Set(baseSkins.map(\.id))
-                var combined = baseSkins.map(\.fullLine)
-                for item in incomingSkins where !seen.contains(item.id) {
-                    seen.insert(item.id)
-                    combined.append(item.fullLine)
-                }
-                incomingMergedSkinLines = combined
-            }
-
-            // Rebuild baseTrack replacing its <SkinOrAvatarList .../> block with incomingMergedSkinLines
-            let lines = baseTrack.components(separatedBy: "\n")
-            var outLines: [String] = []
-            var insertedSkins = false
-            for line in lines {
-                if line.contains("<SkinOrAvatarList id=\"") {
-                    if !insertedSkins {
-                        outLines.append(contentsOf: incomingMergedSkinLines)
-                        insertedSkins = true
-                    }
-                } else {
-                    outLines.append(line)
-                }
-            }
-            return outLines.joined(separator: "\n")
         }
 
         guard let baseParsed = splitXmlIntoTracks(baseXml),
@@ -937,33 +974,64 @@ public final class AovModMergerEngine: @unchecked Sendable {
             return baseXml
         }
 
-        var mergedTracks = baseParsed.tracks
-        var guidToIndex: [String: Int] = [:]
-        for (idx, t) in mergedTracks.enumerated() where !t.guid.isEmpty {
-            if guidToIndex[t.guid] == nil {
-                guidToIndex[t.guid] = idx
-            }
+        var incBySkel: [String: ParsedTrack] = [:]
+        for t in incParsed.tracks where incBySkel[t.skel] == nil {
+            incBySkel[t.skel] = t
         }
+        let baseSkels = Set(baseParsed.tracks.map(\.skel))
 
-        for incTrack in incParsed.tracks {
-            if !incTrack.guid.isEmpty, let existingIdx = guidToIndex[incTrack.guid] {
-                let existingTrack = mergedTracks[existingIdx]
-                if existingTrack.rawText != incTrack.rawText {
-                    let updatedText = mergeSharedTrack(
-                        baseTrack: existingTrack.rawText,
-                        incomingTrack: incTrack.rawText,
-                        heroPrefix: incomingHeroPrefix
-                    )
-                    mergedTracks[existingIdx] = ParsedTrack(guid: existingTrack.guid, rawText: updatedText)
+        var outRawTracks: [String] = []
+        for bt in baseParsed.tracks {
+            if let it = incBySkel[bt.skel] {
+                if bt.skins == it.skins {
+                    outRawTracks.append(bt.rawText)
+                } else if let hp = incomingHeroPrefix, !hp.isEmpty {
+                    var mergedSkins = bt.skins.filter { !$0.hasPrefix(hp) }
+                    mergedSkins.append(contentsOf: it.skins.filter { $0.hasPrefix(hp) })
+                    if !mergedSkins.isEmpty || bt.skins.isEmpty {
+                        outRawTracks.append(replaceSkinTags(in: bt.rawText, with: mergedSkins))
+                    }
+                } else {
+                    var seen = Set(bt.skins)
+                    var mergedSkins = bt.skins
+                    for s in it.skins where !seen.contains(s) {
+                        seen.insert(s)
+                        mergedSkins.append(s)
+                    }
+                    outRawTracks.append(replaceSkinTags(in: bt.rawText, with: mergedSkins))
                 }
             } else {
-                // Track with a brand-new GUID from incoming mod -> append
-                guidToIndex[incTrack.guid] = mergedTracks.count
-                mergedTracks.append(incTrack)
+                // Track exists in base but was removed or replaced in incoming
+                if let hp = incomingHeroPrefix, !hp.isEmpty, bt.skins.contains(where: { $0.hasPrefix(hp) }) {
+                    let remainingSkins = bt.skins.filter { !$0.hasPrefix(hp) }
+                    if !remainingSkins.isEmpty {
+                        outRawTracks.append(replaceSkinTags(in: bt.rawText, with: remainingSkins))
+                    }
+                } else {
+                    outRawTracks.append(bt.rawText)
+                }
             }
         }
 
-        let joinedTracks = mergedTracks.map(\.rawText).joined(separator: "\n    ")
+        // Append tracks from incoming that are not in base
+        for it in incParsed.tracks where !baseSkels.contains(it.skel) {
+            if let hp = incomingHeroPrefix, !hp.isEmpty {
+                let heroSkins = it.skins.filter { $0.hasPrefix(hp) }
+                if !heroSkins.isEmpty {
+                    if heroSkins.count == it.skins.count {
+                        outRawTracks.append(it.rawText)
+                    } else {
+                        outRawTracks.append(replaceSkinTags(in: it.rawText, with: heroSkins))
+                    }
+                } else if it.guid.hasPrefix(hp) || it.rawText.contains("\(hp)_") {
+                    outRawTracks.append(it.rawText)
+                }
+            } else {
+                outRawTracks.append(it.rawText)
+            }
+        }
+
+        let joinedTracks = outRawTracks.joined(separator: "\n    ")
         return baseParsed.header + joinedTracks + baseParsed.footer
     }
 
@@ -1224,22 +1292,69 @@ public final class AovModMergerEngine: @unchecked Sendable {
     // MARK: - Format 4: `Thanos/HeroSkin_1.bytes` & `HeroSkin_2.bytes` IFix Bytecode + MD5 Merger
 
     private func extractHeroAndSkinFromHeroSkin1(_ dec: Data) -> (heroID: Int, skinID: Int)? {
-        guard dec.count >= 34652 else { return nil }
-        let hid = Int(readUInt32LE(dec, 33560))
-        let sid = Int(readUInt32LE(dec, 34608))
-        guard hid >= 100 && hid <= 999 && sid >= 10000 && sid <= 999999 else {
-            return nil
+        if dec.count >= 34652 {
+            let hid = Int(readUInt32LE(dec, 33560))
+            let sid = Int(readUInt32LE(dec, 34608))
+            if hid >= 100 && hid <= 999 && sid >= 10000 && sid <= 999999 {
+                return (hid, sid)
+            }
         }
-        return (hid, sid)
+        // Dynamic pattern fallback: Ldarg(1), Ldfld(80), Ldc_I4(heroID)
+        let patternA = Data([
+            0xA4, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0xA7, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00,
+            0x8F, 0x00, 0x00, 0x00
+        ])
+        if let rangeA = dec.range(of: patternA), rangeA.upperBound + 4 <= dec.count {
+            let hid = Int(readUInt32LE(dec, rangeA.upperBound - dec.startIndex))
+            // Search after rangeA for Ceq; Brfalse(3); Ldc_I4(skinID); Ret(1)
+            let patternC = Data([
+                0xA6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x86, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+                0x8F, 0x00, 0x00, 0x00
+            ])
+            var searchPos = rangeA.upperBound
+            var foundSkinID: Int? = nil
+            while let rangeC = dec.range(of: patternC, options: [], in: searchPos..<dec.count),
+                  rangeC.upperBound + 4 <= dec.count {
+                let candidate = Int(readUInt32LE(dec, rangeC.upperBound - dec.startIndex))
+                if candidate >= 10000 && candidate <= 999999 {
+                    foundSkinID = candidate
+                    break
+                }
+                searchPos = rangeC.upperBound
+            }
+            if hid >= 100 && hid <= 999, let sid = foundSkinID {
+                return (hid, sid)
+            }
+        }
+        return nil
     }
 
     private func extractParamsFromHeroSkin2(_ dec: Data) -> (heroID: Int, bcastID: Int, pbtnID: Int)? {
-        guard dec.count >= 1773 else { return nil }
-        let hid = Int(readUInt32LE(dec, 1689))
-        let bcast = Int(readUInt32LE(dec, 1721))
-        let pbtn = Int(readUInt32LE(dec, 1745))
-        guard hid >= 100 && hid <= 999 else { return nil }
-        return (hid, bcast, pbtn)
+        if dec.count >= 1773 {
+            let hid = Int(readUInt32LE(dec, 1689))
+            let bcast = Int(readUInt32LE(dec, 1721))
+            let pbtn = Int(readUInt32LE(dec, 1745))
+            if hid >= 100 && hid <= 999 {
+                return (hid, bcast, pbtn)
+            }
+        }
+        // Dynamic pattern fallback: Ldarg(1), Ldc_I4(heroID), Ceq
+        let pattern2 = Data([
+            0xA4, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x8F, 0x00, 0x00, 0x00
+        ])
+        if let range2 = dec.range(of: pattern2), range2.upperBound + 60 <= dec.count {
+            let baseOff = range2.lowerBound - dec.startIndex
+            let hid = Int(readUInt32LE(dec, baseOff + 12))
+            let bcast = Int(readUInt32LE(dec, baseOff + 44))
+            let pbtn = Int(readUInt32LE(dec, baseOff + 68))
+            if hid >= 100 && hid <= 999 {
+                return (hid, bcast, pbtn)
+            }
+        }
+        return nil
     }
 
     private func ifixInst(_ op: UInt32, _ arg: Int32) -> Data {
