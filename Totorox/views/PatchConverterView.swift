@@ -37,6 +37,10 @@ struct PatchConverterView: View {
     // History
     @State private var history: [ConversionHistoryItem] = []
 
+    /// Converted outputs live in the temp folder. Keep only a small window so the folder cannot
+    /// grow without bound while the history entries that reference them stay usable.
+    private static let maximumRetainedConversions = 10
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 20) {
@@ -361,10 +365,22 @@ struct PatchConverterView: View {
         conversionError = nil
         convertedFileURL = nil
 
+        // iOS can purge the temp folder at any time and this history is not persisted, so drop
+        // entries whose output is already gone instead of letting share taps fail silently.
+        history.removeAll { !FileManager.default.fileExists(atPath: $0.targetPath) }
+        let retainedPaths = Set(history.map { URL(fileURLWithPath: $0.targetPath).standardizedFileURL.path })
+
         Task.detached(priority: .userInitiated) {
             let converter = PatchZipConverter()
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ConvertedPatches", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+            // Prune outputs that no history entry points at anymore.
+            if let existingItems = try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
+                for item in existingItems where !retainedPaths.contains(item.standardizedFileURL.path) {
+                    try? FileManager.default.removeItem(at: item)
+                }
+            }
 
             let baseName = source.deletingPathExtension().lastPathComponent
 
@@ -373,7 +389,7 @@ struct PatchConverterView: View {
                     let outURL = tempDir.appendingPathComponent("\(baseName).3105")
                     try converter.convertZipToPatch(zipURL: source, destinationPatchURL: outURL, password: password)
                     let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
-                    let outSize = (attrs[.size] as? Int64) ?? 0
+                    let outSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                     let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)
 
                     await MainActor.run {
@@ -388,12 +404,15 @@ struct PatchConverterView: View {
                             timestamp: Date(),
                             fileSizeText: sizeStr
                         ), at: 0)
+                        if self.history.count > Self.maximumRetainedConversions {
+                            self.history.removeLast(self.history.count - Self.maximumRetainedConversions)
+                        }
                     }
                 } else {
                     let outURL = tempDir.appendingPathComponent("\(baseName).zip")
                     try converter.convertPatchToZip(patchURL: source, destinationZipURL: outURL, password: password)
                     let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
-                    let outSize = (attrs[.size] as? Int64) ?? 0
+                    let outSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                     let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)
 
                     await MainActor.run {
@@ -408,6 +427,9 @@ struct PatchConverterView: View {
                             timestamp: Date(),
                             fileSizeText: sizeStr
                         ), at: 0)
+                        if self.history.count > Self.maximumRetainedConversions {
+                            self.history.removeLast(self.history.count - Self.maximumRetainedConversions)
+                        }
                     }
                 }
             } catch {

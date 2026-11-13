@@ -695,6 +695,34 @@ public final class FileIOEngine: @unchecked Sendable {
         if includeParent, isSymbolicLink(at: url.deletingLastPathComponent()) {
             throw FileIOEngineError.symbolicLinkUnsupported
         }
+        try validateContainerAncestors(of: url)
+    }
+
+    /// Walks every path component from the app-container root down to `url` and rejects any
+    /// symlink found on the way. Checking only the item and its immediate parent is not enough:
+    /// a link placed deeper in the path (e.g. `Documents/a/b` where `Documents/a` is a symlink)
+    /// would still redirect the write outside the container.
+    ///
+    /// Components *above* the container root are deliberately skipped — `/var` is a symlink to
+    /// `/private/var` on stock iOS, so inspecting them would reject every container path.
+    private static func validateContainerAncestors(of url: URL) throws {
+        let components = url.standardizedFileURL.pathComponents
+        guard let applicationIndex = components.firstIndex(of: "Application"),
+              applicationIndex >= 2,
+              components[applicationIndex - 1] == "Data",
+              components[applicationIndex - 2] == "Containers",
+              applicationIndex + 1 < components.count else {
+            return
+        }
+
+        var currentURL = URL(fileURLWithPath: "/", isDirectory: true)
+        for (index, component) in components.enumerated() where component != "/" {
+            currentURL.appendPathComponent(component)
+            guard index >= applicationIndex + 1 else { continue }
+            if isSymbolicLink(at: currentURL) {
+                throw FileIOEngineError.symbolicLinkUnsupported
+            }
+        }
     }
 
     private func posixWriteData(_ data: Data, to path: String, mode: mode_t = 0o644) -> Bool {
