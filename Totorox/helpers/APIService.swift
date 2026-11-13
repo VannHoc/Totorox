@@ -213,8 +213,7 @@ final class APIService {
     ) async -> Result<ConvertHeaderResponse, APIServiceError> {
         let path = "api/v1/convert-header"
         do {
-            let bodyURL = try buildMultipartBody(
-                path: path,
+            let body = try buildMultipartBody(
                 fields: [
                     "mode": mode,
                     "password": password ?? "",
@@ -222,18 +221,16 @@ final class APIService {
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
-            defer { try? FileManager.default.removeItem(at: bodyURL.url) }
 
             var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
             request.setValue(
-                "multipart/form-data; boundary=\(bodyURL.boundary)",
+                "multipart/form-data; boundary=\(body.boundary)",
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-            request.httpBody = try Data(contentsOf: bodyURL.url)
 
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.invalidResponse)
             }
@@ -257,6 +254,7 @@ final class APIService {
                 keyFingerprint: raw.keyFingerprint,
                 packageBytesB64: raw.packageBytesB64,
                 payloadBytesB64: raw.payloadBytesB64,
+                zipBytesB64: raw.zipBytesB64,
                 packageId: raw.packageId
             ))
         } catch {
@@ -274,26 +272,23 @@ final class APIService {
     ) async -> Result<MergePlanResponse, APIServiceError> {
         let path = "api/v1/merge-plan"
         do {
-            let bodyURL = try buildMultipartBody(
-                path: path,
+            let body = try buildMultipartBody(
                 fields: [
                     "config_json": configJSON ?? "{}",
                 ],
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
-            defer { try? FileManager.default.removeItem(at: bodyURL.url) }
 
             var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
             request.setValue(
-                "multipart/form-data; boundary=\(bodyURL.boundary)",
+                "multipart/form-data; boundary=\(body.boundary)",
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-            request.httpBody = try Data(contentsOf: bodyURL.url)
 
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.invalidResponse)
             }
@@ -328,48 +323,78 @@ final class APIService {
 
     // MARK: - Multipart builder (nhẹ, dùng cho 1-2 file nhỏ)
 
+    /// Body multipart: `fileURL` là bản ghi tạm dùng cho upload streaming;
+    /// nếu ghi tệp thất bại thì `data` giữ body trong bộ nhớ làm phương án dự phòng.
     private struct MultipartBody {
-        let url: URL
         let boundary: String
+        let fileURL: URL?
+        let data: Data
     }
 
     private func buildMultipartBody(
-        path: String,
         fields: [String: String],
         fileURLs: [URL],
         fileFieldName: String
     ) throws -> MultipartBody {
         let boundary = "Totorox-\(UUID().uuidString)"
-        let bodyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("totorox-\(UUID().uuidString).tmp")
-        try FileManager.default.createDirectory(at: bodyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let handle = try FileHandle(forWritingTo: bodyURL)
-        defer { try? handle.close() }
+        var body = Data()
 
-        func write(_ str: String) throws {
-            guard let data = str.data(using: .utf8) else { return }
-            try handle.write(contentsOf: data)
+        func append(_ string: String) {
+            body.append(Data(string.utf8))
         }
 
         for (name, value) in fields {
-            try write("--\(boundary)\r\n")
-            try write("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
-            try write("\(value)\r\n")
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+            append("\(value)\r\n")
         }
 
         for fileURL in fileURLs {
+            // URL lấy từ DocumentPicker là security-scoped: phải mở quyền trước khi đọc.
+            let hasScope = fileURL.startAccessingSecurityScopedResource()
+            defer {
+                if hasScope { fileURL.stopAccessingSecurityScopedResource() }
+            }
+
             let filename = fileURL.lastPathComponent
-            try write("--\(boundary)\r\n")
-            try write("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\n")
-            try write("Content-Type: application/octet-stream\r\n\r\n")
-            let data = try Data(contentsOf: fileURL)
-            try handle.write(contentsOf: data)
-            try write("\r\n")
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\n")
+            append("Content-Type: application/octet-stream\r\n\r\n")
+            body.append(try Data(contentsOf: fileURL))
+            append("\r\n")
         }
 
-        try write("--\(boundary)--\r\n")
-        try handle.synchronize()
-        return MultipartBody(url: bodyURL, boundary: boundary)
+        append("--\(boundary)--\r\n")
+
+        // Ưu tiên ghi ra tệp tạm để `upload(for:fromFile:)` stream thay vì giữ body trong RAM.
+        let tempDirectory = FileManager.default.temporaryDirectory
+        let tempURL = tempDirectory.appendingPathComponent("totorox-\(UUID().uuidString).tmp")
+        do {
+            try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+            try body.write(to: tempURL, options: .atomic)
+            return MultipartBody(boundary: boundary, fileURL: tempURL, data: Data())
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            return MultipartBody(boundary: boundary, fileURL: nil, data: body)
+        }
+    }
+
+    /// Gửi body multipart (stream từ tệp tạm, fallback bộ nhớ).
+    /// Tệp tạm chỉ bị xoá trong `defer`, tức sau khi `upload` chạy xong.
+    private func upload(
+        _ request: URLRequest,
+        body: MultipartBody
+    ) async throws -> (Data, URLResponse) {
+        defer {
+            if let fileURL = body.fileURL {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }
+
+        if let fileURL = body.fileURL {
+            return try await session.upload(for: request, fromFile: fileURL)
+        }
+        return try await session.upload(for: request, from: body.data)
     }
 
     // MARK: - Parsing helpers
@@ -505,6 +530,7 @@ struct ConvertHeaderResponseBody: Decodable {
     let keyFingerprint: String?
     let packageBytesB64: String?
     let payloadBytesB64: String?
+    let zipBytesB64: String?
     let packageId: String?
 
     private enum CodingKeys: String, CodingKey {
@@ -519,6 +545,7 @@ struct ConvertHeaderResponseBody: Decodable {
         case keyFingerprint = "key_fingerprint"
         case packageBytesB64 = "package_bytes_b64"
         case payloadBytesB64 = "payload_bytes_b64"
+        case zipBytesB64 = "zip_bytes_b64"
         case packageId = "package_id"
     }
 }
@@ -535,6 +562,7 @@ struct ConvertHeaderResponse {
     let keyFingerprint: String?
     let packageBytesB64: String?
     let payloadBytesB64: String?
+    let zipBytesB64: String?
     let packageId: String?
 }
 
