@@ -189,10 +189,19 @@ agent — both need user confirmation before they are considered final:
 
 ## 11. Build and test results
 
-**NOT RUN — no results exist.**
+**iOS:** the last pushed commit (`ad4b449`) passed CI — run `43378617068`, conclusion `success`,
+10m16s (macOS runner: `xcodegen` + `xcodebuild test` + unsigned IPA).
 
-- No `swift`, `xcodebuild` or `xcodegen` on the current (Windows) host.
-- No `TestResults.xcresult` present; CI has not been run against this change set.
+**Not yet compiled:** commit `a00ab2d` (KeychainHelper / LicenseManager / APIService /
+ActivationView) has **not been pushed**, so no run has built it. Nothing in the app references those
+files yet, but they still have to compile.
+
+**Backend:** verified locally on 2026-11-13 with `uvicorn` in a scratch venv (Python 3.15):
+`/health` 200; `activate` binds DEVICE-A; same key from DEVICE-B → 403 "Key đang được dùng trên
+máy khác"; unknown key → 403; missing headers → 401; `convert` → 501; rate limit allows 5/minute
+per key then returns 429. Test database, server log and `__pycache__` were deleted afterwards.
+
+Local tooling: no `swift`, `xcodebuild` or `xcodegen` on the Windows host.
 - Static review performed (not a substitute for compiling):
   - All symbols used by the new tests exist with the required access level
     (`PatchPackageLimits`, `PatchPathValidator`, `FileManagerService.validatedName`,
@@ -204,7 +213,8 @@ agent — both need user confirmation before they are considered final:
   - The size-limit test fixture does reach the new guard (offsets/EOCD checked manually).
   - Localization keys: 198 / 198 / 198 across en / vi / zh-Hans.
 
-**Never claim this builds.** It has not been compiled since these edits.
+**Never claim unverified code builds.** iOS changes after `ad4b449` and the whole backend still
+need a real run before they can be called working.
 
 ## 12. Known bugs, blockers and risks
 
@@ -239,7 +249,8 @@ agent — both need user confirmation before they are considered final:
 3. If CI fails, fix the reported compile/test errors; rerun the same check only.
 4. Decide with the user whether `scripts/test_engine.py` should be extended or removed.
 5. Confirm with the user that re-initialising the repository was intentional (see §13).
-6. Phase 2 (only after the backend works): implement `TotoroxBackend/` (license + HWID table,
+6. Deploy `TotoroxBackend/` to a free tier host, then set `APIService.defaultBaseURL` to that URL.
+7. Phase 2 (only after the backend works): finish `TotoroxBackend/` (the license + HWID table,
    `/api/v1/activate|convert|merge`, rate limit, temp-file cleanup), then present `ActivationView`
    and gate the UI on `LicenseManager.status.isActive`. Only then remove the duplicated local logic
    in `PatchZipConverter` / `AovModMergerEngine`, and only for the parts that actually moved server-side.
