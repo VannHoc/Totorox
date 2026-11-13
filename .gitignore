@@ -21,3 +21,10 @@ TotoroxBackend/
 Totorox-Backend/
 HANDOFF_TO_NEW_AGENT.md
 *.db
+__pycache__/
+*.pyc
+
+# Local debris (not part of the build)
+Totorox-engine-jgdecrypted.txt
+Totorox-engine-jgencrypted.txt
+ion to 1.2*
