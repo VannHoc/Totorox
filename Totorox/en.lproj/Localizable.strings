@@ -226,3 +226,12 @@
 "logs.copy" = "Copy";
 "logs.share" = "Share";
 "accessibility.log_entry" = "Log entry %lld: %@";
+
+/* --- Server endpoint --- */
+"server.config_btn" = "Server configuration";
+"server.config_hint" = "Totorox backend address. Any trailing slash is removed automatically.";
+"server.config_placeholder" = "https://your-server.com";
+"server.config_save" = "Save server";
+"server.config_reset" = "Reset to default server";
+"server.config_saved" = "Server saved.";
+"server.config_invalid" = "Invalid URL. Example: https://your-server.com";
