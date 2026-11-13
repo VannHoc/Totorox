@@ -95,6 +95,18 @@ The hardening pass in the working tree:
   - Conversion outputs in `tmp/ConvertedPatches` are pruned to the files referenced by the live
     history (max 10), and history entries whose file is gone are dropped instead of failing silently.
   - Converted-size labels read `NSNumber` instead of `Int64` (they always showed 0 bytes).
+- Phase 1 thin-client scaffolding (additive — nothing is wired into the UI, the app behaves exactly
+  as before):
+  - `helpers/KeychainHelper.swift` — HWID + license key storage, `…ThisDeviceOnly` accessibility.
+  - `helpers/LicenseManager.swift` — `@MainActor` activation state; HWID generated once in the Keychain.
+  - `helpers/APIService.swift` — sends `X-License-Key` / `X-HWID`, streams multipart bodies to a temp
+    file, calls `api/v1/activate`, `api/v1/convert`, `api/v1/merge`. **`defaultBaseURL` is a placeholder
+    (`https://api.totorox.app`) and must be changed before use.** Uploads are capped at 64 MB in phase 1
+    because large mods still have to be processed on-device.
+  - `views/ActivationView.swift` — activation screen; it can be presented but is deliberately not
+    presented anywhere, so an empty backend cannot lock the app.
+  - The conversion/merge engines were intentionally **not** deleted: `TotoroxBackend/*.py` are still
+    empty 0-byte files, so routing those features to the server now would remove all functionality.
 
 ## 6. Pending tasks
 
@@ -227,6 +239,10 @@ agent — both need user confirmation before they are considered final:
 3. If CI fails, fix the reported compile/test errors; rerun the same check only.
 4. Decide with the user whether `scripts/test_engine.py` should be extended or removed.
 5. Confirm with the user that re-initialising the repository was intentional (see §13).
+6. Phase 2 (only after the backend works): implement `TotoroxBackend/` (license + HWID table,
+   `/api/v1/activate|convert|merge`, rate limit, temp-file cleanup), then present `ActivationView`
+   and gate the UI on `LicenseManager.status.isActive`. Only then remove the duplicated local logic
+   in `PatchZipConverter` / `AovModMergerEngine`, and only for the parts that actually moved server-side.
 
 ## 15. Constraints for the next agent
 
