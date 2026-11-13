@@ -108,6 +108,10 @@ public final class PatchZipConverter {
     /// Kích thước header/metadata nhẹ được gửi lên server cho mode `inspect`.
     private static let headerSliceLimit = 4 * 1024 * 1024
 
+    /// Gói nhỏ hơn ngưỡng này được đọc trọn để parse envelope local (metadata hiển thị
+    /// ngay, không phụ thuộc mạng và không vướng giới hạn upload của server).
+    private static let localInspectionLimit: Int64 = 64 * 1024 * 1024
+
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
@@ -116,10 +120,18 @@ public final class PatchZipConverter {
 
     // MARK: - Server-backed inspection (chỉ gửi header/metadata nhẹ)
 
-    /// Đọc metadata gói `.3105` bằng cách gửi header nhẹ lên `/api/v1/convert-header` (mode `inspect`).
+    /// Đọc metadata gói `.3105`.
+    ///
+    /// Gói có magic `3105PATCH` được parse ngay tại máy (chỉ đọc header plist, không
+    /// upload) nên không bao giờ vướng giới hạn 15 MB của `/api/v1/convert-header`.
+    /// Chỉ khi magic không khớp mới nhờ server nhận diện.
     func inspect(patchData: Data) async throws -> PatchPackageSummary {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
+        }
+
+        if let localSummary = try? localSummary(patchData: patchData) {
+            return localSummary
         }
 
         let slice = patchData.count > Self.headerSliceLimit
@@ -164,9 +176,21 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.sizeLimitExceeded
         }
 
+        // Binary plist đặt offset table ở cuối, nên slice đầu file không parse được.
+        // Gói nhỏ đọc trọn để parse local; gói lớn mới cần nhờ server.
+        if Int64(size) <= Self.localInspectionLimit,
+           let full = try? Data(contentsOf: patchURL),
+           let localSummary = try? localSummary(patchData: full) {
+            return localSummary
+        }
+
         let handle = try FileHandle(forReadingFrom: patchURL)
         defer { try? handle.close() }
         let slice = (try? handle.read(upToCount: Self.headerSliceLimit)) ?? Data()
+
+        if let localSummary = try? localSummary(patchData: slice) {
+            return localSummary
+        }
 
         let response = try await sendConvertHeader(
             mode: "inspect",
@@ -423,6 +447,164 @@ public final class PatchZipConverter {
     }
 
     // MARK: - Internal Standard PKZIP Engine (Pure Swift, portable, zero external dependencies)
+
+    /// Ghi ZIP trực tiếp xuống đĩa, không giữ toàn bộ output trong RAM.
+    ///
+    /// Bản `buildZipArchive` cần `Data` đầu ra nên với gói mod ~600 MB sẽ chiếm gấp đôi
+    /// bộ nhớ (nội dung + output) và dễ bị jetsam trên iOS. Helper này ghi từng entry
+    /// xuống `FileHandle` và chỉ giữ central directory (nhỏ) trong bộ nhớ.
+    func writeZipArchive(entries: [(path: String, data: Data)], to destinationURL: URL) throws {
+        let writer = try ZipArchiveWriter(destinationURL: destinationURL)
+        defer { writer.cancel() }
+        for entry in entries {
+            try writer.add(path: entry.path, data: entry.data)
+        }
+        try writer.finish()
+    }
+
+    /// Writer ZIP stream: mỗi entry được ghi ngay xuống đĩa rồi giải phóng,
+    /// nên bộ nhớ đỉnh chỉ còn ~1 entry thay vì cả gói kết quả.
+    final class ZipArchiveWriter {
+        private let handle: FileHandle
+        private let destinationURL: URL
+        private var centralDirectory = Data()
+        private var centralCount: UInt16 = 0
+        private var totalBytes: Int64 = 0
+        private var offset: UInt64 = 0
+        private var finished = false
+
+        init(destinationURL: URL, fileManager: FileManager = .default) throws {
+            self.destinationURL = destinationURL
+            let parent = destinationURL.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: parent.path) {
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+            }
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            guard fileManager.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw PatchZipConverterError.ioFailure("Không tạo được tệp .zip đầu ra.")
+            }
+            self.handle = try FileHandle(forWritingTo: destinationURL)
+        }
+
+        func add(path: String, data: Data) throws {
+            let pathBytes = Data(path.utf8)
+            guard pathBytes.count <= UInt16.max else {
+                throw PatchZipConverterError.corruptedArchive("Filename too long in archive: \(path)")
+            }
+            guard centralCount < UInt16.max else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            let (sum, overflow) = totalBytes.addingReportingOverflow(Int64(data.count))
+            guard !overflow, !PatchPackageLimits.exceedsExpandedLimit(sum) else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            guard data.count <= Int(UInt32.max), offset <= UInt64(UInt32.max) else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            totalBytes = sum
+            let localHeaderOffset = UInt32(offset)
+            let entryCRC = crc32(data)
+            let size = UInt32(data.count)
+
+            var header = Data()
+            header.appendUInt32(0x04034b50)
+            header.appendUInt16(20)
+            header.appendUInt16(1 << 11)
+            header.appendUInt16(0)
+            header.appendUInt16(0)
+            header.appendUInt16(0)
+            header.appendUInt32(entryCRC)
+            header.appendUInt32(size)
+            header.appendUInt32(size)
+            header.appendUInt16(UInt16(pathBytes.count))
+            header.appendUInt16(0)
+            header.append(pathBytes)
+
+            try write(header)
+            try write(data)
+
+            centralDirectory.appendUInt32(0x02014b50)
+            centralDirectory.appendUInt16(20)
+            centralDirectory.appendUInt16(20)
+            centralDirectory.appendUInt16(1 << 11)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt32(entryCRC)
+            centralDirectory.appendUInt32(size)
+            centralDirectory.appendUInt32(size)
+            centralDirectory.appendUInt16(UInt16(pathBytes.count))
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt32(0)
+            centralDirectory.appendUInt32(localHeaderOffset)
+            centralDirectory.append(pathBytes)
+
+            centralCount += 1
+        }
+
+        func finish() throws {
+            guard !finished else { return }
+            guard offset <= UInt64(UInt32.max) else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            let centralOffset = UInt32(offset)
+            let centralSize = UInt32(centralDirectory.count)
+            try write(centralDirectory)
+            centralDirectory.removeAll(keepingCapacity: false)
+
+            var eocd = Data()
+            eocd.appendUInt32(0x06054b50)
+            eocd.appendUInt16(0)
+            eocd.appendUInt16(0)
+            eocd.appendUInt16(centralCount)
+            eocd.appendUInt16(centralCount)
+            eocd.appendUInt32(centralSize)
+            eocd.appendUInt32(centralOffset)
+            eocd.appendUInt16(0)
+            try write(eocd)
+            try handle.synchronize()
+            try handle.close()
+            finished = true
+        }
+
+        /// Đóng handle và xoá tệp dở khi có lỗi giữa chừng.
+        func cancel() {
+            guard !finished else { return }
+            try? handle.close()
+            try? FileManager.default.removeItem(at: destinationURL)
+            finished = true
+        }
+
+        private func write(_ data: Data) throws {
+            try handle.write(contentsOf: data)
+            offset += UInt64(data.count)
+        }
+
+        private static let crcTable: [UInt32] = {
+            var table = [UInt32](repeating: 0, count: 256)
+            for i in 0..<256 {
+                var c = UInt32(i)
+                for _ in 0..<8 {
+                    c = (c & 1) == 1 ? (0xEDB88320 ^ (c >> 1)) : (c >> 1)
+                }
+                table[i] = c
+            }
+            return table
+        }()
+
+        private func crc32(_ data: Data) -> UInt32 {
+            var crc: UInt32 = 0xFFFFFFFF
+            for byte in data {
+                crc = Self.crcTable[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8)
+            }
+            return crc ^ 0xFFFFFFFF
+        }
+    }
 
     func buildZipArchive(entries: [(path: String, data: Data)]) throws -> Data {
         var archive = Data()
@@ -734,10 +916,22 @@ public final class PatchZipConverter {
         let schemaVersion: Int
         let isPasswordProtected: Bool
         let encryptedPayload: Data?
+        let keyFingerprint: Data?
         let kdfSalt: Data?
         let kdfIterations: Int?
         let wrappedContentKey: Data?
         let publicContentKey: Data?
+    }
+
+    /// Metadata gói đọc thuần local — không cần server, không giới hạn dung lượng upload.
+    private func localSummary(patchData: Data) throws -> PatchPackageSummary {
+        let envelope = try parseEnvelope(patchData)
+        return PatchPackageSummary(
+            packageID: envelope.packageID,
+            schemaVersion: envelope.schemaVersion,
+            isPasswordProtected: envelope.isPasswordProtected,
+            keyFingerprint: envelope.keyFingerprint ?? Data()
+        )
     }
 
     private func parseEnvelope(_ data: Data) throws -> ParsedEnvelope {
@@ -757,6 +951,7 @@ public final class PatchZipConverter {
         let schemaVersion = plist["schemaVersion"] as? Int ?? 0
         let isProtected = plist["isPasswordProtected"] as? Bool ?? false
         let encryptedPayload = plist["encryptedPayload"] as? Data
+        let keyFingerprint = plist["keyFingerprint"] as? Data
         let kdfSalt = plist["kdfSalt"] as? Data
         let kdfIterations = plist["kdfIterations"] as? Int
         let wrappedContentKey = plist["wrappedContentKey"] as? Data
@@ -766,6 +961,7 @@ public final class PatchZipConverter {
             schemaVersion: schemaVersion,
             isPasswordProtected: isProtected,
             encryptedPayload: encryptedPayload,
+            keyFingerprint: keyFingerprint,
             kdfSalt: kdfSalt,
             kdfIterations: kdfIterations,
             wrappedContentKey: wrappedContentKey,
@@ -773,15 +969,38 @@ public final class PatchZipConverter {
         )
     }
 
-    private func envelopeWithoutPayload(_ data: Data) throws -> Data {
-        let envelope = try parseEnvelope(data)
+    /// Dựng lại envelope chỉ với các khoá metadata server thật sự đọc.
+    ///
+    /// Dùng whitelist thay vì blacklist: gói `.3105` có thể mang blob lớn dưới bất kỳ
+    /// khoá mở rộng nào (`encryptedPayload`, payload nhúng, preview…), nên chỉ giữ đúng
+    /// những khoá server thật sự đọc. Nhờ vậy header gửi lên luôn vài trăm byte, không
+    /// bao giờ chạm giới hạn upload dù gói nguồn 16 MB hay lớn hơn.
+    private static let envelopeMetadataKeys: Set<String> = [
+        "schemaVersion",
+        "packageID",
+        "isPasswordProtected",
+        "keyAADVersion",
+        "keyFingerprint",
+        "kdfSalt",
+        "kdfIterations",
+        "wrappedContentKey",
+        "publicContentKey",
+    ]
+
+    func envelopeWithoutPayload(_ data: Data) throws -> Data {
+        _ = try parseEnvelope(data)
         let magic = Data("3105PATCH\0".utf8)
         let body = data.dropFirst(magic.count)
-        guard var plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
+        guard let plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
             throw PatchZipConverterError.invalidProject("Envelope không phải plist hợp lệ.")
         }
-        plist.removeValue(forKey: "encryptedPayload")
-        let serialized = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
+        var metadata: [String: Any] = [:]
+        for key in Self.envelopeMetadataKeys {
+            if let value = plist[key] {
+                metadata[key] = value
+            }
+        }
+        let serialized = try PropertyListSerialization.data(fromPropertyList: metadata, format: .binary, options: 0)
         return magic + serialized
     }
 
