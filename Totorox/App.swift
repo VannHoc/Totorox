@@ -14,7 +14,7 @@ struct TotoroxApp: App {
         setupLogCapture()
         log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
         AppState.runEarlyPrivilegeInit()
-        LicenseManager.shared.refresh() // xác minh license ngay từ đầu
+        Task { await LicenseManager.shared.refresh() } // xác minh license ngay từ đầu
     }
 
     private var language: AppLanguage {
@@ -41,9 +41,7 @@ struct TotoroxApp: App {
 
                 if showOnboarding {
                     OnboardingView {
-                        await MainActor.run {
-                            LicenseManager.shared.refresh()
-                        }
+                        Task { await LicenseManager.shared.refresh() }
                         OnboardingStore.markCompleted()
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
                             showOnboarding = false

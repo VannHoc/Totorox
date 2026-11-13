@@ -174,7 +174,7 @@ final class APIService {
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
-            defer { try? FileManager.default.removeItem(at: bodyURL) }
+            defer { try? FileManager.default.removeItem(at: bodyURL.url) }
 
             var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
@@ -183,7 +183,7 @@ final class APIService {
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-            request.httpBody = try Data(contentsOf: bodyURL)
+            request.httpBody = try Data(contentsOf: bodyURL.url)
 
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -234,7 +234,7 @@ final class APIService {
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
-            defer { try? FileManager.default.removeItem(at: bodyURL) }
+            defer { try? FileManager.default.removeItem(at: bodyURL.url) }
 
             var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
@@ -243,7 +243,7 @@ final class APIService {
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-            request.httpBody = try Data(contentsOf: bodyURL)
+            request.httpBody = try Data(contentsOf: bodyURL.url)
 
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -260,8 +260,8 @@ final class APIService {
             return .success(MergePlanResponse(
                 ok: raw.ok,
                 acceptedBytes: raw.acceptedBytes,
-                mergePlan: raw.mergePlan?.value,
-                configFiles: raw.configFiles?.value,
+                mergePlan: raw.mergePlan,
+                configFiles: raw.configFiles,
                 zipBytesB64: raw.zipBytesB64,
                 note: raw.note
             ))
