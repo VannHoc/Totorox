@@ -261,7 +261,7 @@ final class PatchZipConverterTests: XCTestCase {
             options: 0
         )
         let package = Data("3105PATCH\0".utf8) + serialized
-        XCTAssertGreaterThan(package.count, APIService.maximumUploadBytes)
+        XCTAssertGreaterThan(Int64(package.count), APIService.maximumUploadBytes)
 
         let header = try converter.envelopeWithoutPayload(package)
 
