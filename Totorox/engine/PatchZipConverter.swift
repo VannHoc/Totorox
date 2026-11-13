@@ -726,7 +726,6 @@ public final class PatchZipConverter {
         }
         return crc ^ 0xFFFFFFFF
     }
-}
 
 // MARK: - Hybrid helpers
 
@@ -1081,6 +1080,7 @@ public final class PatchZipConverter {
         let aad = Data("3105PATCH/v\(schemaVersion)/payload/\(packageID.uuidString)".utf8)
         return try aesGCMSeal(plaintext: plistData, key: contentKey, aad: aad)
     }
+}
 
 // MARK: - Binary Data Helpers
 
