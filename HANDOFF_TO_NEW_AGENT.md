@@ -1,50 +1,107 @@
-# Handoff — Totorox Client iOS Phần 4
+# Handoff — Totorox Client iOS Phần 5
 
-Trạng thái bàn giao tính đến 2026-11-13. Phần 3 đã hoàn tất và được kiểm chứng lại.
+Trạng thái bàn giao tính đến 2026-11-13 (sau vòng sửa lỗi từ ảnh chụp thiết bị).
 
 ## Mục tiêu
 Triển khai trọn vẹn phần client iOS trong `Totorox/` sau khi backend (`Totorox-Backend/`) đã sẵn sàng.
 Điểm neo là `main.py` và `SERVER_BLUEPRINT.md` trong `Totorox-Backend/`.
 
-## Trạng thái đã kiểm chứng (Phần 4)
-1. Mô hình **hybrid** đã chốt cho cả convert và merge:
-   - `convert-header to_zip`: server chỉ sinh content key + envelope params (PBKDF2/AES-GCM nếu có password);
-     client (`Totorox/engine/PatchZipConverter.swift`) tự seal payload PLIST và build envelope `.3105` local
-     (`sealPayload` + `buildEnvelope`, AAD `3105PATCH/v{schema}/payload/{uuid}`, nonce 12 byte zero).
-   - `convert-header from_zip`: client gửi envelope không payload, server mở key, client tự giải mã payload.
-   - `merge-plan`: client upload `config_bundle.zip` (layout `mod_<idx>/Resources/<ver>/...`, chỉ file nhẹ),
-     server chạy pipeline (UnityFS/RP/RV/XML/MSES/HeroSkin) và trả `zip_bytes_b64` chứa
-     `merge_plan.json`, `config.json`, `result.zip`; client ghép asset nặng local
-     (`AovModMergerEngine.swift` — bước hybrid ghép `prepared.first?.heavyEntries`).
-2. `Totorox-Backend/_selftest_tmp.py` chạy xanh toàn bộ (`python _selftest_tmp.py`):
-   - Đã cập nhật cho hợp đồng hybrid: `build_local_package()` trong self-test tái tạo envelope
-     giống hệt flow Swift (dùng `content_key_b64`, `kdf_*`, `wrapped_content_key_b64`; KHÔNG còn
-     `package_bytes_b64` từ server).
-   - Chạy cả 3 nhóm: convert_header round-trip (plist + password + zip-patch + manifest-only),
-     merge_plan config_bundle (CommonActions XML merge, MSES, HeroSkin_1), và HTTP routes thật qua TestClient.
-3. CI GitHub Actions pass (run cuối `fix: keep hybrid helpers inside converter scope`, 2026-11-13).
-   `PatchPackageCodec.swift` không còn tồn tại; không có stub/TODO/fatalError trong code Swift.
-4. Dọn depot: đã bỏ khỏi git và xóa `Totorox-engine-jgdecrypted.txt`, `Totorox-engine-jgencrypted.txt`,
-   `ion to 1.2…` (rác terminal); `.gitignore` bổ sung `__pycache__/`, `*.pyc`, các file debris nói trên.
-   `Totorox-Backend/` vốn đã bị ignore cả thư mục (chỉ chạy local).
-   Đã dọn `Totorox-Backend/tmp/` và `__pycache__/` trên đĩa.
+## Sửa lỗi trong Phần 5 (quan trọng)
+
+### 1. Lỗi "I/O error: Header/ngữ cảnh vượt quá 15,7 MB" với gói `.3105` 16 MB
+Nguyên nhân: `envelopeWithoutPayload` chỉ `removeValue(forKey: "encryptedPayload")` — nếu gói mang
+blob lớn ở khoá khác (payload nhúng, preview…), header gửi server vẫn ~16 MB rồi bị chặn bởi
+`APIService.maximumUploadBytes` (15 MB).
+
+Đã sửa (`Totorox/engine/PatchZipConverter.swift`):
+- `envelopeWithoutPayload` chuyển sang **whitelist** `envelopeMetadataKeys` (`schemaVersion`,
+  `packageID`, `isPasswordProtected`, `keyAADVersion`, `keyFingerprint`, `kdfSalt`, `kdfIterations`,
+  `wrappedContentKey`, `publicContentKey`). Header luôn chỉ vài trăm byte.
+- `inspect(patchData:)` / `inspect(patchURL:)` parse envelope **local** trước (gói ≤ 64 MB đọc trọn),
+  chỉ gọi server khi magic không khớp → không còn phụ thuộc giới hạn upload khi chỉ xem metadata.
+- `inspect` lấy `keyFingerprint` từ envelope thay vì tự hash content key.
+
+### 2. Lỗi "Yêu cầu hết thời gian chờ" khi gộp 4 gói mod
+Hai nguyên nhân độc lập:
+
+a) **Timeout 60 s cho mọi request.** Đã tách trong `APIService.swift`:
+   `requestTimeout = 60` (metadata), `mergeTimeout = 300` (merge-plan),
+   `timeoutIntervalForResource = 300`. `mergePlan` set `request.timeoutInterval = mergeTimeout`.
+
+b) **Phân loại "file nhẹ" quá rộng.** Điều kiện cũ
+   `isServerConfigPath(path) || (fileData.count <= 2MB && !.assetbundle)` đẩy mọi file ≤ 2 MB
+   (Lua, texture nhỏ, prefab…) lên server → bundle phình to và server ghi đè sai asset.
+   Đã sửa: **chỉ** `isServerConfigPath(path)` lên server.
+
+### 3. `isServerConfigPath` thiếu RP/RV metadata
+Server chạy `merge_resource_packer` / `merge_resource_verification` trên
+`ResourcePackerInfoSetAll.assetbundle` / `ResourceVerificationInfoSetAll.assetbundle`; client cũ
+không gửi hai file này nên asset mới không được đăng ký. Đã thêm vào `isServerConfigPath`.
+
+### 4. Nguy cơ jetsam khi gộp nhiều gói lớn (147 MB × 4)
+Đã sửa (`AovModMergerEngine.swift` + `PatchZipConverter.swift`):
+- `mergeModArchives` chạy **hai lượt**: lượt 1 chỉ trích file cấu hình nhẹ; lượt 2 đọc lại từng gói
+  một rồi ghi thẳng xuống đĩa. RAM đỉnh ~1 gói thay vì cả bộ.
+- Thêm `PatchZipConverter.ZipArchiveWriter` — writer ZIP streaming (`add(path:data:)`/`finish()`/`cancel()`),
+  chỉ giữ central directory trong RAM. `writeZipArchive(entries:to:)` bọc writer.
+- `inspectModArchive` không còn parse ZIP hai lần; có `AovModMergerEngine.summary(url:fileSize:entryNames:)`
+  để dựng metadata từ entry names đã có.
+
+### 5. Version Resources không khớp giữa server và client
+Server remap `Resources/<ver>/…` về `target_version` (mặc định `1.64.1`), client lại ghép asset nặng
+với đường dẫn gốc → asset rơi vào thư mục version cũ và game bỏ qua.
+Đã sửa: client gửi `output.resourcesVersion`, và `remapResourceVersion(path:from:to:)` + 
+`resolveTargetVersion(_:)` (so sánh theo từng thành phần số) đổi tiền tố asset nặng cho khớp.
+
+### 6. Hạn mức upload backend
+`Totorox-Backend/main.py`: `MAX_UPLOAD_BYTES` (convert-header, mặc định 15 MB) và
+`MAX_MERGE_UPLOAD_BYTES` (merge-plan, mặc định 64 MB) đều đọc từ env
+(`TOTOROX_MAX_UPLOAD_BYTES`, `TOTOROX_MAX_MERGE_BYTES`).
+Client guard `APIService.maximumMergeBundleBytes = 15 MB` trước khi upload.
+
+## Test đã thêm (`TotoroxTests/PatchZipConverterTests.swift`)
+- `testWriteZipArchive_MatchesInMemoryBuilder`, `testWriteZipArchive_ReplacesExistingFile`
+- `testEnvelopeWithoutPayload_StripsLargeBlobs` (bảo vệ trực tiếp lỗi 15,7 MB)
+- `testEnvelopeWithoutPayload_KeepsPasswordFields`
+- `testResolveTargetVersion_PicksHighestAndFallsBack` (1.64.10 > 1.64.1)
+- `testRemapResourceVersion_RewritesPrefixOnly`
+- `testAovModMerger_ClassifiesServerConfigPaths` đã cập nhật cho RP/RV
+
+`convert-header`/`merge-plan` vẫn không test được offline (cần backend + license key);
+các test trên chỉ chạm nhánh local.
+
+## Trạng thái đã kiểm chứng
+1. Mô hình **hybrid** giữ nguyên:
+   - `convert-header to_zip`: server sinh content key + envelope params; client seal payload local
+     (AAD `3105PATCH/v{schema}/payload/{uuid}`, nonce 12 byte zero).
+   - `convert-header from_zip`: client gửi envelope **chỉ metadata**, server mở key, client giải mã payload.
+   - `merge-plan`: client upload `config_bundle.zip` (chỉ file cấu hình server thật sự merge),
+     server trả `zip_bytes_b64`, client ghép asset nặng local + remap version.
+2. `python _selftest_tmp.py` (trong `Totorox-Backend/`) xanh toàn bộ 3 nhóm: convert_header
+   round-trip (plist/password/zip-patch/manifest-only), merge_plan config_bundle
+   (CommonActions XML, MSES, HeroSkin_1), và HTTP routes qua `TestClient`.
+3. `PatchPackageCodec.swift` không còn; không có stub/TODO/fatalError trong code Swift.
+4. Dọn depot: `.gitignore` có `__pycache__/`, `*.pyc`, `*.db` và các file rác
+   (`Totorox-engine-jg*.txt`, `ion to 1.2*`); thư mục `Totorox-Backend/` bị ignore toàn bộ.
 
 ## Kiến trúc nghiệp đã biết
-- `AovModMergerEngine.inspectModArchive` đọc metadata nhẹ local (parse zip, regex `hero[_-]?\d{3,4}`).
-- `isServerConfigPath` (CommonActions/Databin/Thanos) quyết định file nào lên server.
-- `makeMergedOutputFilename` sinh tên `AOV_Mod_<N>Heroes_<hash4>.zip`.
+- `AovModMergerEngine.inspectModArchive` → `summary(url:fileSize:entryNames:)`, regex `hero[_-]?\d{3,4}`.
+- `isServerConfigPath` = `commonactions` | `/databin/` | `/thanos/` | `resourcepackerinfosetall.assetbundle`
+  | `resourceverificationinfosetall.assetbundle`.
+- `makeMergedOutputFilename` sinh `AOV_Mod_<N>Heroes_<hash4>.zip`.
 
 ## Nhắc nhở cho agent sau
-- Khi chạy backend self-test ở môi trường mới: cần `pip install fastapi uvicorn slowapi httpx cryptography`
-  (xem `requirements.txt`); test dùng `fastapi.testclient` nên cần `httpx`.
-- `APIService.defaultBaseURL` là tunnel trycloudflare tạm — đổi theo môi trường kiểm thử
-  (trong app: ẩn sau triple-tap logo ở `ActivationView`).
-- `licenses.db` chỉ nằm trên đĩa (đã ignore `*.db` + cả thư mục backend) — không commit DB license thật.
-- Nếu đổi hợp đồng `convert-header` (thêm/bỏ field), cập nhật đồng bộ: `core_processor.py::convert_header`,
-  `APIService.swift::ConvertHeaderResponse`, và `build_local_package()` trong `_selftest_tmp.py`.
-- Lưu ý: AOV/patch engine này chứa kernel exploit + đổi file trong sandbox app game (kexploit_opa334,
-  sandbox_escape, wallpaper_zip...). Chỉ dùng cho mục đích research/nghiên cứu kỹ thuật.
+- Cần `pip install fastapi uvicorn slowapi httpx cryptography` (xem `requirements.txt`);
+  self-test dùng `fastapi.testclient` nên phải có `httpx`.
+- CommonActions `.pkg.bytes` là **ZIP lồng bên trong**; muốn test `merge_plan` thủ công phải bọc
+  XML trong một ZIP, không đưa bytes thô.
+- `APIService.defaultBaseURL` là tunnel trycloudflare tạm — đổi qua UI triple-tap logo ở `ActivationView`.
+- Nếu đổi hợp đồng `convert-header`, cập nhật đồng bộ 3 chỗ: `core_processor.py::convert_header`,
+  `APIService.swift::ConvertHeaderResponse`, `_selftest_tmp.py::build_local_package`.
+- Nếu đổi `isServerConfigPath`, cập nhật cả test `testAovModMerger_ClassifiesServerConfigPaths`
+  và `KNOWN_ROOT_DIRS` phía server.
+- Lưu ý: engine chứa kernel exploit + đổi file trong sandbox app game — chỉ dùng cho research.
 
 ## Lưu ý biên dịch
-- Build iOS qua `project.yml` (XcodeGen) hoặc `scripts/generate_pbxproj.py`; CI sinh unsigned IPA.
-- `AovModMergerEngine.swift` giữ public signature cũ; logic hybrid gộp đã hoàn chỉnh, không còn placeholder.
+- Build qua `project.yml` (XcodeGen); CI sinh unsigned IPA trên `macos-latest`, chạy unit test
+  trên simulator rồi archive. iOS deployment target 16.0.
