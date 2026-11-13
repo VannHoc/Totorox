@@ -331,8 +331,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
         )
         let outURL = outDir.appendingPathComponent(outName)
         try? fileManager.removeItem(at: outURL)
+        let resultZip: Data
         do {
-            let resultZip = try PatchZipConverter.shared.buildZipArchive(entries: finalEntries)
+            resultZip = try PatchZipConverter.shared.buildZipArchive(entries: finalEntries)
             try resultZip.write(to: outURL, options: .atomic)
         } catch {
             throw AovModMergerError.zipCreationFailed(error.localizedDescription)
