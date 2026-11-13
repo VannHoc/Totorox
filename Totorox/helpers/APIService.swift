@@ -397,6 +397,42 @@ struct AnyCodable: Codable, Equatable {
     var array: [Any]? { value as? [Any] }
     var dictionary: [String: Any]? { value as? [String: Any] }
 
+    static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
+        valuesEqual(lhs.value, rhs.value)
+    }
+
+    private static func valuesEqual(_ lhs: Any, _ rhs: Any) -> Bool {
+        switch (lhs, rhs) {
+        case (is NSNull, is NSNull):
+            return true
+        case let (left as Bool, right as Bool):
+            return left == right
+        case let (left as Int, right as Int):
+            return left == right
+        case let (left as Double, right as Double):
+            return left == right
+        case let (left as Int, right as Double):
+            return Double(left) == right
+        case let (left as Double, right as Int):
+            return left == Double(right)
+        case let (left as String, right as String):
+            return left == right
+        case let (left as [Any], right as [Any]):
+            guard left.count == right.count else { return false }
+            return zip(left, right).allSatisfy { pair in
+                valuesEqual(pair.0, pair.1)
+            }
+        case let (left as [String: Any], right as [String: Any]):
+            guard left.count == right.count else { return false }
+            return left.allSatisfy { pair in
+                guard let other = right[pair.key] else { return false }
+                return valuesEqual(pair.value, other)
+            }
+        default:
+            return false
+        }
+    }
+
     var nestedString: String? { value as? String }
 }
 

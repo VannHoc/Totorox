@@ -1462,7 +1462,7 @@ enum ContainerStore {
         return readDirectoryEntriesFromDisk(at: path)
     }
 
-    public static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
+    static func sortedEntries(_ entries: [FileEntry]) -> [FileEntry] {
         entries.sorted { lhs, rhs in
             // 1. Directories before regular files
             if lhs.isDirectory != rhs.isDirectory {
