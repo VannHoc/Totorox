@@ -85,6 +85,16 @@ The hardening pass in the working tree:
   checks in the overwrite flow; user-visible error alerts instead of silent `try?`.
 - `ContainerStore.readTextFile` no longer loads whole files; `AppLog` bounded to 5,000 entries.
 - README / Info.plist / localization / `.gitignore` updates.
+- Follow-up pass (requested by the user after the audit review):
+  - Symlink rejection now walks **every component from the app-container root down**, not just the
+    item and its immediate parent. Components above `.../Containers/Data/Application/<UUID>` are
+    skipped on purpose, because `/var` is itself a symlink on stock iOS.
+  - Shared incoming files are copied on a background task (`importSharedFile`) instead of the main thread.
+  - `totorox://overwrite?url=` / `import?url=` accept **https only**, and reject a download whose
+    declared or actual size exceeds the 3.6 GB ceiling.
+  - Conversion outputs in `tmp/ConvertedPatches` are pruned to the files referenced by the live
+    history (max 10), and history entries whose file is gone are dropped instead of failing silently.
+  - Converted-size labels read `NSNumber` instead of `Int64` (they always showed 0 bytes).
 
 ## 6. Pending tasks
 
@@ -92,9 +102,14 @@ PENDING:
 
 1. Commit the working tree (nothing is committed; uncommitted work is at risk).
 2. Obtain a real compile + test verdict (only possible on macOS / via CI).
-3. Confirm or revert two behavioural changes (see §9 and §12).
-4. Keep `scripts/test_engine.py` in sync — it still mirrors only the old merge rules and does not
+3. Keep `scripts/test_engine.py` in sync — it still mirrors only the old merge rules and does not
    exercise the Swift sources at all.
+
+RESOLVED by user decision (2026-11-13):
+
+- The 3.6 GB ceiling stays as-is (no streaming rewrite planned).
+- Removing `.3105` extraction from the Files tab is intentional; do not restore it.
+- The update checker target `VannHoc/Totorox` is the correct repository.
 
 BLOCKED (on this machine):
 
@@ -143,10 +158,9 @@ agent — both need user confirmation before they are considered final:
 
 1. `FolderExplorerView`: `.3105` is no longer treated as an extractable archive.
    The UI affordance and the decode-and-stage branch inside `extractArchive` were deleted;
-   only `.zip` extracts now. Rationale: `.3105` is a patch package, handled by the converter.
-   **This is a functional removal — confirm with the user before keeping it.**
+   only `.zip` extracts now. **Confirmed intentional by the user on 2026-11-13 — do not restore.**
 2. `AppUpdateChecker` (Utils.swift): release URLs moved from `Totorox/Totorox` to
-   `VannHoc/Totorox`. If that repository does not exist, update checks silently 404.
+   `VannHoc/Totorox` (the real remote).
 
 ## 10. Technical decisions (from the previous agent, verified)
 
@@ -199,19 +213,20 @@ agent — both need user confirmation before they are considered final:
 ## 13. Git working-tree status
 
 - Branch: `main`. No stashes. Nothing staged.
-- 22 modified tracked files, 2 untracked files, no deleted files.
-- Last commit: `bc44429 fix(build): remove withDirectorySummary and unused SecureZIPArchive to resolve CI compile error`
-  (2026-11-13 02:42 +0700).
+- **The repository was re-initialised on 2026-11-13**: there is a single initial commit
+  `78e9436 "build app"` containing 95 files / 49,401 insertions. The previous history
+  (14 commits ending at `bc44429`) is no longer reachable in this clone — `bc44429` is not a valid
+  object. The two new test files are tracked in that commit; no work is missing.
+- Only the follow-up fixes from this pass are uncommitted (see §5).
 
 ## 14. Exact next steps
 
-1. Commit the change set as a checkpoint on a branch (safe, non-destructive; do not reset/clean).
+1. Commit the uncommitted follow-up fixes from §5.
 2. Push only if the user authorizes, then read the macOS CI result — this is the only trustworthy
    compile verdict available.
 3. If CI fails, fix the reported compile/test errors; rerun the same check only.
-4. Ask the user to decide on §9 items (`.3105` extraction removal, update-checker repository).
-5. Optionally extend `scripts/test_engine.py` to cover the 3.6 GB limit and symlink rules,
-   or delete it as redundant — decide with the user.
+4. Decide with the user whether `scripts/test_engine.py` should be extended or removed.
+5. Confirm with the user that re-initialising the repository was intentional (see §13).
 
 ## 15. Constraints for the next agent
 
