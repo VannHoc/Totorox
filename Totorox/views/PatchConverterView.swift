@@ -321,6 +321,12 @@ struct PatchConverterView: View {
         let currentPassword = passwordText.isEmpty ? nil : passwordText
 
         Task.detached(priority: .userInitiated) {
+            // URL lấy từ DocumentPicker có thể là security-scoped: mở quyền trước khi đọc.
+            let hasScope = url.startAccessingSecurityScopedResource()
+            defer {
+                if hasScope { url.stopAccessingSecurityScopedResource() }
+            }
+
             let fm = FileManager.default
             let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
             let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0

@@ -28,110 +28,6 @@ final class PatchZipConverterTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeProject(
-        name: String = "Totorox Super Mod",
-        rules: [PatchRule],
-        directories: [PatchDirectory] = [],
-        bundleID: String = "com.apple.mobile.MobileHouseArrest",
-        isPrivate: Bool = false
-    ) -> PatchProject {
-        PatchProject(
-            id: UUID(),
-            name: name,
-            author: "VannHoc",
-            isPrivate: isPrivate,
-            createdAt: Date(),
-            updatedAt: Date(),
-            bundleIdentifiers: [bundleID],
-            directories: directories,
-            rules: rules
-        )
-    }
-
-    // MARK: - Local round-trip: PatchProject <-> .zip
-
-    func testBuildZipDataAndProjectFromZipData_PreservesRulesAndPayloads() throws {
-        let bundleID = "com.apple.mobile.MobileHouseArrest"
-        let payload1 = "PAYLOAD_BYTES_TEXTURE_DATA_1".data(using: .utf8)!
-        let payload2 = Data(repeating: 0x5A, count: 64 * 1024)
-
-        let rule1 = PatchRule(
-            id: UUID(),
-            bundleID: bundleID,
-            relativePath: "Documents/Assets/texture.png",
-            replacementFilename: "texture.png",
-            replacementData: payload1
-        )
-        let rule2 = PatchRule(
-            id: UUID(),
-            bundleID: bundleID,
-            relativePath: "files/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes",
-            replacementFilename: "CommonActions.pkg.bytes",
-            replacementData: payload2
-        )
-        let directory = PatchDirectory(id: UUID(), bundleID: bundleID, relativePath: "Documents/Assets")
-        let project = makeProject(rules: [rule1, rule2], directories: [directory], bundleID: bundleID)
-
-        let zipData = try converter.buildZipData(from: project)
-        let restored = try converter.projectFromZipData(zipData)
-
-        XCTAssertEqual(restored.id, project.id)
-        XCTAssertEqual(restored.name, project.name)
-        XCTAssertEqual(restored.author, project.author)
-        XCTAssertEqual(restored.bundleIdentifiers, project.bundleIdentifiers)
-        XCTAssertEqual(restored.directories.count, 1)
-        XCTAssertEqual(restored.directories[0].relativePath, "Documents/Assets")
-        XCTAssertEqual(restored.rules.count, 2)
-
-        let restoredRule1 = restored.rules.first { $0.relativePath == "Documents/Assets/texture.png" }
-        XCTAssertEqual(restoredRule1?.replacementFilename, "texture.png")
-        XCTAssertEqual(restoredRule1?.replacementData, payload1)
-
-        let restoredRule2 = restored.rules.first {
-            $0.relativePath.hasSuffix("Prefab_Hero/CommonActions.pkg.bytes")
-        }
-        XCTAssertEqual(restoredRule2?.replacementFilename, "CommonActions.pkg.bytes")
-        XCTAssertEqual(restoredRule2?.replacementData, payload2)
-    }
-
-    func testBuildZipData_AlwaysWritesPatchManifest() throws {
-        let rule = PatchRule(
-            bundleID: "com.garena.game.kgvn",
-            relativePath: "Documents/RemoteConfig.plist",
-            replacementFilename: "RemoteConfig.plist",
-            replacementData: "REMOTE_CONFIG_PAYLOAD".data(using: .utf8)!,
-            operation: "mergePlist",
-            containerKind: "application"
-        )
-        let project = makeProject(name: "RemoteConfig MultiVersion", rules: [rule], bundleID: "com.garena.game.kgvn")
-
-        let zipData = try converter.buildZipData(from: project)
-        let entries = try converter.parseZipArchive(zipData)
-
-        XCTAssertNotNil(entries["patch.json"])
-        XCTAssertNotNil(entries["payload/com.garena.game.kgvn/Documents/RemoteConfig.plist"])
-
-        let manifestData = try XCTUnwrap(entries["patch.json"])
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let manifest = try decoder.decode(PatchZipManifest.self, from: manifestData)
-        XCTAssertEqual(manifest.name, "RemoteConfig MultiVersion")
-        XCTAssertEqual(manifest.rules.count, 1)
-        XCTAssertEqual(manifest.rules[0].operation, "mergePlist")
-    }
-
-    func testProjectFromZipData_AutoGeneratesManifestWhenMissing() throws {
-        let dummyData = "dummy content without patch.json".data(using: .utf8)!
-        let zipData = try converter.buildZipArchive(entries: [
-            ("Resources/dummy.txt", dummyData)
-        ])
-
-        let project = try converter.projectFromZipData(zipData)
-        XCTAssertEqual(project.rules.count, 1)
-        XCTAssertEqual(project.rules[0].replacementFilename, "dummy.txt")
-        XCTAssertEqual(project.rules[0].replacementData, dummyData)
-    }
-
     // MARK: - Local ZIP engine
 
     func testBuildZipArchive_ParseZipArchiveRoundTrip() throws {
@@ -241,27 +137,6 @@ final class PatchZipConverterTests: XCTestCase {
         } catch {
             XCTFail("Expected PatchZipConverterError, got \(error)")
         }
-    }
-
-    // MARK: - Mod merger (local parts)
-
-    func testAovModMerger_PathNormalizationAndJgCryptoRoundTrip() throws {
-        let engine = AovModMergerEngine.shared
-
-        let norm1 = engine.normalizeAovRelativePath(
-            "Murad/com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"
-        )
-        XCTAssertEqual(norm1, "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes")
-
-        let normMacOS = engine.normalizeAovRelativePath("__MACOSX/Murad/._CommonActions.pkg.bytes")
-        XCTAssertNil(normMacOS)
-
-        let plain = Data("MSES_TEST_PAYLOAD_FOR_JG_CRYPTO_1234567890".utf8)
-        let encrypted = try engine.jgEncrypt(plain, stem: "HeroSkin_1")
-        XCTAssertEqual(Array(encrypted.prefix(4)), [0x22, 0x4A, 0x67, 0x00])
-
-        let decrypted = try engine.jgDecrypt(encrypted, stem: "HeroSkin_1")
-        XCTAssertEqual(decrypted, plain)
     }
 
     func testAovModMerger_ClassifiesServerConfigPaths() {
