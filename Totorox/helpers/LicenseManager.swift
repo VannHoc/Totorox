@@ -37,7 +37,7 @@ final class LicenseManager: ObservableObject {
         self.licenseKey = Self.storedKey() ?? ""
         if !self.licenseKey.isEmpty {
             self.status = .unlicensed // chưa xác minh lại với server
-            Task.detached(priority: .background) {
+            Task(priority: .background) { [weak self] in
                 await self?.refresh()
             }
         }
@@ -66,7 +66,7 @@ final class LicenseManager: ObservableObject {
             )
             await refresh()
         case .failure(let error):
-            status = .rejected(error.localizedDescription ?? "Không kích hoạt được.")
+            status = .rejected(error.localizedDescription)
         }
     }
 
@@ -87,7 +87,7 @@ final class LicenseManager: ObservableObject {
                 )
             }
         case .failure(let error):
-            status = .rejected(error.localizedDescription ?? "Không kết nối được server.")
+            status = .rejected(error.localizedDescription)
         }
     }
 
