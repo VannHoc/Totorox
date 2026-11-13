@@ -7,6 +7,7 @@ enum APIServiceError: Error, Equatable, LocalizedError {
     case invalidResponse
     case transport(String)
     case ioFailure(String)
+    case serverNotConfigured
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,8 @@ enum APIServiceError: Error, Equatable, LocalizedError {
             return "Lỗi kết nối: \(detail)"
         case .ioFailure(let detail):
             return "Lỗi tệp: \(detail)"
+        case .serverNotConfigured:
+            return "Máy chủ chưa được cấu hình."
         }
     }
 }
@@ -34,25 +37,46 @@ struct LicenseActivation: Equatable, Sendable {
     let plan: String?
 }
 
-/// Thin client for the Totorox backend.
+/// Thin client gọi đúng schema API của `main.py` (Totorox-Backend).
 ///
-/// Phase 1 only provides the transport: the app still performs conversion and merging on-device,
-/// so nothing breaks while the server is being built. Every request carries the license key and
-/// the device identifier (HWID) required by the backend.
+/// Mọi request đều yêu cầu 2 header:
+/// - `X-License-Key`
+/// - `X-HWID`
+///
+/// Endpoint mapping:
+/// - POST /api/v1/verify            (JSON body: X-License-Key/X-HWID trong header)
+/// - POST /api/v1/activate          (JSON body: hwid, không gửi license key trong body)
+/// - POST /api/v1/convert-header    (multipart/form-data: mode, password?, file?)
+/// - POST /api/v1/merge-plan        (multipart/form-data: file?, config_json?)
+///
+/// Timeout mặc định cho request là 60 giây.
 final class APIService {
     static let shared = APIService()
 
-    /// Base URL of the Totorox backend. Change this once the server is deployed.
+    /// Base URL của Totorox backend. Ghi đè khi machine có server riêng.
     static let defaultBaseURL = URL(string: "https://api.totorox.app")!
 
-    /// Large mods stay on-device for now, so only reasonably small payloads are uploaded.
-    /// Raise this once the server is able to handle bigger files.
-    static let maximumUploadBytes: Int64 = 64 * 1024 * 1024
+    /// Giới hạn tổng kích thước upload (server giới hạn 15 MB — giữ thấp để tránh upload thất bại).
+    static let maximumUploadBytes: Int64 = 15 * 1024 * 1024
+
+    /// Session mặc định: `timeoutIntervalForRequest = 60` giây cho mọi request.
+    static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 60
+        return URLSession(configuration: configuration)
+    }()
 
     private let session: URLSession
     private(set) var baseURL: URL
 
-    init(baseURL: URL = APIService.defaultBaseURL, session: URLSession = .shared) {
+    private let decoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .secondsSince1970
+        return d
+    }()
+
+    init(baseURL: URL = APIService.defaultBaseURL, session: URLSession = APIService.defaultSession) {
         self.baseURL = baseURL
         self.session = session
     }
@@ -63,6 +87,40 @@ final class APIService {
 
     // MARK: - License
 
+    func verify(
+        licenseKey: String,
+        hwid: String
+    ) async -> Result<VerifyResponse, APIServiceError> {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/verify"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                return .failure(.serverRejected(
+                    status: http.statusCode,
+                    message: Self.errorMessage(from: data) ?? "Không phản hồi hợp lệ."
+                ))
+            }
+            let payload = try parseJSON([String: AnyCodable].self, from: data)
+            return .success(VerifyResponse(
+                status: http.statusCode,
+                expiresAt: payload["expires_at"]?.date,
+                dailyQuota: payload["daily_quota"]?.int,
+                usedToday: payload["used_today"]?.int,
+                remaining: payload["remaining"]?.int,
+                error: payload["error"]?.string
+            ))
+        } catch {
+            return .failure(.transport(error.localizedDescription))
+        }
+    }
+
     func activate(
         licenseKey: String,
         hwid: String
@@ -71,7 +129,8 @@ final class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["hwid": hwid])
+        let body = ["hwid": hwid]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -84,94 +143,49 @@ final class APIService {
                     message: Self.errorMessage(from: data)
                 ))
             }
-
-            let payload = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-            let expiresAt = (payload["expires_at"] as? NSNumber)
-                .map { Date(timeIntervalSince1970: $0.doubleValue) }
-            return .success(LicenseActivation(expiresAt: expiresAt, plan: payload["plan"] as? String))
+            let payload = try parseJSON([String: AnyCodable].self, from: data)
+            let expiresAt = payload["expires_at"]?.double.map { Date(timeIntervalSince1970: $0) }
+            return .success(LicenseActivation(
+                expiresAt: expiresAt,
+                plan: payload["plan"]?.string
+            ))
         } catch {
             return .failure(.transport(error.localizedDescription))
         }
     }
 
-    // MARK: - Conversion & merge (server-side, phase 2)
+    // MARK: - Convert-header
 
-    func convert(
-        fileURL: URL,
+    func convertHeader(
+        fileURL: URL?,
         mode: String,
+        password: String?,
         licenseKey: String,
         hwid: String
-    ) async -> Result<URL, APIServiceError> {
-        await upload(
-            path: "api/v1/convert",
-            fileURLs: [fileURL],
-            fields: ["mode": mode],
-            licenseKey: licenseKey,
-            hwid: hwid,
-            resultExtension: mode == "zip_to_3105" ? "3105" : "zip"
-        )
-    }
-
-    func merge(
-        fileURLs: [URL],
-        licenseKey: String,
-        hwid: String
-    ) async -> Result<URL, APIServiceError> {
-        await upload(
-            path: "api/v1/merge",
-            fileURLs: fileURLs,
-            fields: [:],
-            licenseKey: licenseKey,
-            hwid: hwid,
-            resultExtension: "3105"
-        )
-    }
-
-    // MARK: - Internals
-
-    private func upload(
-        path: String,
-        fileURLs: [URL],
-        fields: [String: String],
-        licenseKey: String,
-        hwid: String,
-        resultExtension: String
-    ) async -> Result<URL, APIServiceError> {
-        var totalBytes: Int64 = 0
-        for url in fileURLs {
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            totalBytes += Int64(size)
-        }
-        guard totalBytes > 0, totalBytes <= Self.maximumUploadBytes else {
-            return .failure(.payloadTooLarge)
-        }
-
-        let boundary = "Totorox-\(UUID().uuidString)"
-        let bodyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("upload-\(UUID().uuidString).tmp")
-        defer { try? FileManager.default.removeItem(at: bodyURL) }
-
+    ) async -> Result<ConvertHeaderResponse, APIServiceError> {
+        let path = "api/v1/convert-header"
         do {
-            try Self.writeMultipartBody(
-                to: bodyURL,
-                boundary: boundary,
-                fields: fields,
-                fileURLs: fileURLs
+            let bodyURL = try buildMultipartBody(
+                path: path,
+                fields: [
+                    "mode": mode,
+                    "password": password ?? "",
+                ],
+                fileURLs: fileURL.map { [$0] } ?? [],
+                fileFieldName: "file"
             )
-        } catch {
-            return .failure(.ioFailure(error.localizedDescription))
-        }
+            defer { try? FileManager.default.removeItem(at: bodyURL) }
 
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
-        request.setValue(
-            "multipart/form-data; boundary=\(boundary)",
-            forHTTPHeaderField: "Content-Type"
-        )
-        applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            var request = URLRequest(url: baseURL.appendingPathComponent(path))
+            request.httpMethod = "POST"
+            request.setValue(
+                "multipart/form-data; boundary=\(bodyURL.boundary)",
+                forHTTPHeaderField: "Content-Type"
+            )
+            applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            request.httpBody = try Data(contentsOf: bodyURL)
 
-        do {
-            let (data, response) = try await session.upload(for: request, fromFile: bodyURL)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.invalidResponse)
             }
@@ -182,35 +196,111 @@ final class APIService {
                 ))
             }
 
-            let outputURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("ServerResult-\(UUID().uuidString).\(resultExtension)")
-            try data.write(to: outputURL, options: .atomic)
-            return .success(outputURL)
+            let raw = try parseJSON(ConvertHeaderResponseBody.self, from: data)
+            return .success(ConvertHeaderResponse(
+                ok: raw.ok,
+                mode: raw.mode,
+                passwordProtected: raw.passwordProtected,
+                header: raw.header,
+                toc: raw.toc,
+                note: raw.note,
+                acceptedBytes: raw.acceptedBytes,
+                contentKeyB64: raw.contentKeyB64,
+                keyFingerprint: raw.keyFingerprint,
+                packageBytesB64: raw.packageBytesB64,
+                payloadBytesB64: raw.payloadBytesB64,
+                packageId: raw.packageId
+            ))
         } catch {
             return .failure(.transport(error.localizedDescription))
         }
     }
 
+    // MARK: - Merge-plan
+
+    func mergePlan(
+        fileURL: URL?,
+        configJSON: String?,
+        licenseKey: String,
+        hwid: String
+    ) async -> Result<MergePlanResponse, APIServiceError> {
+        let path = "api/v1/merge-plan"
+        do {
+            let bodyURL = try buildMultipartBody(
+                path: path,
+                fields: [
+                    "config_json": configJSON ?? "{}",
+                ],
+                fileURLs: fileURL.map { [$0] } ?? [],
+                fileFieldName: "file"
+            )
+            defer { try? FileManager.default.removeItem(at: bodyURL) }
+
+            var request = URLRequest(url: baseURL.appendingPathComponent(path))
+            request.httpMethod = "POST"
+            request.setValue(
+                "multipart/form-data; boundary=\(bodyURL.boundary)",
+                forHTTPHeaderField: "Content-Type"
+            )
+            applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            request.httpBody = try Data(contentsOf: bodyURL)
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                return .failure(.serverRejected(
+                    status: http.statusCode,
+                    message: Self.errorMessage(from: data)
+                ))
+            }
+
+            let raw = try parseJSON(MergePlanResponseBody.self, from: data)
+            return .success(MergePlanResponse(
+                ok: raw.ok,
+                acceptedBytes: raw.acceptedBytes,
+                mergePlan: raw.mergePlan?.value,
+                configFiles: raw.configFiles?.value,
+                zipBytesB64: raw.zipBytesB64,
+                note: raw.note
+            ))
+        } catch {
+            return .failure(.transport(error.localizedDescription))
+        }
+    }
+
+    // MARK: - Auth headers trên mỗi request
+
     private func applyAuthHeaders(to request: inout URLRequest, licenseKey: String, hwid: String) {
         request.setValue(licenseKey, forHTTPHeaderField: "X-License-Key")
         request.setValue(hwid, forHTTPHeaderField: "X-HWID")
-        request.timeoutInterval = 120
+        request.timeoutInterval = 60
     }
 
-    /// Streams the multipart body into a temporary file so a large payload is never held in memory.
-    private static func writeMultipartBody(
-        to bodyURL: URL,
-        boundary: String,
-        fields: [String: String],
-        fileURLs: [URL]
-    ) throws {
-        _ = FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
-        let bodyHandle = try FileHandle(forWritingTo: bodyURL)
-        defer { try? bodyHandle.close() }
+    // MARK: - Multipart builder (nhẹ, dùng cho 1-2 file nhỏ)
 
-        func write(_ string: String) throws {
-            guard let data = string.data(using: .utf8) else { return }
-            try bodyHandle.write(contentsOf: data)
+    private struct MultipartBody {
+        let url: URL
+        let boundary: String
+    }
+
+    private func buildMultipartBody(
+        path: String,
+        fields: [String: String],
+        fileURLs: [URL],
+        fileFieldName: String
+    ) throws -> MultipartBody {
+        let boundary = "Totorox-\(UUID().uuidString)"
+        let bodyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("totorox-\(UUID().uuidString).tmp")
+        try FileManager.default.createDirectory(at: bodyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let handle = try FileHandle(forWritingTo: bodyURL)
+        defer { try? handle.close() }
+
+        func write(_ str: String) throws {
+            guard let data = str.data(using: .utf8) else { return }
+            try handle.write(contentsOf: data)
         }
 
         for (name, value) in fields {
@@ -220,25 +310,224 @@ final class APIService {
         }
 
         for fileURL in fileURLs {
+            let filename = fileURL.lastPathComponent
             try write("--\(boundary)\r\n")
-            try write("Content-Disposition: form-data; name=\"files\"; filename=\"\(fileURL.lastPathComponent)\"\r\n")
+            try write("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\n")
             try write("Content-Type: application/octet-stream\r\n\r\n")
-
-            let sourceHandle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? sourceHandle.close() }
-            while let chunk = try sourceHandle.read(upToCount: 256 * 1024), !chunk.isEmpty {
-                try bodyHandle.write(contentsOf: chunk)
-            }
+            let data = try Data(contentsOf: fileURL)
+            try handle.write(contentsOf: data)
             try write("\r\n")
         }
 
         try write("--\(boundary)--\r\n")
+        try handle.synchronize()
+        return MultipartBody(url: bodyURL, boundary: boundary)
+    }
+
+    // MARK: - Parsing helpers
+
+    private func parseJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        try JSONDecoder().decode(type, from: data)
     }
 
     private static func errorMessage(from data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return (object["detail"] as? String) ?? (object["message"] as? String)
+        if let detail = payload["detail"] as? String, !detail.isEmpty {
+            return detail
+        }
+        if let message = payload["message"] as? String, !message.isEmpty {
+            return message
+        }
+        return payload["error"] as? String
     }
+}
+
+// MARK: - Response models
+
+struct AnyCodable: Codable, Equatable {
+    let value: Any
+    init(_ value: Any) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let bool = try? container.decode(Bool.self) {
+            value = bool
+        } else if let int = try? container.decode(Int.self) {
+            value = int
+        } else if let double = try? container.decode(Double.self) {
+            value = double
+        } else if let string = try? container.decode(String.self) {
+            value = string
+        } else if let array = try? container.decode([AnyCodable].self) {
+            value = array.map(\.value)
+        } else if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.reduce(into: [String: Any]()) { $0[$1.key] = $1.value.value }
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Không giải mã được")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let bool as Bool:
+            try container.encode(bool)
+        case let int as Int:
+            try container.encode(int)
+        case let double as Double:
+            try container.encode(double)
+        case let string as String:
+            try container.encode(string)
+        case let array as [Any]:
+            try container.encode(array.map { AnyCodable($0) })
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable($0) })
+        default:
+            throw EncodingError.invalidValue(value, EncodingError.Context(codingPath: container.codingPath, debugDescription: "Không mã hóa được"))
+        }
+    }
+
+    var bool: Bool? { value as? Bool }
+    var int: Int? { value as? Int }
+    var double: Double? { value as? Double }
+    var string: String? { value as? String }
+    var date: Date? { value as? Date }
+    var array: [Any]? { value as? [Any] }
+    var dictionary: [String: Any]? { value as? [String: Any] }
+
+    var nestedString: String? { value as? String }
+}
+
+struct VerifyResponse {
+    let status: Int
+    let expiresAt: Date?
+    let dailyQuota: Int?
+    let usedToday: Int?
+    let remaining: Int?
+    let error: String?
+}
+
+struct ConvertHeaderResponseBody: Decodable {
+    let ok: Bool
+    let mode: String
+    let passwordProtected: Bool
+    let header: [String: AnyCodable]
+    let toc: [AnyCodable]
+    let note: String?
+    let acceptedBytes: Int
+    let contentKeyB64: String?
+    let keyFingerprint: String?
+    let packageBytesB64: String?
+    let payloadBytesB64: String?
+    let packageId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case mode
+        case passwordProtected = "password_protected"
+        case header
+        case toc
+        case note
+        case acceptedBytes = "accepted_bytes"
+        case contentKeyB64 = "content_key_b64"
+        case keyFingerprint = "key_fingerprint"
+        case packageBytesB64 = "package_bytes_b64"
+        case payloadBytesB64 = "payload_bytes_b64"
+        case packageId = "package_id"
+    }
+}
+
+struct ConvertHeaderResponse {
+    let ok: Bool
+    let mode: String
+    let passwordProtected: Bool
+    let header: [String: AnyCodable]
+    let toc: [AnyCodable]
+    let note: String?
+    let acceptedBytes: Int
+    let contentKeyB64: String?
+    let keyFingerprint: String?
+    let packageBytesB64: String?
+    let payloadBytesB64: String?
+    let packageId: String?
+}
+
+struct MergePlanResponseBody: Decodable {
+    let ok: Bool
+    let acceptedBytes: Int
+    let mergePlan: MergePlanBody?
+    let configFiles: [String]?
+    let zipBytesB64: String?
+    let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case acceptedBytes = "accepted_bytes"
+        case mergePlan = "merge_plan"
+        case configFiles = "config_files"
+        case zipBytesB64 = "zip_bytes_b64"
+        case note
+    }
+}
+
+struct MergePlanBody: Decodable {
+    let outputFilename: String?
+    let fileCount: Int?
+    let files: [MergePlanFile]?
+    let loadedMods: [LoadedModBody]?
+    let bundleVersions: [BundleVersionBody]?
+    let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case outputFilename = "output_filename"
+        case fileCount = "file_count"
+        case files
+        case loadedMods = "loaded_mods"
+        case bundleVersions = "bundle_versions"
+        case note
+    }
+}
+
+struct MergePlanFile: Decodable {
+    let path: String
+    let size: Int
+}
+
+struct LoadedModBody: Decodable {
+    let name: String
+    let explicitVersion: String?
+    let heroIDs: [Int]?
+    let skinIDs: [Int]?
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case explicitVersion = "explicit_ver"
+        case heroIDs = "hero_ids"
+        case skinIDs = "skin_ids"
+    }
+}
+
+struct BundleVersionBody: Decodable {
+    let modName: String?
+    let detectedVersion: String?
+    let versionTuple: [Int]?
+    let buildNumber: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case modName = "mod_name"
+        case detectedVersion = "detected_version"
+        case versionTuple = "version_tuple"
+        case buildNumber = "build_number"
+    }
+}
+
+struct MergePlanResponse {
+    let ok: Bool
+    let acceptedBytes: Int
+    let mergePlan: MergePlanBody?
+    let configFiles: [String]?
+    let zipBytesB64: String?
+    let note: String?
 }

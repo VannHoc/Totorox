@@ -198,8 +198,14 @@ public final class AovModMergerEngine: @unchecked Sendable {
         )
     }
 
-    // MARK: - Full Multi-Mod Smart Merge Pipeline
+    // MARK: - Full Multi-Mod Merge Pipeline (server lập kế hoạch, local thi công)
 
+    /// Gộp nhiều gói mod `.zip`:
+    /// 1. Giải nén + lập chỉ mục file ở local (phần nặng không gửi lên server).
+    /// 2. Chỉ gửi các file cấu hình nhẹ (`CommonActions`, `Databin`, `Thanos`, manifest)
+    ///    lên `/api/v1/merge-plan`, kèm metadata của từng mod.
+    /// 3. Nhận `merge_plan` (+ `zip_bytes_b64` nếu server trả kèm kết quả), rồi dùng
+    ///    `FileIOEngine` copy/đè asset nặng vào thư mục kết quả ở local.
     public func mergeModArchives(
         inputURLs: [URL],
         progress: @escaping @Sendable (String, Double) -> Void
@@ -210,16 +216,15 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         return try await Task.detached(priority: .userInitiated) {
             var logs: [String] = []
-            func appendLog(_ msg: String) {
-                logs.append(msg)
+            func appendLog(_ message: String) {
+                logs.append(message)
             }
 
             let fm = FileManager.default
-            let workDir = fm.temporaryDirectory.appendingPathComponent("AovSmartMerge_\(UUID().uuidString)", isDirectory: true)
+            let workDir = fm.temporaryDirectory
+                .appendingPathComponent("AovSmartMerge_\(UUID().uuidString)", isDirectory: true)
             try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
-            defer {
-                try? fm.removeItem(at: workDir)
-            }
+            defer { try? fm.removeItem(at: workDir) }
 
             struct StagedMod {
                 let url: URL
@@ -230,14 +235,19 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 let explicitVersion: String?
             }
 
+            // MARK: 1. Giải nén local
             var stagedMods: [StagedMod] = []
             for (idx, url) in inputURLs.enumerated() {
                 guard url.pathExtension.lowercased() != "3105" else {
-                    throw AovModMergerError.invalidArchive("\(url.lastPathComponent) (Chức năng gộp chỉ hỗ trợ tệp .zip)")
+                    throw AovModMergerError.invalidArchive(
+                        "\(url.lastPathComponent) (Chức năng gộp chỉ hỗ trợ tệp .zip)"
+                    )
                 }
 
-                let stepBase = Double(idx) / Double(inputURLs.count) * 0.35
-                progress("Đang giải nén gói mod (\(idx + 1)/\(inputURLs.count)): \(url.lastPathComponent)...", stepBase)
+                progress(
+                    "Đang giải nén gói mod (\(idx + 1)/\(inputURLs.count)): \(url.lastPathComponent)...",
+                    Double(idx) / Double(inputURLs.count) * 0.25
+                )
 
                 let hasSecurity = url.startAccessingSecurityScopedResource()
                 defer {
@@ -248,9 +258,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 try fm.createDirectory(at: modRawDir, withIntermediateDirectories: true)
 
                 do {
-                    _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: url, into: modRawDir, fileManager: fm)
+                    _ = try ZIPArchiveExtractor.extractFlatContents(
+                        archiveURL: url,
+                        into: modRawDir,
+                        fileManager: fm
+                    )
                 } catch {
-                    // Fallback: pure-Swift in-memory parser (handles ZIP64 / ISO-Latin-1 filenames)
+                    // Fallback: pure-Swift in-memory parser (ZIP64 / ISO-Latin-1 filenames).
                     do {
                         let archiveFileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveFileSize)) else {
@@ -262,14 +276,17 @@ public final class AovModMergerEngine: @unchecked Sendable {
                             throw AovModMergerError.invalidArchive(url.lastPathComponent)
                         }
                         for entry in parsed {
-                            let cleanRel = entry.name.replacingOccurrences(of: "\\", with: "/")
+                            let cleanRel = entry.name
+                                .replacingOccurrences(of: "\\", with: "/")
                                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                             guard !cleanRel.isEmpty else { continue }
-                            let dest = modRawDir.appendingPathComponent(cleanRel)
-                            let standardizedDest = dest.standardizedFileURL
-                            guard standardizedDest.path.hasPrefix(modRawDir.standardizedFileURL.path + "/") else { continue }
-                            try fm.createDirectory(at: standardizedDest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                            try entry.data.write(to: standardizedDest)
+                            let dest = modRawDir.appendingPathComponent(cleanRel).standardizedFileURL
+                            guard dest.path.hasPrefix(modRawDir.standardizedFileURL.path + "/") else { continue }
+                            try fm.createDirectory(
+                                at: dest.deletingLastPathComponent(),
+                                withIntermediateDirectories: true
+                            )
+                            try entry.data.write(to: dest)
                         }
                     } catch let err as AovModMergerError {
                         throw err
@@ -279,360 +296,294 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 }
 
                 var rawFiles: [(relRaw: String, fileURL: URL)] = []
-                var detectedVersion: String? = nil
-
+                var detectedVersion: String?
                 if let enumerator = fm.enumerator(
                     at: modRawDir,
                     includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                     options: [.skipsHiddenFiles]
                 ) {
                     while let fileURL = enumerator.nextObject() as? URL {
-                        let vals = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-                        guard vals?.isRegularFile == true, vals?.isDirectory != true else { continue }
-                        let relRaw = fileURL.path.replacingOccurrences(of: modRawDir.path, with: "")
+                        let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+                        guard values?.isRegularFile == true, values?.isDirectory != true else { continue }
+                        let relRaw = fileURL.path
+                            .replacingOccurrences(of: modRawDir.path, with: "")
                             .trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+                        guard !relRaw.isEmpty else { continue }
                         rawFiles.append((relRaw: relRaw, fileURL: fileURL))
                         if detectedVersion == nil, let norm = self.normalizeAovRelativePath(relRaw) {
                             let parts = norm.split(separator: "/")
-                            if parts.count >= 2 && parts[0] == "Resources" {
+                            if parts.count >= 2, parts[0] == "Resources" {
                                 detectedVersion = String(parts[1])
                             }
                         }
                     }
                 }
 
-                let fsize = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                stagedMods.append(StagedMod(
-                    url: url,
-                    fileName: url.lastPathComponent,
-                    fileSize: fsize,
-                    extractRoot: modRawDir,
-                    rawFiles: rawFiles,
-                    explicitVersion: detectedVersion
-                ))
+                let fileSize = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                stagedMods.append(
+                    StagedMod(
+                        url: url,
+                        fileName: url.lastPathComponent,
+                        fileSize: fileSize,
+                        extractRoot: modRawDir,
+                        rawFiles: rawFiles,
+                        explicitVersion: detectedVersion
+                    )
+                )
             }
 
             let explicitVersions = stagedMods.compactMap(\.explicitVersion)
-            let targetVersion = explicitVersions.max { self.compareVersionStrings($0, $1) == .orderedAscending } ?? "1.64.1"
+            let targetVersion = explicitVersions.max {
+                self.compareVersionStrings($0, $1) == .orderedAscending
+            } ?? "1.64.1"
 
-            struct LoadedMod {
+            // MARK: 2. Chuẩn hoá đường dẫn + metadata từng mod
+            struct PreparedMod {
                 let summary: AovModSummary
-                let extractRoot: URL
                 let filesByRelPath: [String: URL]
-                let heroIDs: Set<Int>
-                let skinIDs: Set<Int>
-                let heroSkinPairs: [(heroID: Int, skinID: Int)]
-                let heroSkin2Params: [(heroID: Int, bcastID: Int, pbtnID: Int)]
-                let buildVersion: AovGameBuildVersion
                 let version: String
             }
 
-            var loadedMods: [LoadedMod] = []
-            for staged in stagedMods {
-                let ver = staged.explicitVersion ?? targetVersion
+            var preparedMods: [PreparedMod] = []
+            for (idx, staged) in stagedMods.enumerated() {
+                let version = staged.explicitVersion ?? targetVersion
                 var map: [String: URL] = [:]
-                var detectedHeroIDs = Set<Int>()
-                var detectedSkinIDs = Set<Int>()
-
                 for item in staged.rawFiles {
                     let normOpt: String?
                     if staged.explicitVersion != nil {
                         normOpt = self.normalizeAovRelativePath(item.relRaw)
                     } else {
-                        normOpt = self.normalizeAovRelativePath(item.relRaw, fallbackVersion: ver)
+                        normOpt = self.normalizeAovRelativePath(item.relRaw, fallbackVersion: version)
                     }
                     guard let norm = normOpt else { continue }
                     map[norm] = item.fileURL
-                    for hid in self.extractHeroIDsFromPath(norm) {
-                        detectedHeroIDs.insert(hid)
-                    }
                 }
-
                 guard !map.isEmpty else {
                     throw AovModMergerError.missingResourceStructure(staged.fileName)
                 }
 
-                var heroSkinPairs: [(heroID: Int, skinID: Int)] = []
-                if let hs1URL = map.first(where: { $0.key.lowercased().hasSuffix("/thanos/heroskin_1.bytes") })?.value,
-                   let raw1 = try? Data(contentsOf: hs1URL),
-                   let dec1 = try? self.jgDecrypt(raw1, stem: "HeroSkin_1") {
-                    heroSkinPairs = self.extractAllHeroAndSkinsFromHeroSkin1(dec1)
-                    for pair in heroSkinPairs {
-                        detectedHeroIDs.insert(pair.heroID)
-                        detectedSkinIDs.insert(pair.skinID)
-                    }
-                }
-
-                var heroSkin2Params: [(heroID: Int, bcastID: Int, pbtnID: Int)] = []
-                if let hs2URL = map.first(where: { $0.key.lowercased().hasSuffix("/thanos/heroskin_2.bytes") })?.value,
-                   let raw2 = try? Data(contentsOf: hs2URL),
-                   let dec2 = try? self.jgDecrypt(raw2, stem: "HeroSkin_2") {
-                    heroSkin2Params = self.extractAllParamsFromHeroSkin2(dec2)
-                    for p in heroSkin2Params {
-                        detectedHeroIDs.insert(p.heroID)
-                    }
-                }
-
-                if detectedHeroIDs.isEmpty {
-                    for norm in map.keys {
-                        for hid in self.extractFallbackHeroIDsFromAssetPath(norm) {
-                            detectedHeroIDs.insert(hid)
+                // `inspectModArchive` vẫn chạy local như cũ.
+                let summary: AovModSummary
+                if let inspected = try? self.inspectModArchive(at: staged.url) {
+                    summary = inspected
+                } else {
+                    var heroes = Set<Int>()
+                    for path in map.keys {
+                        for heroID in self.extractHeroIDsFromPath(path) {
+                            heroes.insert(heroID)
                         }
                     }
+                    let sorted = heroes.sorted()
+                    summary = AovModSummary(
+                        url: staged.url,
+                        fileName: staged.fileName,
+                        fileSize: staged.fileSize,
+                        heroID: sorted.first,
+                        skinID: nil,
+                        resourceVersion: version,
+                        heroIDs: sorted,
+                        skinIDs: []
+                    )
                 }
 
-                let buildVer = self.detectGameBuildVersion(filesByRelPath: map, resourceVersion: ver)
-                let sortedHeroes = detectedHeroIDs.sorted()
-                let sortedSkins = detectedSkinIDs.sorted()
-                let summary = AovModSummary(
-                    url: staged.url,
-                    fileName: staged.fileName,
-                    fileSize: staged.fileSize,
-                    heroID: sortedHeroes.first,
-                    skinID: sortedSkins.first,
-                    resourceVersion: ver,
-                    heroIDs: sortedHeroes,
-                    skinIDs: sortedSkins
+                preparedMods.append(PreparedMod(summary: summary, filesByRelPath: map, version: version))
+                appendLog(
+                    "Đã nạp \(staged.fileName): Hero=\(summary.heroIDs.isEmpty ? "?" : summary.heroIDs.map(String.init).joined(separator: ",")), "
+                        + "Version=\(version), Files=\(map.count)"
                 )
-                loadedMods.append(LoadedMod(
-                    summary: summary,
-                    extractRoot: staged.extractRoot,
-                    filesByRelPath: map,
-                    heroIDs: detectedHeroIDs,
-                    skinIDs: detectedSkinIDs,
-                    heroSkinPairs: heroSkinPairs,
-                    heroSkin2Params: heroSkin2Params,
-                    buildVersion: buildVer,
-                    version: ver
-                ))
-                let heroDesc = sortedHeroes.isEmpty ? "?" : sortedHeroes.map(String.init).joined(separator: ",")
-                let skinDesc = sortedSkins.isEmpty ? "?" : sortedSkins.map(String.init).joined(separator: ",")
-                appendLog("Đã nạp \(staged.fileName): Hero=\(heroDesc), Skin=\(skinDesc), Build=\(buildVer.description), Version=\(ver), Files=\(map.count)")
+                progress(
+                    "Đã lập chỉ mục (\(idx + 1)/\(stagedMods.count)): \(staged.fileName)...",
+                    0.25 + Double(idx + 1) / Double(stagedMods.count) * 0.25
+                )
             }
 
-            let outputStagingRoot = workDir.appendingPathComponent("merged_root", isDirectory: true)
-            try fm.createDirectory(at: outputStagingRoot, withIntermediateDirectories: true)
+            // MARK: 3. Đóng gói phần cấu hình nhẹ gửi server
+            let lightRoot = workDir.appendingPathComponent("server_config", isDirectory: true)
+            try fm.createDirectory(at: lightRoot, withIntermediateDirectories: true)
 
-            // Collect union of all normalized relative paths (harmonizing version folder and grouping case-insensitively)
-            var canonicalPathByLower: [String: (buildVersion: AovGameBuildVersion, path: String)] = [:]
-            var remappedModFiles: [[String: URL]] = []
-            for mod in loadedMods {
-                var remapped: [String: URL] = [:]
-                let prefixOrig = "Resources/\(mod.version)/"
-                let prefixTarget = "Resources/\(targetVersion)/"
+            var lightFileCount = 0
+            var lightBytes: Int64 = 0
+            for (idx, mod) in preparedMods.enumerated() {
+                for (relPath, fileURL) in mod.filesByRelPath where Self.isServerConfigPath(relPath) {
+                    let size = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    let nextTotal = lightBytes + size
+                    guard nextTotal <= APIService.maximumUploadBytes else {
+                        appendLog("Bỏ qua \(relPath): vượt giới hạn cấu hình gửi server.")
+                        continue
+                    }
+                    let dest = lightRoot
+                        .appendingPathComponent("mod_\(idx)", isDirectory: true)
+                        .appendingPathComponent(relPath)
+                    try fm.createDirectory(
+                        at: dest.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    if !fm.fileExists(atPath: dest.path) {
+                        try? fm.copyItem(at: fileURL, to: dest)
+                    }
+                    lightBytes = nextTotal
+                    lightFileCount += 1
+                }
+            }
+
+            var lightZipURL: URL?
+            if lightFileCount > 0 {
+                let zipURL = workDir.appendingPathComponent("config_bundle.zip")
+                do {
+                    _ = try ZIPArchiveWriter.write(items: [lightRoot], to: zipURL, fileManager: fm)
+                    lightZipURL = zipURL
+                    appendLog("Đã đóng gói \(lightFileCount) file cấu hình (\(ByteCountFormatter.string(fromByteCount: lightBytes, countStyle: .file))) gửi server.")
+                } catch {
+                    appendLog("Không đóng gói được cấu hình nhẹ: \(error.localizedDescription)")
+                }
+            } else {
+                appendLog("Không tìm thấy file cấu hình nhẹ, chỉ gửi metadata mod.")
+            }
+
+            // MARK: 4. Gọi server lấy merge plan
+            progress("Đang gửi cấu hình lên máy chủ để lập kế hoạch gộp...", 0.55)
+
+            let modMetadata: [[String: Any]] = preparedMods.map { mod in
+                [
+                    "name": mod.summary.fileName,
+                    "explicitVersion": mod.version,
+                    "heroIDs": mod.summary.heroIDs,
+                    "skinIDs": mod.summary.skinIDs,
+                    "fileCount": mod.filesByRelPath.count,
+                    "configFiles": mod.filesByRelPath.keys.filter { Self.isServerConfigPath($0) }.sorted()
+                ]
+            }
+            let configObject: [String: Any] = [
+                "mods": modMetadata,
+                "output": ["resourcesVersion": targetVersion]
+            ]
+            let configJSON = (try? JSONSerialization.data(
+                withJSONObject: configObject,
+                options: [.sortedKeys]
+            )).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+            let mergePlan: MergePlanResponse
+            switch await APIService.shared.mergePlan(
+                fileURL: lightZipURL,
+                configJSON: configJSON,
+                licenseKey: LicenseManager.shared.licenseKey,
+                hwid: LicenseManager.shared.deviceIdentifier
+            ) {
+            case .success(let response):
+                mergePlan = response
+            case .failure(let error):
+                throw AovModMergerError.invalidArchive("Máy chủ merge-plan: \(error.localizedDescription)")
+            }
+            guard mergePlan.ok else {
+                throw AovModMergerError.invalidArchive("Máy chủ trả về merge-plan không hợp lệ.")
+            }
+            appendLog("Nhận merge plan từ server (accepted_bytes=\(mergePlan.acceptedBytes)).")
+
+            // MARK: 5. Thi công local
+            progress("Đang copy/đè asset nặng ở local...", 0.65)
+
+            let stagingRoot = workDir.appendingPathComponent("merged_root", isDirectory: true)
+            try fm.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+
+            func materialize(entries: [String: Data], into root: URL) throws -> Int {
+                var written = 0
+                let rootPath = root.standardizedFileURL.path
+                for (name, data) in entries {
+                    let clean = name
+                        .replacingOccurrences(of: "\\", with: "/")
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    guard !clean.isEmpty, !clean.hasSuffix("/") else { continue }
+                    let dest = root.appendingPathComponent(clean).standardizedFileURL
+                    guard dest.path.hasPrefix(rootPath + "/") else { continue }
+                    try fm.createDirectory(
+                        at: dest.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try data.write(to: dest)
+                    written += 1
+                }
+                return written
+            }
+
+            // 5a. Nếu server trả kèm gói kết quả thì trích xuất rồi copy sang staging bằng FileIOEngine.
+            if let base64 = mergePlan.zipBytesB64,
+               let bundleData = Data(base64Encoded: base64),
+               let bundleEntries = try? PatchZipConverter.shared.parseZipArchive(bundleData) {
+                for (name, data) in bundleEntries {
+                    guard !name.hasSuffix("/") else { continue }
+                    let lower = name.lowercased()
+                    guard lower == "merge_plan.json" || lower == "config.json" || lower == "result.zip" else { continue }
+                    let target = workDir.appendingPathComponent("server_bundle", isDirectory: true)
+                    try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                    try data.write(to: target.appendingPathComponent((name as NSString).lastPathComponent))
+                }
+
+                if let resultZip = bundleEntries["result.zip"],
+                   let resultEntries = try? PatchZipConverter.shared.parseZipArchive(resultZip) {
+                    let serverOutDir = workDir.appendingPathComponent("server_result", isDirectory: true)
+                    try fm.createDirectory(at: serverOutDir, withIntermediateDirectories: true)
+                    let extracted = try materialize(entries: resultEntries, into: serverOutDir)
+                    let copyResult = await FileIOEngine.shared.copyAndMerge(
+                        from: serverOutDir,
+                        to: stagingRoot
+                    ) { _, _, _ in .replaceAll }
+                    appendLog("Server trả \(extracted) file asset; copy local xong \(copyResult.succeeded.count) mục.")
+                    if !copyResult.failed.isEmpty {
+                        appendLog("FileIOEngine báo \(copyResult.failed.count) mục lỗi khi copy.")
+                    }
+                }
+            }
+
+            // 5b. Bù các đường dẫn trong merge plan mà server không kèm dữ liệu, dùng bản local tốt nhất.
+            var localCandidates: [String: URL] = [:]
+            var contributionCount: [String: Int] = [:]
+            for mod in preparedMods {
                 for (path, fileURL) in mod.filesByRelPath {
-                    let canonicalPath: String
-                    if path.hasPrefix(prefixOrig) && mod.version != targetVersion {
-                        canonicalPath = prefixTarget + String(path.dropFirst(prefixOrig.count))
-                    } else {
-                        canonicalPath = path
-                    }
-                    let lowerKey = canonicalPath.lowercased()
-                    remapped[lowerKey] = fileURL
-                    if let existing = canonicalPathByLower[lowerKey] {
-                        if mod.buildVersion > existing.buildVersion {
-                            canonicalPathByLower[lowerKey] = (mod.buildVersion, canonicalPath)
-                        }
-                    } else {
-                        canonicalPathByLower[lowerKey] = (mod.buildVersion, canonicalPath)
-                    }
+                    localCandidates[path] = fileURL
+                    contributionCount[path, default: 0] += 1
                 }
-                remappedModFiles.append(remapped)
             }
 
-            let sortedLowerKeys = canonicalPathByLower.keys.sorted()
-            var totalWritten = 0
-            var smartMergedCount = 0
+            // Server chỉ trả về các file cấu hình đã vá (asset nặng không upload), nên luôn
+            // hợp nhất danh sách plan với toàn bộ path local để không mất asset nặng.
+            let plannedPaths = mergePlan.mergePlan?.files?.map(\.path) ?? []
+            var targetPathSet = Set(plannedPaths)
+            targetPathSet.formUnion(localCandidates.keys)
+            let targetPaths = targetPathSet.sorted()
 
-            // Track merged KernelLua & StableSystems_3 MD5 hashes so Thanos/HeroSkin_1..2 can be updated
-            var mergedPkgMD5s: [String: String] = [:]
-
-            // Separate Thanos/HeroSkin_*.bytes to process last (after KernelLua & StableSystems_3 MD5s are computed)
-            let nonThanosKeys = sortedLowerKeys.filter { !$0.contains("/thanos/heroskin_") }
-            let thanosKeys = sortedLowerKeys.filter { $0.contains("/thanos/heroskin_") }
-
-            for (pIdx, lowerKey) in nonThanosKeys.enumerated() {
-                let relPath = canonicalPathByLower[lowerKey]!.path
-                if pIdx % 12 == 0 {
-                    let ratio = 0.35 + (Double(pIdx) / Double(max(1, sortedLowerKeys.count))) * 0.50
-                    let shortName = (relPath as NSString).lastPathComponent
-                    progress("Đang hợp nhất: \(shortName)...", ratio)
-                }
-
-                // Collect mods that have this file (case-insensitive path match)
-                var contributors: [(modIndex: Int, mod: LoadedMod, url: URL)] = []
-                let isDatabinBytes = lowerKey.contains("/databin/") && lowerKey.hasSuffix(".bytes")
-                for (mIdx, mod) in loadedMods.enumerated() {
-                    if let u = remappedModFiles[mIdx][lowerKey] {
-                        if isDatabinBytes {
-                            let fsize = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                            if fsize > 0 && fsize < 32 {
-                                // Skip 9-byte watermark/placeholder files (e.g. ResAwakenBattleEffect.bytes)
-                                continue
-                            }
-                        }
-                        contributors.append((mIdx, mod, u))
-                    }
-                }
-                guard let first = contributors.first else { continue }
-
-                let destURL = outputStagingRoot.appendingPathComponent(relPath)
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-                if contributors.count == 1 {
-                    try fm.copyItem(at: first.url, to: destURL)
-                    totalWritten += 1
-                    if lowerKey.hasSuffix(".pkg.bytes"),
-                       let singleData = try? Data(contentsOf: first.url) {
-                        let fileName = (relPath as NSString).lastPathComponent
-                        mergedPkgMD5s[fileName] = self.md5Hex(singleData)
-                    }
+            var copiedLocally = 0
+            var missingLocally = 0
+            for path in targetPaths {
+                let dest = stagingRoot.appendingPathComponent(path).standardizedFileURL
+                guard dest.path.hasPrefix(stagingRoot.standardizedFileURL.path + "/") else { continue }
+                if fm.fileExists(atPath: dest.path) { continue }
+                guard let source = localCandidates[path] else {
+                    missingLocally += 1
                     continue
                 }
-
-                // Multiple mods have this file — check if bytes are identical
-                let firstData = try Data(contentsOf: first.url)
-                var allIdentical = true
-                var otherDatas: [(mod: LoadedMod, data: Data)] = [(first.mod, firstData)]
-
-                for item in contributors.dropFirst() {
-                    let d = try Data(contentsOf: item.url)
-                    if d != firstData {
-                        allIdentical = false
-                    }
-                    otherDatas.append((item.mod, d))
-                }
-
-                if allIdentical {
-                    try firstData.write(to: destURL)
-                    totalWritten += 1
-                    if lowerKey.hasSuffix(".pkg.bytes") {
-                        let fileName = (relPath as NSString).lastPathComponent
-                        mergedPkgMD5s[fileName] = self.md5Hex(firstData)
-                    }
-                    continue
-                }
-
-                // Smart Binary Merge based on file type!
-                let mergedData: Data
-                if lowerKey.hasSuffix("resourcepackerinfosetall.assetbundle") {
-                    mergedData = try self.mergeResourcePackerAssetBundle(otherDatas.map(\.data))
-                    smartMergedCount += 1
-                    appendLog("Gộp thông minh UnityFS LZ4: \(relPath) (\(mergedData.count) bytes)")
-                } else if lowerKey.hasSuffix("resourceverificationinfosetall.assetbundle") {
-                    mergedData = self.mergeResourceVerificationAssetBundle(otherDatas.map(\.data))
-                    smartMergedCount += 1
-                    appendLog("Gộp ResourceVerificationInfoSetAll (\(mergedData.count) bytes)")
-                } else if lowerKey.hasSuffix("commonactions.pkg.bytes") {
-                    let inputs = otherDatas.map { (heroIDs: $0.mod.heroIDs, buildVersion: $0.mod.buildVersion, data: $0.data) }
-                    mergedData = try self.mergeCommonActionsPkg(inputs: inputs, logs: &logs)
-                    smartMergedCount += 1
-                    appendLog("Gộp thông minh XML Zstd: \(relPath) (\(mergedData.count) bytes)")
-                } else if lowerKey.hasSuffix(".pkg.bytes") {
-                    let inputs = otherDatas.map { (buildVersion: $0.mod.buildVersion, data: $0.data) }
-                    let merged = try self.mergeGenericPkgZipPreferModified(inputs)
-                    mergedData = merged
-                    smartMergedCount += 1
-                    let fileName = (relPath as NSString).lastPathComponent
-                    mergedPkgMD5s[fileName] = self.md5Hex(merged)
-                    appendLog("Gộp gói ZIP \(fileName): MD5=\(mergedPkgMD5s[fileName] ?? "")")
-                } else if isDatabinBytes {
-                    let stem = ((relPath as NSString).lastPathComponent as NSString).deletingPathExtension
-                    let inputs = otherDatas.map { (heroIDs: $0.mod.heroIDs, buildVersion: $0.mod.buildVersion, data: $0.data) }
-                    mergedData = try self.mergeDatabinMsesFile(stem: stem, inputs: inputs)
-                    smartMergedCount += 1
-                    appendLog("Gộp bảng Databin MSES: \(stem).bytes")
-                } else {
-                    // Default fallback for unknown colliding file: prefer higher game build version, then latest mod
-                    let bestItem = otherDatas.max { a, b in
-                        a.mod.buildVersion < b.mod.buildVersion
-                    } ?? otherDatas.last!
-                    mergedData = bestItem.data
-                }
-
-                try mergedData.write(to: destURL)
-                totalWritten += 1
-            }
-
-            // Now process Thanos/HeroSkin_1.bytes & HeroSkin_2.bytes
-            progress("Đang hợp nhất bytecode Thanos IFix & cập nhật MD5...", 0.88)
-            for lowerKey in thanosKeys {
-                let relPath = canonicalPathByLower[lowerKey]!.path
-                var contributors: [(mod: LoadedMod, data: Data)] = []
-                for (mIdx, mod) in loadedMods.enumerated() {
-                    if let u = remappedModFiles[mIdx][lowerKey],
-                       let d = try? Data(contentsOf: u) {
-                        contributors.append((mod, d))
-                    }
-                }
-                guard !contributors.isEmpty else { continue }
-                let destURL = outputStagingRoot.appendingPathComponent(relPath)
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-                let fileName = (relPath as NSString).lastPathComponent
-                let stem = (fileName as NSString).deletingPathExtension
-                let stemLower = stem.lowercased()
-
-                if stemLower == "heroskin_1" {
-                    let merged = try self.mergeThanosHeroSkin1(
-                        contributors: contributors.map {
-                            (heroID: $0.mod.summary.heroID, skinID: $0.mod.summary.skinID, buildVersion: $0.mod.buildVersion, encrypted: $0.data)
-                        },
-                        pkgMD5s: mergedPkgMD5s
-                    )
-                    if !merged.isEmpty {
-                        try merged.write(to: destURL)
-                        totalWritten += 1
-                        smartMergedCount += 1
-                        appendLog("Gộp IFix Bytecode: Thanos/HeroSkin_1.bytes (\(contributors.count) nguồn)")
-                    }
-                } else if stemLower == "heroskin_2" {
-                    let merged = try self.mergeThanosHeroSkin2(
-                        contributors: contributors.map {
-                            (
-                                heroID: $0.mod.summary.heroID,
-                                bcastID: $0.mod.heroSkin2Params.first?.bcastID,
-                                pbtnID: $0.mod.heroSkin2Params.first?.pbtnID,
-                                buildVersion: $0.mod.buildVersion,
-                                encrypted: $0.data
-                            )
-                        },
-                        pkgMD5s: mergedPkgMD5s
-                    )
-                    if !merged.isEmpty {
-                        try merged.write(to: destURL)
-                        totalWritten += 1
-                        smartMergedCount += 1
-                        appendLog("Gộp IFix Bytecode: Thanos/HeroSkin_2.bytes (\(contributors.count) nguồn)")
-                    }
-                } else {
-                    let bestItem = contributors.max { a, b in
-                        if a.mod.buildVersion != b.mod.buildVersion { return a.mod.buildVersion < b.mod.buildVersion }
-                        return a.data.count < b.data.count
-                    } ?? contributors.last!
-                    if var dec = try? self.jgDecrypt(bestItem.data, stem: stem), !mergedPkgMD5s.isEmpty {
-                        let before = dec
-                        self.updateEmbeddedPkgMD5s(in: &dec, pkgMD5s: mergedPkgMD5s)
-                        if dec != before, let reEnc = try? self.jgEncrypt(dec, stem: stem) {
-                            try reEnc.write(to: destURL)
-                            totalWritten += 1
-                            continue
-                        }
-                    }
-                    try bestItem.data.write(to: destURL)
-                    totalWritten += 1
+                do {
+                    try FileIOEngine.shared.copySingleFile(from: source, to: dest)
+                    copiedLocally += 1
+                } catch {
+                    missingLocally += 1
                 }
             }
+            appendLog("Bù local: \(copiedLocally) file, thiếu \(missingLocally) file so với merge plan.")
 
-            // Package output .zip with Resources/<version>/... at root
-            progress("Đang đóng gói tệp .zip đầu ra...", 0.94)
-            let resourcesFolderURL = outputStagingRoot.appendingPathComponent("Resources", isDirectory: true)
-            guard fm.fileExists(atPath: resourcesFolderURL.path) else {
-                throw AovModMergerError.zipCreationFailed("Không tìm thấy thư mục Resources sau khi hợp nhất.")
+            let stagedCount = Self.countFiles(in: stagingRoot, fileManager: fm)
+            guard stagedCount > 0 else {
+                throw AovModMergerError.zipCreationFailed(
+                    "Không có tệp nào để đóng gói. Máy chủ không trả asset và local cũng không tìm thấy đường dẫn tương ứng."
+                )
             }
+
+            // MARK: 6. Đóng gói .zip đầu ra
+            progress("Đang đóng gói tệp .zip đầu ra...", 0.9)
 
             let outZipName = Self.makeMergedOutputFilename(
-                loadedModsWithHeroes: loadedMods.map { (heroIDs: $0.summary.heroIDs, fileName: $0.summary.fileName) },
+                loadedModsWithHeroes: preparedMods.map {
+                    (heroIDs: $0.summary.heroIDs, fileName: $0.summary.fileName)
+                },
                 fileExtension: "zip"
             )
             let outDir = fm.temporaryDirectory.appendingPathComponent("TotoroxMergedMods", isDirectory: true)
@@ -642,8 +593,18 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 try? fm.removeItem(at: outZipURL)
             }
 
+            // Đóng gói từng thư mục con cấp 1 để ZIP giữ đúng đường dẫn tương đối.
+            let topLevelItems = (try? fm.contentsOfDirectory(
+                at: stagingRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            guard !topLevelItems.isEmpty else {
+                throw AovModMergerError.zipCreationFailed("Thư mục kết quả rỗng.")
+            }
+
             do {
-                _ = try ZIPArchiveWriter.write(items: [resourcesFolderURL], to: outZipURL, fileManager: fm)
+                _ = try ZIPArchiveWriter.write(items: topLevelItems, to: outZipURL, fileManager: fm)
             } catch {
                 throw AovModMergerError.zipCreationFailed(error.localizedDescription)
             }
@@ -651,16 +612,43 @@ public final class AovModMergerEngine: @unchecked Sendable {
             let finalSize = Int64((try? outZipURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
             progress("Hoàn tất gộp file mod!", 1.0)
 
+            let conflictCount = contributionCount.values.filter { $0 > 1 }.count
             return AovMergeResult(
                 outputZipURL: outZipURL,
                 outputFileSize: finalSize,
                 resourceVersion: targetVersion,
-                mergedMods: loadedMods.map(\.summary),
-                totalFilesWritten: totalWritten,
-                smartMergedConflicts: smartMergedCount,
+                mergedMods: preparedMods.map(\.summary),
+                totalFilesWritten: stagedCount,
+                smartMergedConflicts: conflictCount,
                 logs: logs
             )
         }.value
+    }
+
+    /// File cấu hình nhẹ được phép gửi lên `/api/v1/merge-plan`.
+    static func isServerConfigPath(_ relativePath: String) -> Bool {
+        let lower = relativePath.lowercased()
+        if lower.contains("commonactions") { return true }
+        if lower.contains("/databin/") || lower.hasPrefix("databin/") { return true }
+        if lower.contains("/thanos/") && lower.contains("heroskin_") { return true }
+        let name = (lower as NSString).lastPathComponent
+        if name == "manifest" || name == "manifest.json" || name.hasSuffix(".manifest") { return true }
+        return false
+    }
+
+    private static func countFiles(in root: URL, fileManager: FileManager) -> Int {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var count = 0
+        while let fileURL = enumerator.nextObject() as? URL {
+            if (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                count += 1
+            }
+        }
+        return count
     }
 
     // MARK: - Path Normalization & Hero ID Detection
