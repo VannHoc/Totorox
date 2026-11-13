@@ -1,0 +1,228 @@
+/* ==============================================================================
+   Totorox - Bản địa hóa Tiếng Việt (vi)
+   Chuẩn hóa riêng cho ứng dụng Totorox
+   ============================================================================== */
+
+/* --- Common Actions & Status --- */
+"common.close" = "Đóng";
+"common.done" = "Xong";
+"common.ok" = "OK";
+"common.cancel" = "Hủy";
+"common.delete" = "Xóa";
+"common.clear" = "Xóa";
+"common.failed" = "Thất bại";
+"common.version" = "Phiên bản %@";
+"common.device" = "Thiết bị";
+"common.reboot" = "Khởi động lại";
+"common.next" = "Tiếp theo";
+"common.back" = "Quay lại";
+"common.finish" = "Hoàn thành";
+"common.search" = "Tìm kiếm";
+"common.notice" = "Thông báo";
+"common.success" = "Thành công";
+"common.error" = "Lỗi";
+"common.files_count" = "%lld tệp";
+"common.items_count" = "%lld mục";
+"common.loading" = "Đang tải...";
+
+/* --- Main Tabs --- */
+"tab.overwrite" = "Đè file";
+"tab.folders" = "Thư mục";
+"tab.patch" = "Patch";
+"tab.merge" = "Gộp file";
+
+/* --- Tab 1: Overwrite File (Đè file) --- */
+"overwrite.target_app" = "Ứng dụng mục tiêu";
+"overwrite.selected_badge" = "Đã chọn";
+"overwrite.change_app" = "Đổi ứng dụng";
+"overwrite.select_installed_app" = "Chọn ứng dụng đã cài đặt";
+"overwrite.search_or_enter_bundle" = "Hoặc nhập Bundle ID (ví dụ: com.garena.game.kgvn)";
+"overwrite.find_btn" = "Tìm";
+"overwrite.not_found_bundle" = "Không tìm thấy ứng dụng có Bundle ID: %@";
+"overwrite.destination_folder" = "Thư mục đích";
+"overwrite.change_folder" = "Đổi";
+"overwrite.custom_folder_sheet_title" = "Chọn Thư mục đích";
+"overwrite.choose_preset_or_enter" = "Chọn thư mục có sẵn hoặc nhập đường dẫn con:";
+"overwrite.or_custom_path" = "Hoặc nhập đường dẫn tùy chỉnh:";
+"overwrite.custom_path_placeholder" = "Ví dụ: Library/Caches/MyData";
+"overwrite.apply_folder" = "Áp dụng Thư mục đích";
+"overwrite.patch_package" = "Gói tệp bản vá (.zip / .3105)";
+"overwrite.password_protected" = "Có mật khẩu";
+"overwrite.password_label" = "Khóa";
+"overwrite.password_input_placeholder" = "Nhập mật khẩu giải nén";
+"overwrite.password_prompt_note" = "Gói bản vá này yêu cầu mật khẩu để giải mã nội dung. Vui lòng nhập mật khẩu để tiếp tục đè file vào container.";
+"overwrite.choose_different_file" = "Chọn tệp khác";
+"overwrite.choose_patch_file" = "Chọn tệp bản vá (.zip hoặc .3105)";
+"overwrite.executing_progress" = "Đang thực thi đè file...";
+"overwrite.execute_btn" = "Thực thi Đè File vào Container";
+"overwrite.select_app_modal_title" = "Chọn Ứng Dụng Đích";
+"overwrite.scanning_apps" = "Đang quét danh sách ứng dụng...";
+"overwrite.no_app_matching" = "Không tìm thấy ứng dụng phù hợp";
+"overwrite.search_apps_placeholder" = "Tìm kiếm ứng dụng hoặc bundle id...";
+"overwrite.error_no_container" = "Không thể tìm thấy Container của ứng dụng. Hãy đảm bảo bạn đã mở ứng dụng ít nhất 1 lần.";
+"overwrite.error_invalid_archive" = "Tệp bản vá không hợp lệ hoặc đã bị lỗi cấu trúc.";
+"overwrite.error_wrong_password" = "Mật khẩu giải mã không chính xác.";
+"overwrite.success_message" = "Đã thực thi đè file vào container thành công!";
+
+/* --- Tab 2: Folder Explorer (Thư mục) --- */
+"folders.nav_back" = "Lùi";
+"folders.quick_locations" = "Vị trí nhanh";
+"folders.refresh" = "Làm mới";
+"folders.sort_by" = "Sắp xếp theo";
+"folders.sort.name_asc" = "Tên (A → Z)";
+"folders.sort.name_desc" = "Tên (Z → A)";
+"folders.sort.user_apps_first" = "Ứng dụng ngoài trước";
+"folders.sort.date_desc" = "Ngày sửa đổi (Mới nhất)";
+"folders.search_placeholder" = "Tìm kiếm thư mục hoặc tệp...";
+"folders.empty_directory" = "Thư mục trống";
+"folders.loading_content" = "Đang tải nội dung...";
+"folders.summary_status" = "%lld mục (%lld tệp, %lld thư mục)";
+"folders.folder_type" = "Thư mục";
+"folders.file_type" = "Tệp";
+"folders.action_delete" = "Xóa";
+"folders.action_copy" = "Sao chép";
+"folders.action_paste" = "Dán";
+"folders.action_share" = "Chia sẻ";
+"folders.delete_confirm_title" = "Xác nhận xóa";
+"folders.delete_confirm_message" = "Thao tác này sẽ xóa '%@' và không thể hoàn tác.";
+
+/* --- Tab 3: Patch Converter (Bộ chuyển đổi) --- */
+"patch.header_title" = "Bộ Chuyển Đổi Hai Chiều";
+"patch.header_subtitle" = "Giải mã .3105 xuất sang .zip hoặc đóng gói .zip thành .3105";
+"patch.direction.zip_to_patch" = "ZIP ➔ .3105";
+"patch.direction.patch_to_zip" = ".3105 ➔ ZIP";
+"patch.source_file" = "Tệp nguồn";
+"patch.choose_source" = "Chọn tệp nguồn";
+"patch.change_source" = "Chọn tệp khác";
+"patch.password_title" = "Mật khẩu mã hóa / giải mã";
+"patch.password_placeholder" = "Mật khẩu (tùy chọn với ZIP, bắt buộc nếu 3105 có pass)";
+"patch.convert_btn" = "Bắt đầu chuyển đổi";
+"patch.converting" = "Đang thực hiện chuyển đổi...";
+"patch.success_title" = "Chuyển đổi thành công!";
+"patch.save_or_share" = "Lưu / Chia sẻ tệp";
+"patch.history_title" = "Lịch sử chuyển đổi";
+"patch.history_clear" = "Xóa lịch sử";
+"patch.history_empty" = "Chưa có lịch sử chuyển đổi";
+"patch.error.unsupported_format" = "Định dạng gói patch không được hỗ trợ.";
+"patch.error.unsupported_version" = "Phiên bản gói patch không được hỗ trợ.";
+"patch.error.password_or_corrupt" = "Mật khẩu không đúng hoặc gói đã bị hỏng.";
+"patch.error.invalid_bundle" = "Bundle ID không hợp lệ.";
+"patch.error.unsafe_path" = "Gói patch chứa đường dẫn đích không an toàn.";
+"patch.error.size_limit" = "Gói patch vượt quá giới hạn 3.6 GB.";
+"patch.error.duplicate_target" = "Gói patch chứa đường dẫn đích trùng lặp.";
+"patch.error.invalid_project" = "Dự án patch không hợp lệ.";
+"patch.error.keychain" = "Không thể truy cập Keychain.";
+"patch.error.app_unavailable" = "Không tìm thấy ứng dụng đích %@.";
+"patch.error.target_occupied" = "Ứng dụng đích %@ đang được sử dụng.";
+"patch.error.already_applied" = "Gói patch này đã được áp dụng.";
+"patch.error.restore_targets_changed" = "Các tệp sau đã thay đổi kể từ khi áp dụng patch nên không thể khôi phục:\n%@";
+"patch.error.active_delete" = "Không thể xóa gói patch đang hoạt động.";
+"patch.error.symlink" = "Không hỗ trợ liên kết tượng trưng (symlink).";
+"patch.error.private_password" = "Gói patch riêng tư này yêu cầu mật khẩu.";
+"patch.error.private_operation" = "Thao tác trên gói patch riêng tư thất bại.";
+"patch.error.apply" = "Không thể áp dụng gói patch.";
+"patch.error.restore" = "Không thể khôi phục các tệp đã patch.";
+"patch.error.reset" = "Không thể đặt lại gói patch.";
+"patch.error.invalid_import_link" = "Liên kết nhập không hợp lệ.";
+"patch.error.remote_import" = "Không thể tải gói patch từ xa.";
+
+/* --- Tab 4: Merge Files (Gộp file) --- */
+"merge.header_title" = "Gộp File Mod Liên Quân";
+"merge.header_subtitle" = "Tính năng độc quyền phát triển bởi VannHoc";
+"merge.intro_desc" = "Hợp nhất thông minh từ 2 gói mod (.zip) Liên Quân Mobile trở lên thành 1 tệp .zip duy nhất theo ánh xạ chuẩn Resources/..., giữ trọn vẹn hiệu ứng biến về, tế đàn, âm thanh và thông báo hạ của tất cả các tướng.";
+"merge.mod_list_title" = "Danh sách tệp Mod (.zip)";
+"merge.add_mods_btn" = "Chọn từ 2 tệp .zip mod tướng khác nhau trở lên";
+"merge.clear_all" = "Xóa hết";
+"merge.start_btn" = "Bắt đầu Gộp File Mod (%lld tệp)";
+"merge.merging_progress" = "Đang giải mã & hợp nhất nhị phân...";
+"merge.success_title" = "Đã gộp thành công!";
+"merge.view_steps_btn" = "Xem chi tiết quá trình hợp nhất (%lld bước)";
+"merge.send_to_overwrite_tab" = "Đưa sang tab Đè file (Liên Quân)";
+"merge.save_or_share" = "Lưu / Chia sẻ tệp .zip";
+"merge.error_min_two" = "Vui lòng chọn tối thiểu từ 2 tệp mod .zip trở lên để gộp.";
+"merge.duplicate_skipped" = "Tệp trùng lặp '%@' đã được bỏ qua.";
+
+/* --- Windows Conflict Modal --- */
+"conflict.title_file_exists" = "Trùng lặp tệp";
+"conflict.title_type_conflict" = "Xung đột tệp & thư mục";
+"conflict.msg_file_exists" = "Tệp đích đã tồn tại tại đường dẫn này.";
+"conflict.msg_file_overwrites_folder" = "Nguồn là Tệp nhưng Đích là Thư mục cùng tên.";
+"conflict.msg_folder_overwrites_file" = "Nguồn là Thư mục nhưng Đích là Tệp cùng tên.";
+"conflict.source_label" = "Nguồn:";
+"conflict.dest_label" = "Đích:";
+"conflict.action_replace" = "Ghi đè (Replace)";
+"conflict.action_replace_all" = "Ghi đè tất cả (Replace All)";
+"conflict.action_skip" = "Bỏ qua (Skip)";
+"conflict.action_cancel" = "Hủy (Cancel)";
+
+/* --- Settings (Cài đặt) --- */
+"settings.title" = "Cài đặt";
+"settings.engine_status" = "Engine: Totorox Ready";
+"settings.section_language" = "NGÔN NGỮ";
+"settings.section_project" = "THÔNG TIN DỰ ÁN";
+"settings.founder_label" = "Người sáng lập";
+"settings.app_name_label" = "Tên ứng dụng";
+"settings.bundle_id_label" = "Bundle Identifier";
+"settings.supported_system" = "Hệ thống hỗ trợ";
+"settings.section_engine" = "ENGINE & QUYỀN TRUY CẬP";
+"settings.container_access" = "MCM Container Access";
+"settings.file_io_rule" = "Quy tắc File I/O";
+"settings.file_io_rule_value" = "Chuẩn Windows";
+"settings.theme_mode" = "Chế độ Giao diện";
+"settings.theme_mode_value" = "Light Mode";
+"settings.section_maintenance" = "BẢO TRÌ & CHẨN ĐOÁN";
+"settings.clear_cache_btn" = "Dọn dẹp bộ nhớ tạm & Cache";
+"settings.clear_cache_confirm_title" = "Xác nhận dọn dẹp cache?";
+"settings.clear_cache_confirm_msg" = "Xóa toàn bộ các tệp giải nén tạm, bộ nhớ đệm chuyển đổi patch để giải phóng dung lượng.";
+"settings.clear_cache_success" = "Đã dọn dẹp cache thành công!";
+"settings.view_logs_btn" = "Xem nhật ký hệ thống (Logs)";
+"settings.section_credits" = "TÁC GIẢ & BẢN QUYỀN";
+"settings.author_telegram" = "Telegram tác giả";
+"settings.copyright_footer" = "@2026 Totorox. Được phát triển bởi VannHoc.";
+
+/* --- Logs --- */
+"logs.title" = "Nhật ký hệ thống";
+"logs.empty_title" = "Không có nhật ký";
+"logs.empty_message" = "Các sự kiện và chẩn đoán hệ thống sẽ hiển thị tại đây.";
+"logs.copy_all" = "Sao chép tất cả";
+"logs.copied" = "Đã sao chép vào bộ nhớ tạm";
+
+/* --- Updates & Onboarding --- */
+"update.title" = "Có bản cập nhật";
+"update.message" = "Totorox %@ đã có trên GitHub.";
+"update.agree" = "Cập nhật";
+"update.dismiss" = "Để sau";
+
+/* --- Onboarding --- */
+"onboarding.step" = "Bước %@ / %@";
+"onboarding.language_title" = "Chọn ngôn ngữ";
+"onboarding.language_subtitle" = "Chọn ngôn ngữ hiển thị cho toàn bộ ứng dụng.";
+"onboarding.language_hint" = "Ngôn ngữ giao diện: %@";
+"onboarding.welcome_title" = "Chào mừng đến với Totorox";
+"onboarding.welcome_message" = "Quản lý container ứng dụng, tệp tin và gói Patch trong cùng một nơi.";
+"onboarding.welcome_badge" = "Mọi xử lý diễn ra ngay trên thiết bị";
+"onboarding.versions_title" = "Phiên bản iOS được hỗ trợ";
+"onboarding.versions_subtitle" = "Các bản build đã được kiểm chứng được liệt kê bên dưới.";
+"onboarding.beta" = "BETA";
+"onboarding.developer_beta" = "Developer Beta %@";
+"onboarding.public_beta" = "Public Beta %@";
+"onboarding.versions_footer" = "Thiết bị của bạn: iOS %@ (%@). Các bản build không có trong danh sách có thể vẫn hoạt động nhưng chưa được kiểm chứng.";
+"onboarding.install_title" = "Kiểm tra cách cài đặt";
+"onboarding.install_message" = "Khả năng truy cập container phụ thuộc vào cách Totorox được cài đặt.";
+"onboarding.install_ok" = "Cài bằng chứng chỉ hợp lệ và chưa bị thu hồi.";
+"onboarding.install_bad" = "Không dùng chứng chỉ đã bị thu hồi, chứng chỉ dùng chung hoặc enterprise.";
+"onboarding.install_jailbreak" = "Tweak jailbreak hoặc quy tắc sandbox nghiêm ngặt có thể chặn truy cập container.";
+"onboarding.install_footer" = "Nếu một tính năng không khả dụng, hãy kiểm tra lại cách cài đặt và bản build iOS.";
+
+/* --- Exploit status --- */
+"status.not_attempted" = "Chưa thử";
+"status.ok_via" = "OK qua %@";
+"status.failed_via" = "THẤT BẠI %@ (%lld)";
+"status.unsupported_reason" = "Không hỗ trợ: %@";
+"method.simulator_preview" = "Xem trước trên Simulator";
+
+/* --- Logs (extra actions) --- */
+"logs.clear" = "Xóa";
+"logs.copy" = "Sao chép";
+"logs.share" = "Chia sẻ";
+"accessibility.log_entry" = "Dòng log %lld: %@";

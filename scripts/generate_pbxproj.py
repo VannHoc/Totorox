@@ -1,0 +1,232 @@
+import os
+import re
+
+os.makedirs('Totorox.xcodeproj', exist_ok=True)
+with open(os.path.join('3105_repo', 'ThreeOneOSFive.xcodeproj', 'project.pbxproj'), 'r', encoding='utf-8') as f:
+    orig = f.read()
+
+# Replace product & directory names
+text = orig.replace('ThreeOneOSFive-Bridging-Header.h', 'Totorox-Bridging-Header.h')
+text = text.replace('ThreeOneOSFive', 'Totorox')
+text = text.replace('3105.app', 'Totorox.app')
+text = text.replace('MARKETING_VERSION = 2.0;', 'MARKETING_VERSION = 1.0;')
+text = text.replace('CURRENT_PROJECT_VERSION = 8;', 'CURRENT_PROJECT_VERSION = 1;')
+text = text.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = Totorox;')
+text = text.replace('PRODUCT_NAME = 3105;', 'PRODUCT_NAME = Totorox;')
+
+# Add build files in PBXBuildFile section
+build_files_to_add = """
+\t\tTRXBLD01 /* FileIOEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG01; };
+\t\tTRXBLD02 /* PatchZipConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXENG02; };
+\t\tTRXTBL01 /* FileIOEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST01; };
+\t\tTRXTBL02 /* PatchZipConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRXTST02; };
+"""
+text = text.replace('/* Begin PBXBuildFile section */', '/* Begin PBXBuildFile section */' + build_files_to_add)
+
+# Add file references in PBXFileReference section
+file_refs_to_add = """
+\t\tTRXENG01 /* FileIOEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngine.swift; sourceTree = "<group>"; };
+\t\tTRXENG02 /* PatchZipConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverter.swift; sourceTree = "<group>"; };
+\t\tTRXTST00 /* TotoroxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TotoroxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+\t\tTRXTST01 /* FileIOEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIOEngineTests.swift; sourceTree = "<group>"; };
+\t\tTRXTST02 /* PatchZipConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchZipConverterTests.swift; sourceTree = "<group>"; };
+"""
+text = text.replace('/* Begin PBXFileReference section */', '/* Begin PBXFileReference section */' + file_refs_to_add)
+
+# Add engine group and TotoroxTests group in PBXGroup
+groups_to_add = """
+\t\tTRXGRP01 /* engine */ = {
+\t\t\tisa = PBXGroup;
+\t\t\tchildren = (
+\t\t\t\tTRXENG01 /* FileIOEngine.swift */,
+\t\t\t\tTRXENG02 /* PatchZipConverter.swift */,
+\t\t\t);
+\t\t\tpath = engine;
+\t\t\tsourceTree = "<group>";
+\t\t};
+\t\tTRXGRP02 /* TotoroxTests */ = {
+\t\t\tisa = PBXGroup;
+\t\t\tchildren = (
+\t\t\t\tTRXTST01 /* FileIOEngineTests.swift */,
+\t\t\t\tTRXTST02 /* PatchZipConverterTests.swift */,
+\t\t\t);
+\t\t\tpath = TotoroxTests;
+\t\t\tsourceTree = "<group>";
+\t\t};
+"""
+text = text.replace('/* Begin PBXGroup section */', '/* Begin PBXGroup section */' + groups_to_add)
+
+# Add engine group to Totorox group's children
+text = re.sub(
+    r'(3105A401 /\* Totorox \*/ = \{[^}]+children = \()',
+    r'\1\n\t\t\t\tTRXGRP01 /* engine */,',
+    text
+)
+
+# Add TotoroxTests to root group children
+text = re.sub(
+    r'(3105A400 = \{[^}]+children = \()',
+    r'\1\n\t\t\t\tTRXGRP02 /* TotoroxTests */,',
+    text
+)
+
+# Add TotoroxTests.xctest to Products group
+text = re.sub(
+    r'(3105A402 /\* Products \*/ = \{[^}]+children = \()',
+    r'\1\n\t\t\t\tTRXTST00 /* TotoroxTests.xctest */,',
+    text
+)
+
+# Add build files to Sources build phase of Totorox
+text = re.sub(
+    r'(3105A700 /\* Sources \*/ = \{[^}]+files = \()',
+    r'\1\n\t\t\t\tTRXBLD01 /* FileIOEngine.swift in Sources */,\n\t\t\t\tTRXBLD02 /* PatchZipConverter.swift in Sources */,',
+    text
+)
+
+# Add TotoroxTests Sources build phase
+sources_build_phase_tests = """
+\t\tTRXPHS01 /* Sources */ = {
+\t\t\tisa = PBXSourcesBuildPhase;
+\t\t\tbuildActionMask = 2147483647;
+\t\t\tfiles = (
+\t\t\t\tTRXTBL01 /* FileIOEngineTests.swift in Sources */,
+\t\t\t\tTRXTBL02 /* PatchZipConverterTests.swift in Sources */,
+\t\t\t);
+\t\t\trunOnlyForDeploymentPostprocessing = 0;
+\t\t};
+"""
+text = text.replace('/* Begin PBXSourcesBuildPhase section */', '/* Begin PBXSourcesBuildPhase section */' + sources_build_phase_tests)
+
+# Add TotoroxTests Frameworks and Resources phases if needed
+frameworks_phase_tests = """
+\t\tTRXPHS02 /* Frameworks */ = {
+\t\t\tisa = PBXFrameworksBuildPhase;
+\t\t\tbuildActionMask = 2147483647;
+\t\t\tfiles = (
+\t\t\t);
+\t\t\trunOnlyForDeploymentPostprocessing = 0;
+\t\t};
+"""
+text = text.replace('/* Begin PBXFrameworksBuildPhase section */', '/* Begin PBXFrameworksBuildPhase section */' + frameworks_phase_tests)
+
+resources_phase_tests = """
+\t\tTRXPHS03 /* Resources */ = {
+\t\t\tisa = PBXResourcesBuildPhase;
+\t\t\tbuildActionMask = 2147483647;
+\t\t\tfiles = (
+\t\t\t);
+\t\t\trunOnlyForDeploymentPostprocessing = 0;
+\t\t};
+"""
+text = text.replace('/* Begin PBXResourcesBuildPhase section */', '/* Begin PBXResourcesBuildPhase section */' + resources_phase_tests)
+
+# Add PBXTargetDependency & PBXContainerItemProxy
+target_proxy = """
+/* Begin PBXContainerItemProxy section */
+\t\tTRXPRX01 /* PBXContainerItemProxy */ = {
+\t\t\tisa = PBXContainerItemProxy;
+\t\t\tcontainerPortal = 3105A000 /* Project object */;
+\t\t\tproxyType = 1;
+\t\t\tremoteGlobalIDString = 3105A500;
+\t\t\tremoteInfo = Totorox;
+\t\t};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+\t\tTRXDEP01 /* PBXTargetDependency */ = {
+\t\t\tisa = PBXTargetDependency;
+\t\t\ttarget = 3105A500 /* Totorox */;
+\t\t\ttargetProxy = TRXPRX01 /* PBXContainerItemProxy */;
+\t\t};
+/* End PBXTargetDependency section */
+"""
+text = text.replace('/* Begin PBXNativeTarget section */', target_proxy + '\n/* Begin PBXNativeTarget section */')
+
+# Add TotoroxTests PBXNativeTarget
+native_target_tests = """
+\t\tTRXTAR01 /* TotoroxTests */ = {
+\t\t\tisa = PBXNativeTarget;
+\t\t\tbuildConfigurationList = TRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */;
+\t\t\tbuildPhases = (
+\t\t\t\tTRXPHS01 /* Sources */,
+\t\t\t\tTRXPHS02 /* Frameworks */,
+\t\t\t\tTRXPHS03 /* Resources */,
+\t\t\t);
+\t\t\tbuildRules = (
+\t\t\t);
+\t\t\tdependencies = (
+\t\t\t\tTRXDEP01 /* PBXTargetDependency */,
+\t\t\t);
+\t\t\tname = TotoroxTests;
+\t\t\tproductName = TotoroxTests;
+\t\t\tproductReference = TRXTST00 /* TotoroxTests.xctest */;
+\t\t\tproductType = "com.apple.product-type.bundle.unit-test";
+\t\t};
+"""
+text = text.replace('/* End PBXNativeTarget section */', native_target_tests + '/* End PBXNativeTarget section */')
+
+# Add TotoroxTests to targets list in PBXProject
+text = re.sub(
+    r'(3105A000 /\* Project object \*/ = \{[^}]+targets = \([^)]+)',
+    r'\g<1>\t\t\t\tTRXTAR01 /* TotoroxTests */,\n',
+    text
+)
+
+# Add XCBuildConfiguration and XCConfigurationList for TotoroxTests
+test_configs = """
+\t\tTRXCFG01 /* Debug */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = {
+\t\t\t\tBUNDLE_LOADER = "$(TEST_HOST)";
+\t\t\t\tCODE_SIGN_STYLE = Automatic;
+\t\t\t\tCURRENT_PROJECT_VERSION = 1;
+\t\t\t\tGENERATE_INFOPLIST_FILE = YES;
+\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
+\t\t\t\tMARKETING_VERSION = 1.0;
+\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
+\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
+\t\t\t\tSWIFT_VERSION = 5.0;
+\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";
+\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox";
+\t\t\t};
+\t\t\tname = Debug;
+\t\t};
+\t\tTRXCFG02 /* Release */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = {
+\t\t\t\tBUNDLE_LOADER = "$(TEST_HOST)";
+\t\t\t\tCODE_SIGN_STYLE = Automatic;
+\t\t\t\tCURRENT_PROJECT_VERSION = 1;
+\t\t\t\tGENERATE_INFOPLIST_FILE = YES;
+\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
+\t\t\t\tMARKETING_VERSION = 1.0;
+\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
+\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
+\t\t\t\tSWIFT_VERSION = 5.0;
+\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";
+\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox";
+\t\t\t};
+\t\t\tname = Release;
+\t\t};
+"""
+text = text.replace('/* Begin XCBuildConfiguration section */', '/* Begin XCBuildConfiguration section */' + test_configs)
+
+test_config_list = """
+\t\tTRXCFG00 /* Build configuration list for PBXNativeTarget "TotoroxTests" */ = {
+\t\t\tisa = XCConfigurationList;
+\t\t\tbuildConfigurations = (
+\t\t\t\tTRXCFG01 /* Debug */,
+\t\t\t\tTRXCFG02 /* Release */,
+\t\t\t);
+\t\t\tdefaultConfigurationIsVisible = 0;
+\t\t\tdefaultConfigurationName = Release;
+\t\t};
+"""
+text = text.replace('/* Begin XCConfigurationList section */', '/* Begin XCConfigurationList section */' + test_config_list)
+
+dest_path = os.path.join('Totorox.xcodeproj', 'project.pbxproj')
+with open(dest_path, 'w', encoding='utf-8') as f:
+    f.write(text)
+
+print('Generated Totorox.xcodeproj/project.pbxproj successfully. Length:', len(text))

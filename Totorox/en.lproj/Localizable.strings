@@ -1,0 +1,228 @@
+/* ==============================================================================
+   Totorox - English Localization (en)
+   Cleaned & Tailored specifically for Totorox App
+   ============================================================================== */
+
+/* --- Common Actions & Status --- */
+"common.close" = "Close";
+"common.done" = "Done";
+"common.ok" = "OK";
+"common.cancel" = "Cancel";
+"common.delete" = "Delete";
+"common.clear" = "Clear";
+"common.failed" = "Failed";
+"common.version" = "Version %@";
+"common.device" = "Device";
+"common.reboot" = "Reboot";
+"common.next" = "Next";
+"common.back" = "Back";
+"common.finish" = "Finish";
+"common.search" = "Search";
+"common.notice" = "Notice";
+"common.success" = "Success";
+"common.error" = "Error";
+"common.files_count" = "%lld files";
+"common.items_count" = "%lld items";
+"common.loading" = "Loading...";
+
+/* --- Main Tabs --- */
+"tab.overwrite" = "Overwrite";
+"tab.folders" = "Folders";
+"tab.patch" = "Patch";
+"tab.merge" = "Merge Files";
+
+/* --- Tab 1: Overwrite File (Đè file) --- */
+"overwrite.target_app" = "Target Application";
+"overwrite.selected_badge" = "Selected";
+"overwrite.change_app" = "Change App";
+"overwrite.select_installed_app" = "Select Installed Application";
+"overwrite.search_or_enter_bundle" = "Or enter Bundle ID (e.g. com.garena.game.kgvn)";
+"overwrite.find_btn" = "Find";
+"overwrite.not_found_bundle" = "No application found with Bundle ID: %@";
+"overwrite.destination_folder" = "Destination Folder";
+"overwrite.change_folder" = "Change";
+"overwrite.custom_folder_sheet_title" = "Select Destination Folder";
+"overwrite.choose_preset_or_enter" = "Choose preset or enter subpath:";
+"overwrite.or_custom_path" = "Or enter custom relative path:";
+"overwrite.custom_path_placeholder" = "e.g. Library/Caches/MyData";
+"overwrite.apply_folder" = "Apply Destination Folder";
+"overwrite.patch_package" = "Patch Archive (.zip / .3105)";
+"overwrite.password_protected" = "Password Protected";
+"overwrite.password_label" = "Lock";
+"overwrite.password_input_placeholder" = "Enter extraction password";
+"overwrite.password_prompt_note" = "This patch archive requires a password to decrypt. Please enter the password to continue overwriting.";
+"overwrite.choose_different_file" = "Choose Different File";
+"overwrite.choose_patch_file" = "Select Patch File (.zip or .3105)";
+"overwrite.executing_progress" = "Overwriting files...";
+"overwrite.execute_btn" = "Execute Overwrite into Container";
+"overwrite.select_app_modal_title" = "Select Target App";
+"overwrite.scanning_apps" = "Scanning installed applications...";
+"overwrite.no_app_matching" = "No matching application found";
+"overwrite.search_apps_placeholder" = "Search apps or bundle ID...";
+"overwrite.error_no_container" = "App container cannot be located. Please ensure the app has been launched once.";
+"overwrite.error_invalid_archive" = "Invalid or corrupted archive file.";
+"overwrite.error_wrong_password" = "Incorrect decryption password.";
+"overwrite.success_message" = "Files successfully overwritten into container!";
+
+/* --- Tab 2: Folder Explorer (Thư mục) --- */
+"folders.nav_back" = "Back";
+"folders.quick_locations" = "Quick Locations";
+"folders.refresh" = "Refresh";
+"folders.sort_by" = "Sort by";
+"folders.sort.name_asc" = "Name (A → Z)";
+"folders.sort.name_desc" = "Name (Z → A)";
+"folders.sort.user_apps_first" = "User Apps First";
+"folders.sort.date_desc" = "Date Modified (Newest)";
+"folders.search_placeholder" = "Search folder or file...";
+"folders.empty_directory" = "This folder is empty";
+"folders.loading_content" = "Loading folder contents...";
+"folders.summary_status" = "%lld items (%lld files, %lld folders)";
+"folders.folder_type" = "Folder";
+"folders.file_type" = "File";
+"folders.action_delete" = "Delete";
+"folders.action_copy" = "Copy";
+"folders.action_paste" = "Paste";
+"folders.action_share" = "Share";
+"folders.delete_confirm_title" = "Confirm Deletion";
+"folders.delete_confirm_message" = "This will permanently delete '%@'. This action cannot be undone.";
+
+/* --- Tab 3: Patch Converter (Bộ chuyển đổi) --- */
+"patch.header_title" = "Two-Way Patch Converter";
+"patch.header_subtitle" = "Decrypt .3105 to .zip or package .zip into .3105";
+"patch.direction.zip_to_patch" = "ZIP ➔ .3105";
+"patch.direction.patch_to_zip" = ".3105 ➔ ZIP";
+"patch.source_file" = "Source File";
+"patch.choose_source" = "Select Source File";
+"patch.change_source" = "Change Source";
+"patch.password_title" = "Encryption / Decryption Password";
+"patch.password_placeholder" = "Password (optional for ZIP, required if 3105 is encrypted)";
+"patch.convert_btn" = "Start Conversion";
+"patch.converting" = "Converting archive...";
+"patch.success_title" = "Conversion Successful!";
+"patch.save_or_share" = "Save / Share File";
+"patch.history_title" = "Conversion History";
+"patch.history_clear" = "Clear History";
+"patch.history_empty" = "No conversion history yet";
+"patch.error.unsupported_format" = "Unsupported patch format.";
+"patch.error.unsupported_version" = "Unsupported patch version.";
+"patch.error.password_or_corrupt" = "Incorrect password or the package is corrupted.";
+"patch.error.invalid_bundle" = "Invalid bundle identifier.";
+"patch.error.unsafe_path" = "The patch contains an unsafe target path.";
+"patch.error.size_limit" = "The patch exceeds the 3.6 GB size limit.";
+"patch.error.duplicate_target" = "The patch contains duplicate target paths.";
+"patch.error.invalid_project" = "The patch project is invalid.";
+"patch.error.keychain" = "Could not access the keychain.";
+"patch.error.app_unavailable" = "The target app %@ is not available.";
+"patch.error.target_occupied" = "The target app %@ is currently in use.";
+"patch.error.already_applied" = "This patch is already applied.";
+"patch.error.restore_targets_changed" = "These files changed since the patch was applied and cannot be restored:\n%@";
+"patch.error.active_delete" = "An active patch cannot be deleted.";
+"patch.error.symlink" = "Symbolic links are not supported.";
+"patch.error.private_password" = "A password is required for this private patch.";
+"patch.error.private_operation" = "The private patch operation failed.";
+"patch.error.apply" = "Could not apply the patch.";
+"patch.error.restore" = "Could not restore the patched files.";
+"patch.error.reset" = "Could not reset the patch.";
+"patch.error.invalid_import_link" = "The import link is invalid.";
+"patch.error.remote_import" = "Could not download the remote patch.";
+
+/* --- Tab 4: Merge Files (Gộp file) --- */
+"merge.header_title" = "Arena of Valor Mod Merger";
+"merge.header_subtitle" = "Exclusive smart merging engine developed by VannHoc";
+"merge.intro_desc" = "Smartly merge 2 or more AoV .zip mod packs into a single .zip file according to standard Resources/... mappings, preserving recalls, springs, audio and kill broadcast effects.";
+"merge.mod_list_title" = "Mod Files List (.zip)";
+"merge.add_mods_btn" = "Select 2 or more hero mod .zip files";
+"merge.clear_all" = "Clear All";
+"merge.start_btn" = "Start Merging Mod Files (%lld files)";
+"merge.merging_progress" = "Extracting & merging binaries...";
+"merge.success_title" = "Merged Successfully!";
+"merge.view_steps_btn" = "View merge process details (%lld steps)";
+"merge.send_to_overwrite_tab" = "Send to Overwrite Tab (AoV)";
+"merge.save_or_share" = "Save / Share .zip File";
+"merge.error_min_two" = "Please select at least 2 .zip mod files to merge.";
+"merge.duplicate_skipped" = "Duplicate file '%@' was skipped.";
+
+/* --- Windows Conflict Modal --- */
+"conflict.title_file_exists" = "File Conflict";
+"conflict.title_type_conflict" = "File & Folder Conflict";
+"conflict.msg_file_exists" = "Destination file already exists at this path.";
+"conflict.msg_file_overwrites_folder" = "Source is a File but Destination is a Folder with the same name.";
+"conflict.msg_folder_overwrites_file" = "Source is a Folder but Destination is a File with the same name.";
+"conflict.source_label" = "Source:";
+"conflict.dest_label" = "Destination:";
+"conflict.action_replace" = "Replace";
+"conflict.action_replace_all" = "Replace All";
+"conflict.action_skip" = "Skip";
+"conflict.action_cancel" = "Cancel";
+
+/* --- Settings (Cài đặt) --- */
+"settings.title" = "Settings";
+"settings.engine_status" = "Engine: Totorox Ready";
+"settings.section_language" = "LANGUAGE";
+"settings.section_project" = "PROJECT INFORMATION";
+"settings.founder_label" = "Founder & Lead Developer";
+"settings.app_name_label" = "Application Name";
+"settings.bundle_id_label" = "Bundle Identifier";
+"settings.supported_system" = "Current System";
+"settings.section_engine" = "ENGINE & PRIVILEGES";
+"settings.container_access" = "MCM Container Access";
+"settings.file_io_rule" = "File I/O Rule";
+"settings.file_io_rule_value" = "Standard Windows Rules";
+"settings.theme_mode" = "Theme Mode";
+"settings.theme_mode_value" = "Light Mode";
+"settings.section_maintenance" = "MAINTENANCE & DIAGNOSTICS";
+"settings.clear_cache_btn" = "Clean Temporary Files & Cache";
+"settings.clear_cache_confirm_title" = "Confirm Cache Cleanup?";
+"settings.clear_cache_confirm_msg" = "Delete all extracted temp files and patch conversion cache to free up storage.";
+"settings.clear_cache_success" = "Cache cleaned successfully!";
+"settings.view_logs_btn" = "View System Logs";
+"settings.section_credits" = "CREDITS & COPYRIGHT";
+"settings.author_telegram" = "Author Telegram";
+"settings.copyright_footer" = "@2026 Totorox. Developed by VannHoc.";
+
+/* --- Logs --- */
+"logs.title" = "System Logs";
+"logs.empty_title" = "No Logs";
+"logs.empty_message" = "System event and diagnostics logs will appear here.";
+"logs.copy_all" = "Copy All";
+"logs.copied" = "Copied to Clipboard";
+
+/* --- Updates & Onboarding --- */
+"update.title" = "Update Available";
+"update.message" = "Totorox %@ is available on GitHub.";
+"update.agree" = "Download";
+"update.dismiss" = "Later";
+
+/* --- Onboarding --- */
+"onboarding.step" = "Step %@ of %@";
+"onboarding.language_title" = "Choose Your Language";
+"onboarding.language_subtitle" = "Select the language used across the app.";
+"onboarding.language_hint" = "Interface language: %@";
+"onboarding.welcome_title" = "Welcome to Totorox";
+"onboarding.welcome_message" = "Manage app containers, files and patch packages from one place.";
+"onboarding.welcome_badge" = "All processing happens on this device";
+"onboarding.versions_title" = "Supported iOS Versions";
+"onboarding.versions_subtitle" = "Verified builds are listed below.";
+"onboarding.beta" = "BETA";
+"onboarding.developer_beta" = "Developer Beta %@";
+"onboarding.public_beta" = "Public Beta %@";
+"onboarding.versions_footer" = "Your device: iOS %@ (%@). Unlisted builds may work but are not verified.";
+"onboarding.install_title" = "Installation Check";
+"onboarding.install_message" = "Container access depends on how Totorox was installed.";
+"onboarding.install_ok" = "Installed with valid signing and no revoked certificate.";
+"onboarding.install_bad" = "Do not use revoked, shared or enterprise certificates.";
+"onboarding.install_jailbreak" = "Jailbreak tweaks or strict sandbox rules may block container access.";
+"onboarding.install_footer" = "If a feature is unavailable, verify your installation method and iOS build.";
+
+/* --- Exploit status --- */
+"status.not_attempted" = "Not attempted";
+"status.ok_via" = "OK via %@";
+"status.failed_via" = "FAILED %@ (%lld)";
+"status.unsupported_reason" = "Unsupported: %@";
+"method.simulator_preview" = "Simulator preview";
+
+/* --- Logs (extra actions) --- */
+"logs.clear" = "Clear";
+"logs.copy" = "Copy";
+"logs.share" = "Share";
+"accessibility.log_entry" = "Log entry %lld: %@";

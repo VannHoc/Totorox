@@ -1,0 +1,20 @@
+# Xcode
+*.xcodeproj
+*.xcworkspace
+build/
+DerivedData/
+*.moved-aside
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# App Packages & Test Artifacts
+Totorox-*.ipa
+TestResults.xcresult
+analysis_3105/
+
+# System
+.DS_Store
+Thumbs.db
+sever_security.md
+TotoroxBackend/

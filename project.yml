@@ -1,0 +1,88 @@
+name: Totorox
+options:
+  bundleIdPrefix: com.apple.mobile
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+  swiftVersion: "5.0"
+settings:
+  base:
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    GCC_C_LANGUAGE_STANDARD: gnu17
+    CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
+targets:
+  Totorox:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Totorox
+    settings:
+      base:
+        PRODUCT_NAME: Totorox
+        PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.MobileHouseArrest
+        MARKETING_VERSION: "1.1"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_TESTABILITY: YES
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Totorox"
+        INFOPLIST_FILE: Totorox/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Totorox/Totorox.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Totorox
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        SWIFT_OBJC_BRIDGING_HEADER: Totorox/Totorox-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: "-lz"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "5.0"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+  TotoroxTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: TotoroxTests
+    dependencies:
+      - target: Totorox
+    settings:
+      base:
+        PRODUCT_NAME: TotoroxTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.apple.mobile.TotoroxTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Totorox.app/Totorox"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Totorox"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: "-lz"
+schemes:
+  Totorox:
+    build:
+      targets:
+        Totorox: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TotoroxTests
+    archive:
+      config: Release
+  TotoroxTests:
+    build:
+      targets:
+        Totorox: all
+        TotoroxTests: all
+    test:
+      config: Debug
+      targets:
+        - TotoroxTests
