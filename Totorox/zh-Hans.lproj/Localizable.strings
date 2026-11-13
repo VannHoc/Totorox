@@ -1,0 +1,228 @@
+/* ==============================================================================
+   Totorox - 简体中文本地化 (zh-Hans)
+   专为 Totorox 应用量身定制与规范化
+   ============================================================================== */
+
+/* --- Common Actions & Status --- */
+"common.close" = "关闭";
+"common.done" = "完成";
+"common.ok" = "确定";
+"common.cancel" = "取消";
+"common.delete" = "删除";
+"common.clear" = "清除";
+"common.failed" = "失败";
+"common.version" = "版本 %@";
+"common.device" = "设备";
+"common.reboot" = "重新启动";
+"common.next" = "下一步";
+"common.back" = "返回";
+"common.finish" = "完成";
+"common.search" = "搜索";
+"common.notice" = "提示";
+"common.success" = "成功";
+"common.error" = "错误";
+"common.files_count" = "%lld 个文件";
+"common.items_count" = "%lld 项";
+"common.loading" = "加载中...";
+
+/* --- Main Tabs --- */
+"tab.overwrite" = "覆盖文件";
+"tab.folders" = "文件目录";
+"tab.patch" = "补丁转换";
+"tab.merge" = "合并文件";
+
+/* --- Tab 1: Overwrite File (Đè file) --- */
+"overwrite.target_app" = "目标应用程序";
+"overwrite.selected_badge" = "已选择";
+"overwrite.change_app" = "更换应用";
+"overwrite.select_installed_app" = "选择已安装的应用程序";
+"overwrite.search_or_enter_bundle" = "或输入 Bundle ID (例如: com.garena.game.kgvn)";
+"overwrite.find_btn" = "查找";
+"overwrite.not_found_bundle" = "未找到 Bundle ID 为 %@ 的应用";
+"overwrite.destination_folder" = "目标目录";
+"overwrite.change_folder" = "更改";
+"overwrite.custom_folder_sheet_title" = "选择目标目录";
+"overwrite.choose_preset_or_enter" = "选择预设目录或输入子路径:";
+"overwrite.or_custom_path" = "或输入自定义相对路径:";
+"overwrite.custom_path_placeholder" = "例如: Library/Caches/MyData";
+"overwrite.apply_folder" = "应用目标目录";
+"overwrite.patch_package" = "补丁归档包 (.zip / .3105)";
+"overwrite.password_protected" = "设有密码保护";
+"overwrite.password_label" = "密码";
+"overwrite.password_input_placeholder" = "请输入解压密码";
+"overwrite.password_prompt_note" = "此补丁包需要密码才能解密。请输入密码以继续覆盖写入容器。";
+"overwrite.choose_different_file" = "选择其他文件";
+"overwrite.choose_patch_file" = "选择补丁文件 (.zip 或 .3105)";
+"overwrite.executing_progress" = "正在执行覆盖写入...";
+"overwrite.execute_btn" = "执行写入并覆盖至容器";
+"overwrite.select_app_modal_title" = "选择目标应用";
+"overwrite.scanning_apps" = "正在扫描已安装的应用列表...";
+"overwrite.no_app_matching" = "未找到匹配的应用程序";
+"overwrite.search_apps_placeholder" = "搜索应用名称或 Bundle ID...";
+"overwrite.error_no_container" = "无法定位该应用的容器，请确保此应用至少已运行过一次。";
+"overwrite.error_invalid_archive" = "补丁文件无效或格式已损坏。";
+"overwrite.error_wrong_password" = "解密密码不正确。";
+"overwrite.success_message" = "文件已成功覆盖写入至目标容器！";
+
+/* --- Tab 2: Folder Explorer (Thư mục) --- */
+"folders.nav_back" = "返回";
+"folders.quick_locations" = "快捷位置";
+"folders.refresh" = "刷新";
+"folders.sort_by" = "排序方式";
+"folders.sort.name_asc" = "名称 (A → Z)";
+"folders.sort.name_desc" = "名称 (Z → A)";
+"folders.sort.user_apps_first" = "第三方应用优先";
+"folders.sort.date_desc" = "修改日期 (最新)";
+"folders.search_placeholder" = "搜索文件夹或文件...";
+"folders.empty_directory" = "此文件夹为空";
+"folders.loading_content" = "正在加载内容...";
+"folders.summary_status" = "%lld 项 (%lld 个文件, %lld 个文件夹)";
+"folders.folder_type" = "文件夹";
+"folders.file_type" = "文件";
+"folders.action_delete" = "删除";
+"folders.action_copy" = "复制";
+"folders.action_paste" = "粘贴";
+"folders.action_share" = "分享";
+"folders.delete_confirm_title" = "确认删除";
+"folders.delete_confirm_message" = "此操作将永久删除 '%@' 且无法撤销。";
+
+/* --- Tab 3: Patch Converter (Bộ chuyển đổi) --- */
+"patch.header_title" = "双向补丁转换器";
+"patch.header_subtitle" = "解密 .3105 导出为 .zip 或将 .zip 打包为 .3105";
+"patch.direction.zip_to_patch" = "ZIP ➔ .3105";
+"patch.direction.patch_to_zip" = ".3105 ➔ ZIP";
+"patch.source_file" = "源文件";
+"patch.choose_source" = "选择源文件";
+"patch.change_source" = "更换源文件";
+"patch.password_title" = "加密 / 解密密码";
+"patch.password_placeholder" = "密码 (ZIP 选填，3105 加密时必填)";
+"patch.convert_btn" = "开始转换";
+"patch.converting" = "正在执行转换...";
+"patch.success_title" = "转换成功！";
+"patch.save_or_share" = "保存 / 分享文件";
+"patch.history_title" = "转换历史记录";
+"patch.history_clear" = "清空历史";
+"patch.history_empty" = "暂无转换历史记录";
+"patch.error.unsupported_format" = "不支持的补丁格式。";
+"patch.error.unsupported_version" = "不支持的补丁版本。";
+"patch.error.password_or_corrupt" = "密码错误或补丁包已损坏。";
+"patch.error.invalid_bundle" = "Bundle ID 无效。";
+"patch.error.unsafe_path" = "补丁包含不安全的目标路径。";
+"patch.error.size_limit" = "补丁超过 3.6 GB 大小限制。";
+"patch.error.duplicate_target" = "补丁包含重复的目标路径。";
+"patch.error.invalid_project" = "补丁项目无效。";
+"patch.error.keychain" = "无法访问钥匙串。";
+"patch.error.app_unavailable" = "目标应用 %@ 不可用。";
+"patch.error.target_occupied" = "目标应用 %@ 正在使用中。";
+"patch.error.already_applied" = "此补丁已应用。";
+"patch.error.restore_targets_changed" = "以下文件在应用补丁后已更改，无法恢复：\n%@";
+"patch.error.active_delete" = "无法删除正在使用的补丁。";
+"patch.error.symlink" = "不支持符号链接。";
+"patch.error.private_password" = "此私有补丁需要密码。";
+"patch.error.private_operation" = "私有补丁操作失败。";
+"patch.error.apply" = "无法应用补丁。";
+"patch.error.restore" = "无法恢复已修补的文件。";
+"patch.error.reset" = "无法重置补丁。";
+"patch.error.invalid_import_link" = "导入链接无效。";
+"patch.error.remote_import" = "无法下载远程补丁。";
+
+/* --- Tab 4: Merge Files (Gộp file) --- */
+"merge.header_title" = "传说对决 (AOV) 模组合并器";
+"merge.header_subtitle" = "由 VannHoc 独家开发的智能合并引擎";
+"merge.intro_desc" = "智能将 2 个或更多传说对决 (.zip) 模组包合并为一个标准 Resources/... 映射的 .zip 归档文件，完整保留所有英雄的回城、泉水、音效与击杀播报效果。";
+"merge.mod_list_title" = "模组文件列表 (.zip)";
+"merge.add_mods_btn" = "请选择 2 个或以上不同英雄的 .zip 模组文件";
+"merge.clear_all" = "全部清空";
+"merge.start_btn" = "开始合并模组文件 (%lld 个文件)";
+"merge.merging_progress" = "正在解包并进行二进制智能合并...";
+"merge.success_title" = "合并成功！";
+"merge.view_steps_btn" = "查看合并详细步骤 (%lld 步)";
+"merge.send_to_overwrite_tab" = "发送至覆盖写入页面 (传说对决)";
+"merge.save_or_share" = "保存 / 分享 .zip 文件";
+"merge.error_min_two" = "请至少选择 2 个 .zip 模组文件进行合并。";
+"merge.duplicate_skipped" = "已跳过重复文件 '%@'。";
+
+/* --- Windows Conflict Modal --- */
+"conflict.title_file_exists" = "文件重复冲突";
+"conflict.title_type_conflict" = "文件与文件夹同名冲突";
+"conflict.msg_file_exists" = "目标路径已存在同名文件。";
+"conflict.msg_file_overwrites_folder" = "源为文件，但目标为同名文件夹。";
+"conflict.msg_folder_overwrites_file" = "源为文件夹，但目标为同名文件。";
+"conflict.source_label" = "源路径:";
+"conflict.dest_label" = "目标路径:";
+"conflict.action_replace" = "覆盖 (Replace)";
+"conflict.action_replace_all" = "全部覆盖 (Replace All)";
+"conflict.action_skip" = "跳过 (Skip)";
+"conflict.action_cancel" = "取消 (Cancel)";
+
+/* --- Settings (Cài đặt) --- */
+"settings.title" = "设置";
+"settings.engine_status" = "引擎状态: Totorox 就绪";
+"settings.section_language" = "语言设置";
+"settings.section_project" = "项目信息";
+"settings.founder_label" = "创始人 & 核心开发者";
+"settings.app_name_label" = "应用名称";
+"settings.bundle_id_label" = "Bundle Identifier";
+"settings.supported_system" = "当前运行系统";
+"settings.section_engine" = "引擎与访问权限";
+"settings.container_access" = "MCM 容器访问权限";
+"settings.file_io_rule" = "文件 I/O 规则";
+"settings.file_io_rule_value" = "标准 Windows 覆盖机制";
+"settings.theme_mode" = "界面主题模式";
+"settings.theme_mode_value" = "浅色模式 (Light Mode)";
+"settings.section_maintenance" = "维护与诊断";
+"settings.clear_cache_btn" = "清理临时缓存与转换数据";
+"settings.clear_cache_confirm_title" = "确认清理缓存？";
+"settings.clear_cache_confirm_msg" = "将删除所有临时解压目录与补丁转换产生的临时文件以释放空间。";
+"settings.clear_cache_success" = "缓存已成功清理！";
+"settings.view_logs_btn" = "查看系统日志 (Logs)";
+"settings.section_credits" = "作者与版权";
+"settings.author_telegram" = "作者 Telegram";
+"settings.copyright_footer" = "@2026 Totorox. 由 VannHoc 开发构建。";
+
+/* --- Logs --- */
+"logs.title" = "系统日志";
+"logs.empty_title" = "无日志记录";
+"logs.empty_message" = "系统事件与诊断信息将显示在此处。";
+"logs.copy_all" = "复制全部";
+"logs.copied" = "已复制到剪贴板";
+
+/* --- Updates & Onboarding --- */
+"update.title" = "发现新版本";
+"update.message" = "GitHub 上已发布 Totorox %@。";
+"update.agree" = "立即更新";
+"update.dismiss" = "稍后";
+
+/* --- Onboarding --- */
+"onboarding.step" = "第 %@ 步，共 %@ 步";
+"onboarding.language_title" = "选择语言";
+"onboarding.language_subtitle" = "选择应用界面使用的语言。";
+"onboarding.language_hint" = "界面语言：%@";
+"onboarding.welcome_title" = "欢迎使用 Totorox";
+"onboarding.welcome_message" = "在一处管理应用容器、文件和补丁包。";
+"onboarding.welcome_badge" = "所有处理均在本机完成";
+"onboarding.versions_title" = "支持的 iOS 版本";
+"onboarding.versions_subtitle" = "以下为已验证的版本。";
+"onboarding.beta" = "测试版";
+"onboarding.developer_beta" = "开发者测试版 %@";
+"onboarding.public_beta" = "公开测试版 %@";
+"onboarding.versions_footer" = "当前设备：iOS %@ (%@)。未列出的版本可能仍可使用，但尚未验证。";
+"onboarding.install_title" = "安装方式检查";
+"onboarding.install_message" = "容器访问权限取决于 Totorox 的安装方式。";
+"onboarding.install_ok" = "使用有效且未被吊销的证书安装。";
+"onboarding.install_bad" = "请勿使用已被吊销、共享或企业证书。";
+"onboarding.install_jailbreak" = "越狱插件或严格的沙盒规则可能阻止容器访问。";
+"onboarding.install_footer" = "如果某项功能不可用，请先检查安装方式和 iOS 版本。";
+
+/* --- Exploit status --- */
+"status.not_attempted" = "未尝试";
+"status.ok_via" = "通过 %@ 成功";
+"status.failed_via" = "失败 %@ (%lld)";
+"status.unsupported_reason" = "不支持：%@";
+"method.simulator_preview" = "模拟器预览";
+
+/* --- Logs (extra actions) --- */
+"logs.clear" = "清除";
+"logs.copy" = "复制";
+"logs.share" = "分享";
+"accessibility.log_entry" = "日志条目 %lld：%@";
