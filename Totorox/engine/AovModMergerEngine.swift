@@ -132,26 +132,38 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
         try? handle.close()
 
+        if let data = try? Data(contentsOf: url),
+           let entries = try? PatchZipConverter.shared.parseZipArchive(data) {
+            return Self.summary(
+                url: url,
+                fileSize: fileSize,
+                entryNames: Array(entries.keys)
+            )
+        }
+
+        return Self.summary(url: url, fileSize: fileSize, entryNames: [])
+    }
+
+    /// Dựng `AovModSummary` từ danh sách đường dẫn đã có sẵn, tránh đọc lại gói mod
+    /// (mỗi gói có thể 150 MB nên đọc hai lần là lãng phí I/O và bộ nhớ).
+    static func summary(url: URL, fileSize: Int64, entryNames: [String]) -> AovModSummary {
         var heroIDs = Set<Int>()
         var skinIDs = Set<Int>()
         var resourceVersion: String?
 
-        if let data = try? Data(contentsOf: url),
-           let entries = try? PatchZipConverter.shared.parseZipArchive(data) {
-            for name in entries.keys {
-                let parts = name.replacingOccurrences(of: "\\", with: "/").split(separator: "/")
-                if resourceVersion == nil,
-                   parts.count >= 2,
-                   parts[0].caseInsensitiveCompare("Resources") == .orderedSame {
-                    resourceVersion = String(parts[1])
-                }
+        for name in entryNames {
+            let parts = name.replacingOccurrences(of: "\\", with: "/").split(separator: "/")
+            if resourceVersion == nil,
+               parts.count >= 2,
+               parts[0].caseInsensitiveCompare("Resources") == .orderedSame {
+                resourceVersion = String(parts[1])
+            }
+            for id in Self.heroIDs(inPath: name) {
+                heroIDs.insert(id)
+            }
+            if name.lowercased().contains("/skin") {
                 for id in Self.heroIDs(inPath: name) {
-                    heroIDs.insert(id)
-                }
-                if name.lowercased().contains("/skin") {
-                    for id in Self.heroIDs(inPath: name) {
-                        skinIDs.insert(id)
-                    }
+                    skinIDs.insert(id)
                 }
             }
         }
@@ -170,8 +182,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
         )
     }
 
-    /// Gộp nhiều gói mod `.zip`: upload nguyên gói lên `/api/v1/merge-plan`
-    /// và nhận lại `.zip` chứa `result.zip` đã gộp hoàn toàn trên server.
+    /// Gộp nhiều gói mod `.zip` theo mô hình hybrid.
+    ///
+    /// - Lượt 1: chỉ trích các file cấu hình mà server thật sự merge
+    ///   (`CommonActions` / `Databin` / `Thanos` / RP-RV metadata), đóng gói thành
+    ///   `config_bundle.zip` vài trăm KB rồi gửi `/api/v1/merge-plan`.
+    /// - Lượt 2: đọc lại từng gói mod một, ghép asset nặng vào `outURL` bằng writer
+    ///   streaming. Không gói mod nào (có thể 150 MB) bị upload, và RAM đỉnh chỉ ~1 gói.
     public func mergeModArchives(
         inputURLs: [URL],
         progress: @escaping @Sendable (String, Double) -> Void
@@ -182,11 +199,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         struct PreparedMod: Sendable {
             let summary: AovModSummary
-            let heavyEntries: [(path: String, data: Data)]
             let lightEntries: [(path: String, data: Data)]
         }
 
-        let engine = self
         let prepared = try await Task.detached(priority: .userInitiated) { () -> [PreparedMod] in
             var items: [PreparedMod] = []
             for (idx, url) in inputURLs.enumerated() {
@@ -225,24 +240,20 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
                 let entries = try PatchZipConverter.shared.parseZipArchive(data)
                 var light: [(path: String, data: Data)] = []
-                var heavy: [(path: String, data: Data)] = []
-                for (path, fileData) in entries {
-                    if Self.isServerConfigPath(path) || (fileData.count <= 2 * 1024 * 1024 && !path.lowercased().hasSuffix(".assetbundle")) {
+                for path in entries.keys.sorted() {
+                    guard let fileData = entries[path] else { continue }
+                    if Self.isServerConfigPath(path) {
                         light.append((path: path, data: fileData))
-                    } else {
-                        heavy.append((path: path, data: fileData))
                     }
                 }
 
-                let summary = (try? engine.inspectModArchive(at: url)) ?? AovModSummary(
+                let summary = Self.summary(
                     url: url,
-                    fileName: url.lastPathComponent,
                     fileSize: fileSize,
-                    heroID: nil,
-                    skinID: nil,
-                    resourceVersion: nil
+                    entryNames: Array(entries.keys)
                 )
-                items.append(PreparedMod(summary: summary, heavyEntries: heavy, lightEntries: light))
+                items.append(PreparedMod(summary: summary, lightEntries: light))
+                // `data` và `entries` được giải phóng khi vòng lặp sang mod kế tiếp.
             }
             return items
         }.value
@@ -271,7 +282,14 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 "skinIDs": mod.summary.skinIDs,
             ]
         }
-        let configObject: [String: Any] = ["mods": modPayloads]
+        // Server remap mọi `Resources/<ver>/...` về `target_version`. Client phải dùng
+        // cùng version đó khi ghép asset nặng, nếu không asset sẽ rơi vào thư mục
+        // version cũ và game bỏ qua.
+        let targetVersion = Self.resolveTargetVersion(summaries)
+        let configObject: [String: Any] = [
+            "mods": modPayloads,
+            "output": ["resourcesVersion": targetVersion],
+        ]
         guard let configData = try? JSONSerialization.data(withJSONObject: configObject, options: [.sortedKeys]),
               let configJSON = String(data: configData, encoding: .utf8) else {
             throw AovModMergerError.zipCreationFailed("Không dựng được cấu hình gửi máy chủ.")
@@ -308,17 +326,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
 
         // Hybrid: ghép file cấu hình đã merge (server) với tài nguyên nặng từ mod gốc (client).
-        let mergedPaths = Set(entries.keys)
-        var finalEntries: [(path: String, data: Data)] = []
-        // Tài nguyên nặng từ mod gốc đầu tiên (base) cho các đường dẫn chưa được server merge.
-        for entry in prepared.first?.heavyEntries ?? [] {
-            if !mergedPaths.contains(entry.path) {
-                finalEntries.append(entry)
-            }
-        }
-        for (path, data) in entries {
-            finalEntries.append((path: path, data: data))
-        }
+        let mergedPaths = Set(entries.keys.map { $0.lowercased() })
 
         let fileManager = FileManager.default
         let outDir = fileManager.temporaryDirectory
@@ -331,21 +339,51 @@ public final class AovModMergerEngine: @unchecked Sendable {
         )
         let outURL = outDir.appendingPathComponent(outName)
         try? fileManager.removeItem(at: outURL)
-        let resultZip: Data
+
+        // Hai lượt: upload chỉ cần config nhẹ; lượt ghép đọc lại từng gói mod một
+        // và ghi thẳng xuống đĩa. Nhờ vậy RAM đỉnh ~1 gói thay vì cả 4 gói mod.
         do {
-            resultZip = try PatchZipConverter.shared.buildZipArchive(entries: finalEntries)
-            try resultZip.write(to: outURL, options: .atomic)
+            let writer = try PatchZipConverter.ZipArchiveWriter(destinationURL: outURL)
+            defer { writer.cancel() }
+            var writtenPaths = Set<String>()
+
+            for mod in prepared {
+                progress("Đang ghép tài nguyên nặng: \(mod.summary.fileName)...", 0.85)
+                let entriesOfMod = try Self.readZipEntries(at: mod.summary.url)
+                for path in entriesOfMod.keys.sorted() {
+                    guard let fileData = entriesOfMod[path] else { continue }
+                    guard !Self.isServerConfigPath(path) else { continue }
+                    let remapped = Self.remapResourceVersion(
+                        path: path,
+                        from: mod.summary.resourceVersion,
+                        to: targetVersion
+                    )
+                    guard !mergedPaths.contains(remapped.lowercased()) else { continue }
+                    guard writtenPaths.insert(remapped.lowercased()).inserted else { continue }
+                    try writer.add(path: remapped, data: fileData)
+                }
+            }
+
+            for path in entries.keys.sorted() {
+                guard let data = entries[path] else { continue }
+                try writer.add(path: path, data: data)
+            }
+
+            try writer.finish()
         } catch {
+            try? fileManager.removeItem(at: outURL)
             throw AovModMergerError.zipCreationFailed(error.localizedDescription)
         }
+
+        let outputSize = Int64((try? outURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
 
         let finalLogs = logs + ["Máy chủ trả \(plan.mergePlan?.fileCount ?? 0) file đã gộp."]
         progress("Hoàn tất", 1.0)
 
         return AovMergeResult(
             outputZipURL: outURL,
-            outputFileSize: Int64(resultZip.count),
-            resourceVersion: summaries.compactMap(\.resourceVersion).max() ?? "",
+            outputFileSize: outputSize,
+            resourceVersion: targetVersion,
             mergedMods: summaries,
             totalFilesWritten: plan.mergePlan?.fileCount ?? 0,
             smartMergedConflicts: 0,
@@ -355,12 +393,80 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    /// Đường dẫn cấu hình nhẹ (chỉ dùng để hiển thị/chẩn đoán).
+    /// Đường dẫn cấu hình mà server thật sự chạy pipeline merge:
+    /// `CommonActions` (XML), `Databin` (MSES), `Thanos` (HeroSkin_1/2) và hai assetbundle
+    /// metadata `ResourcePackerInfoSetAll` / `ResourceVerificationInfoSetAll` (thêm entry
+    /// cho asset mới). Mọi file khác do client giữ nguyên và ghép local.
     static func isServerConfigPath(_ relativePath: String) -> Bool {
         let lower = relativePath.lowercased()
         return lower.contains("commonactions")
             || lower.contains("/databin/")
             || lower.contains("/thanos/")
+            || lower.hasSuffix("resourcepackerinfosetall.assetbundle")
+            || lower.hasSuffix("resourceverificationinfosetall.assetbundle")
+    }
+
+    /// Version Resources đích: lấy bản cao nhất trong các mod, fallback `1.64.1`
+    /// (mặc định của server khi client không chỉ định).
+    static func resolveTargetVersion(_ summaries: [AovModSummary]) -> String {
+        summaries
+            .compactMap(\.resourceVersion)
+            .max { compareVersion($0, $1) < 0 }
+            ?? "1.64.1"
+    }
+
+    /// So sánh version dạng `1.64.10` theo từng thành phần số (không so chuỗi thô).
+    private static func compareVersion(_ lhs: String, _ rhs: String) -> Int {
+        let left = lhs.split(separator: ".").map { Int($0) ?? 0 }
+        let right = rhs.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(left.count, right.count) {
+            let l = index < left.count ? left[index] : 0
+            let r = index < right.count ? right[index] : 0
+            if l != r { return l < r ? -1 : 1 }
+        }
+        return 0
+    }
+
+    /// Đổi tiền tố `Resources/<ver>/` sang version đích, giống `run_merge` phía server.
+    /// Chỉ đổi khi mod có version riêng và khác version đích.
+    static func remapResourceVersion(
+        path: String,
+        from sourceVersion: String?,
+        to targetVersion: String
+    ) -> String {
+        guard let sourceVersion,
+              !sourceVersion.isEmpty,
+              sourceVersion != targetVersion else {
+            return path
+        }
+        let sourcePrefix = "Resources/\(sourceVersion)/"
+        guard path.lowercased().hasPrefix(sourcePrefix.lowercased()) else {
+            return path
+        }
+        return "Resources/\(targetVersion)/" + path.dropFirst(sourcePrefix.count)
+    }
+
+    /// Đọc lại entry của một gói mod. Chỉ dùng ở lượt ghép để RAM đỉnh ~1 gói.
+    private static func readZipEntries(at url: URL) throws -> [String: Data] {
+        let hasSecurity = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurity { url.stopAccessingSecurityScopedResource() }
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw AovModMergerError.invalidArchive(
+                "\(url.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+        do {
+            return try PatchZipConverter.shared.parseZipArchive(data)
+        } catch {
+            throw AovModMergerError.invalidArchive(
+                "\(url.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
     }
 
     private static func heroIDs(inPath path: String) -> [Int] {

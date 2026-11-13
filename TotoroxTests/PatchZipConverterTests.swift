@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import Totorox
 
 /// Tests cho converter thin-client:
@@ -149,9 +150,14 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertTrue(AovModMergerEngine.isServerConfigPath(
             "Resources/1.64.1/Thanos/HeroSkin_1.bytes"
         ))
-        XCTAssertFalse(AovModMergerEngine.isServerConfigPath(
+        // RP/RV metadata do `merge_resource_packer` / `merge_resource_verification` xử lý.
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath(
             "Resources/1.64.1/AssetBundle/ResourcePackerInfoSetAll.assetbundle"
         ))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath(
+            "Resources/1.64.1/AssetBundle/ResourceVerificationInfoSetAll.assetbundle"
+        ))
+        // Asset tướng (nặng) không bao giờ lên server.
         XCTAssertFalse(AovModMergerEngine.isServerConfigPath(
             "Resources/1.64.1/Sound/hero_131.assetbundle"
         ))
@@ -184,8 +190,7 @@ final class PatchZipConverterTests: XCTestCase {
         }
     }
 
-    func testMergeModArchives_RequiresAtLeastTwoMods() async {
-        let engine = AovModMergerEngine.shared
+    func testMergeModArchives_RequiresAtLeastTwoMods() async {        let engine = AovModMergerEngine.shared
         let single = tempDirectory.appendingPathComponent("single.zip")
 
         do {
@@ -200,6 +205,163 @@ final class PatchZipConverterTests: XCTestCase {
         } catch {
             XCTFail("Expected AovModMergerError, got \(error)")
         }
+    }
+
+    // MARK: - Streaming ZIP writer
+
+    func testWriteZipArchive_MatchesInMemoryBuilder() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("Resources/1.64.1/a.bin", Data(repeating: 0x42, count: 4096)),
+            ("Resources/1.64.1/dir/b.bin", Data(repeating: 0x7F, count: 1024)),
+            ("Resources/1.64.1/empty.bin", Data())
+        ]
+        let url = tempDirectory.appendingPathComponent("streamed.zip")
+        try converter.writeZipArchive(entries: entries, to: url)
+
+        let written = try Data(contentsOf: url)
+        let parsed = try converter.parseZipArchive(written)
+        XCTAssertEqual(parsed.count, entries.count)
+        for entry in entries {
+            XCTAssertEqual(parsed[entry.path], entry.data, "Payload mismatch for \(entry.path)")
+        }
+        // Cùng nội dung với builder in-memory.
+        let inMemory = try converter.buildZipArchive(entries: entries)
+        XCTAssertEqual(parsed, try converter.parseZipArchive(inMemory))
+    }
+
+    func testWriteZipArchive_ReplacesExistingFile() throws {
+        let url = tempDirectory.appendingPathComponent("replace.zip")
+        try Data("stale".utf8).write(to: url)
+        try converter.writeZipArchive(entries: [("only.txt", Data("fresh".utf8))], to: url)
+
+        let parsed = try converter.parseZipArchive(try Data(contentsOf: url))
+        XCTAssertEqual(parsed["only.txt"], Data("fresh".utf8))
+    }
+
+    // MARK: - Envelope header stripping (giới hạn upload 15 MB)
+
+    /// Gói `.3105` 16 MB từng làm convert-header thất bại vì header gửi lên mang theo
+    /// `encryptedPayload`. Header phải luôn nhỏ, chỉ còn metadata.
+    func testEnvelopeWithoutPayload_StripsLargeBlobs() throws {
+        let packageID = UUID()
+        let contentKey = Data(repeating: 0xAB, count: 32)
+        let hugePayload = Data(repeating: 0x5A, count: 16 * 1024 * 1024)
+        let envelope: [String: Any] = [
+            "schemaVersion": 3,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": false,
+            "keyFingerprint": Data(SHA256.hash(data: contentKey)),
+            "encryptedPayload": hugePayload,
+            "publicContentKey": contentKey,
+            "previewBlob": Data(repeating: 0x11, count: 4 * 1024 * 1024),
+        ]
+        let serialized = try PropertyListSerialization.data(
+            fromPropertyList: envelope,
+            format: .binary,
+            options: 0
+        )
+        let package = Data("3105PATCH\0".utf8) + serialized
+        XCTAssertGreaterThan(package.count, APIService.maximumUploadBytes)
+
+        let header = try converter.envelopeWithoutPayload(package)
+
+        XCTAssertLessThan(
+            header.count,
+            8 * 1024,
+            "Header gửi server phải là metadata nhỏ, không kèm blob."
+        )
+        let stripped = try PropertyListSerialization.propertyList(
+            from: header.dropFirst(Data("3105PATCH\0".utf8).count),
+            options: [],
+            format: nil
+        ) as? [String: Any]
+        XCTAssertNil(stripped?["encryptedPayload"])
+        XCTAssertNil(stripped?["previewBlob"])
+        XCTAssertEqual(stripped?["packageID"] as? String, packageID.uuidString)
+        XCTAssertEqual(stripped?["schemaVersion"] as? Int, 3)
+        XCTAssertEqual(stripped?["publicContentKey"] as? Data, contentKey)
+    }
+
+    func testEnvelopeWithoutPayload_KeepsPasswordFields() throws {
+        let packageID = UUID()
+        let salt = Data(repeating: 0x22, count: 16)
+        let wrapped = Data(repeating: 0x33, count: 60)
+        let envelope: [String: Any] = [
+            "schemaVersion": 3,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": true,
+            "keyAADVersion": 3,
+            "keyFingerprint": Data(repeating: 0x44, count: 32),
+            "kdfSalt": salt,
+            "kdfIterations": 250_000,
+            "wrappedContentKey": wrapped,
+            "encryptedPayload": Data(repeating: 0x55, count: 1024 * 1024),
+        ]
+        let serialized = try PropertyListSerialization.data(
+            fromPropertyList: envelope,
+            format: .binary,
+            options: 0
+        )
+        let header = try converter.envelopeWithoutPayload(Data("3105PATCH\0".utf8) + serialized)
+
+        let stripped = try PropertyListSerialization.propertyList(
+            from: header.dropFirst(Data("3105PATCH\0".utf8).count),
+            options: [],
+            format: nil
+        ) as? [String: Any]
+        XCTAssertEqual(stripped?["isPasswordProtected"] as? Bool, true)
+        XCTAssertEqual(stripped?["kdfSalt"] as? Data, salt)
+        XCTAssertEqual(stripped?["kdfIterations"] as? Int, 250_000)
+        XCTAssertEqual(stripped?["wrappedContentKey"] as? Data, wrapped)
+        XCTAssertNil(stripped?["encryptedPayload"])
+    }
+
+    // MARK: - Merge hybrid: version đích
+
+    func testResolveTargetVersion_PicksHighestAndFallsBack() {
+        func summary(_ version: String?) -> AovModSummary {
+            AovModSummary(
+                url: URL(fileURLWithPath: "/tmp/x.zip"),
+                fileName: "x.zip",
+                fileSize: 1,
+                heroID: nil,
+                skinID: nil,
+                resourceVersion: version
+            )
+        }
+        XCTAssertEqual(
+            AovModMergerEngine.resolveTargetVersion([summary("1.64.1"), summary("1.64.10")]),
+            "1.64.10",
+            "So sánh phải theo từng thành phần số, không theo chuỗi."
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.resolveTargetVersion([summary(nil), summary("1.63.4")]),
+            "1.63.4"
+        )
+        XCTAssertEqual(AovModMergerEngine.resolveTargetVersion([summary(nil)]), "1.64.1")
+    }
+
+    func testRemapResourceVersion_RewritesPrefixOnly() {
+        let remapped = AovModMergerEngine.remapResourceVersion(
+            path: "Resources/1.63.4/Ages/Hero_593.assetbundle",
+            from: "1.63.4",
+            to: "1.64.1"
+        )
+        XCTAssertEqual(remapped, "Resources/1.64.1/Ages/Hero_593.assetbundle")
+
+        let untouched = AovModMergerEngine.remapResourceVersion(
+            path: "Resources/1.64.1/Ages/Hero_593.assetbundle",
+            from: "1.64.1",
+            to: "1.64.1"
+        )
+        XCTAssertEqual(untouched, "Resources/1.64.1/Ages/Hero_593.assetbundle")
+
+        let noVersion = AovModMergerEngine.remapResourceVersion(
+            path: "Resources/1.63.4/Ages/Hero_593.assetbundle",
+            from: nil,
+            to: "1.64.1"
+        )
+        XCTAssertEqual(noVersion, "Resources/1.63.4/Ages/Hero_593.assetbundle")
     }
 
     // MARK: - Output filename (APFS limit protection)

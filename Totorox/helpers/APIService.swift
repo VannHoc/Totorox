@@ -59,14 +59,24 @@ final class APIService {
     /// Khoá `UserDefaults` lưu base URL động do người dùng cấu hình.
     static let baseURLDefaultsKey = "totorox.api.baseURL"
 
-    /// Giới hạn tổng kích thước upload (server giới hạn 15 MB — giữ thấp để tránh upload thất bại).
+    /// Giới hạn tổng kích thước upload cho `convert-header` (server chỉ nhận metadata nhẹ).
     static let maximumUploadBytes: Int64 = 15 * 1024 * 1024
 
-    /// Session mặc định: `timeoutIntervalForRequest = 60` giây cho mọi request.
+    /// Giới hạn cho `merge-plan`: `config_bundle.zip` chỉ chứa file cấu hình nhẹ
+    /// (`CommonActions` / `Databin` / `Thanos`), không bao giờ là gói mod đầy đủ.
+    static let maximumMergeBundleBytes: Int64 = 15 * 1024 * 1024
+
+    /// Timeout cho request metadata thông thường.
+    static let requestTimeout: TimeInterval = 60
+
+    /// Timeout cho `merge-plan` — server phải chạy toàn bộ pipeline UnityFS/MSES/HeroSkin.
+    static let mergeTimeout: TimeInterval = 300
+
+    /// Session mặc định: timeout theo từng request, không chặn cứng ở 60 giây.
     static let defaultSession: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 60
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = mergeTimeout
         return URLSession(configuration: configuration)
     }()
 
@@ -277,6 +287,12 @@ final class APIService {
     ) async -> Result<MergePlanResponse, APIServiceError> {
         let path = "api/v1/merge-plan"
         do {
+            if let fileURL,
+               let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+               Int64(size) > APIService.maximumMergeBundleBytes {
+                return .failure(.payloadTooLarge)
+            }
+
             let body = try buildMultipartBody(
                 fields: [
                     "config_json": configJSON ?? "{}",
@@ -292,6 +308,7 @@ final class APIService {
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            request.timeoutInterval = APIService.mergeTimeout
 
             let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
@@ -323,7 +340,7 @@ final class APIService {
     private func applyAuthHeaders(to request: inout URLRequest, licenseKey: String, hwid: String) {
         request.setValue(licenseKey, forHTTPHeaderField: "X-License-Key")
         request.setValue(hwid, forHTTPHeaderField: "X-HWID")
-        request.timeoutInterval = 60
+        request.timeoutInterval = APIService.requestTimeout
     }
 
     // MARK: - Multipart builder (nhẹ, dùng cho 1-2 file nhỏ)

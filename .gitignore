@@ -28,3 +28,6 @@ __pycache__/
 Totorox-engine-jgdecrypted.txt
 Totorox-engine-jgencrypted.txt
 ion to 1.2*
+
+# Agent/tooling state
+.kilo/
