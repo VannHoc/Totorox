@@ -255,7 +255,12 @@ final class APIService {
                 packageBytesB64: raw.packageBytesB64,
                 payloadBytesB64: raw.payloadBytesB64,
                 zipBytesB64: raw.zipBytesB64,
-                packageId: raw.packageId
+                packageId: raw.packageId,
+                schemaVersion: raw.schemaVersion,
+                kdfSaltB64: raw.kdfSaltB64,
+                kdfIterations: raw.kdfIterations,
+                wrappedContentKeyB64: raw.wrappedContentKeyB64,
+                publicContentKeyB64: raw.publicContentKeyB64
             ))
         } catch {
             return .failure(.transport(error.localizedDescription))
@@ -532,6 +537,11 @@ struct ConvertHeaderResponseBody: Decodable {
     let payloadBytesB64: String?
     let zipBytesB64: String?
     let packageId: String?
+    let schemaVersion: Int?
+    let kdfSaltB64: String?
+    let kdfIterations: Int?
+    let wrappedContentKeyB64: String?
+    let publicContentKeyB64: String?
 
     private enum CodingKeys: String, CodingKey {
         case ok
@@ -547,6 +557,11 @@ struct ConvertHeaderResponseBody: Decodable {
         case payloadBytesB64 = "payload_bytes_b64"
         case zipBytesB64 = "zip_bytes_b64"
         case packageId = "package_id"
+        case schemaVersion = "schema_version"
+        case kdfSaltB64 = "kdf_salt_b64"
+        case kdfIterations = "kdf_iterations"
+        case wrappedContentKeyB64 = "wrapped_content_key_b64"
+        case publicContentKeyB64 = "public_content_key_b64"
     }
 }
 
@@ -564,6 +579,11 @@ struct ConvertHeaderResponse {
     let payloadBytesB64: String?
     let zipBytesB64: String?
     let packageId: String?
+    let schemaVersion: Int?
+    let kdfSaltB64: String?
+    let kdfIterations: Int?
+    let wrappedContentKeyB64: String?
+    let publicContentKeyB64: String?
 }
 
 struct MergePlanResponseBody: Decodable {
@@ -591,6 +611,7 @@ struct MergePlanBody: Decodable {
     let loadedMods: [LoadedModBody]?
     let bundleVersions: [BundleVersionBody]?
     let note: String?
+    let baseModIndex: Int?
 
     private enum CodingKeys: String, CodingKey {
         case outputFilename = "output_filename"
@@ -599,6 +620,7 @@ struct MergePlanBody: Decodable {
         case loadedMods = "loaded_mods"
         case bundleVersions = "bundle_versions"
         case note
+        case baseModIndex = "base_mod_index"
     }
 }
 

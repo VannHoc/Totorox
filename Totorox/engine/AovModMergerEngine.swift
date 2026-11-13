@@ -182,10 +182,10 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         struct PreparedMod: Sendable {
             let summary: AovModSummary
-            let zipBase64: String
+            let heavyEntries: [(path: String, data: Data)]
+            let lightEntries: [(path: String, data: Data)]
         }
 
-        // Đọc + base64 gói mod (có thể vài chục MB) ngoài MainActor.
         let engine = self
         let prepared = try await Task.detached(priority: .userInitiated) { () -> [PreparedMod] in
             var items: [PreparedMod] = []
@@ -223,6 +223,17 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     throw AovModMergerError.invalidArchive("\(url.lastPathComponent) (Không phải tệp .zip hợp lệ)")
                 }
 
+                let entries = try PatchZipConverter.shared.parseZipArchive(data)
+                var light: [(path: String, data: Data)] = []
+                var heavy: [(path: String, data: Data)] = []
+                for (path, fileData) in entries {
+                    if Self.isServerConfigPath(path) || (fileData.count <= 2 * 1024 * 1024 && !path.lowercased().hasSuffix(".assetbundle")) {
+                        light.append((path: path, data: fileData))
+                    } else {
+                        heavy.append((path: path, data: fileData))
+                    }
+                }
+
                 let summary = (try? engine.inspectModArchive(at: url)) ?? AovModSummary(
                     url: url,
                     fileName: url.lastPathComponent,
@@ -231,32 +242,45 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     skinID: nil,
                     resourceVersion: nil
                 )
-                items.append(PreparedMod(summary: summary, zipBase64: data.base64EncodedString()))
+                items.append(PreparedMod(summary: summary, heavyEntries: heavy, lightEntries: light))
             }
             return items
         }.value
 
         let summaries = prepared.map(\.summary)
         let logs = summaries.map { "Đã đọc \($0.fileName) (\($0.fileSize) byte)." }
+
+        // Đóng gói config nhẹ thành config_bundle.zip theo layout mod_<idx>/...
+        var configBundleEntries: [(path: String, data: Data)] = []
+        for (idx, mod) in prepared.enumerated() {
+            for entry in mod.lightEntries {
+                configBundleEntries.append((path: "mod_\(idx)/\(entry.path)", data: entry.data))
+            }
+        }
+        let configBundleData = try PatchZipConverter.shared.buildZipArchive(entries: configBundleEntries)
+        let workDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TotoroxMerge_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        let configBundleURL = workDir.appendingPathComponent("config_bundle.zip")
+        try configBundleData.write(to: configBundleURL, options: .atomic)
+
         let modPayloads: [[String: Any]] = prepared.map { mod in
             [
                 "name": mod.summary.fileName,
-                "zip_b64": mod.zipBase64,
                 "heroIDs": mod.summary.heroIDs,
                 "skinIDs": mod.summary.skinIDs,
             ]
         }
-
         let configObject: [String: Any] = ["mods": modPayloads]
         guard let configData = try? JSONSerialization.data(withJSONObject: configObject, options: [.sortedKeys]),
               let configJSON = String(data: configData, encoding: .utf8) else {
             throw AovModMergerError.zipCreationFailed("Không dựng được cấu hình gửi máy chủ.")
         }
 
-        progress("Đang gửi \(inputURLs.count) gói mod lên máy chủ để gộp...", 0.35)
+        progress("Đang gửi config nhẹ lên máy chủ để gộp...", 0.35)
 
         let planResult = await APIService.shared.mergePlan(
-            fileURL: nil,
+            fileURL: configBundleURL,
             configJSON: configJSON,
             licenseKey: LicenseManager.shared.licenseKey,
             hwid: LicenseManager.shared.deviceIdentifier
@@ -277,11 +301,23 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         guard let encoded = plan.zipBytesB64,
               let bundle = Data(base64Encoded: encoded),
-              let entries = try? PatchZipConverter.shared.parseZipArchive(bundle),
-              let resultZip = entries["result.zip"] else {
+              let entries = try? PatchZipConverter.shared.parseZipArchive(bundle) else {
             throw AovModMergerError.zipCreationFailed(
                 plan.note ?? "Máy chủ không trả gói kết quả (.zip)."
             )
+        }
+
+        // Hybrid: ghép file cấu hình đã merge (server) với tài nguyên nặng từ mod gốc (client).
+        let mergedPaths = Set(entries.keys)
+        var finalEntries: [(path: String, data: Data)] = []
+        // Tài nguyên nặng từ mod gốc đầu tiên (base) cho các đường dẫn chưa được server merge.
+        for entry in prepared.first?.heavyEntries ?? [] {
+            if !mergedPaths.contains(entry.path) {
+                finalEntries.append(entry)
+            }
+        }
+        for (path, data) in entries {
+            finalEntries.append((path: path, data: data))
         }
 
         let fileManager = FileManager.default
@@ -296,6 +332,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
         let outURL = outDir.appendingPathComponent(outName)
         try? fileManager.removeItem(at: outURL)
         do {
+            let resultZip = try PatchZipConverter.shared.buildZipArchive(entries: finalEntries)
             try resultZip.write(to: outURL, options: .atomic)
         } catch {
             throw AovModMergerError.zipCreationFailed(error.localizedDescription)

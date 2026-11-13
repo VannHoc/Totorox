@@ -195,19 +195,34 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.sizeLimitExceeded
         }
 
+        let envelope = try parseEnvelope(patchData)
+        let headerOnly = try envelopeWithoutPayload(patchData)
         let response = try await sendConvertHeader(
             mode: "from_zip",
             password: password,
-            payload: patchData,
-            fileName: "package.3105"
+            payload: headerOnly,
+            fileName: "header.3105"
         )
-
-        guard let encodedPayload = response.payloadBytesB64,
-              let payloadBytes = Data(base64Encoded: encodedPayload) else {
-            throw PatchZipConverterError.corruptedArchive(
-                response.note ?? "Máy chủ không trả payload đã giải mã."
-            )
+        guard let contentKeyB64 = response.contentKeyB64,
+              let contentKey = Data(base64Encoded: contentKeyB64) else {
+            throw PatchZipConverterError.corruptedArchive(response.note ?? "Máy chủ không trả content key.")
         }
+
+        guard let encryptedPayload = envelope.encryptedPayload else {
+            throw PatchZipConverterError.invalidProject("Gói .3105 thiếu encryptedPayload.")
+        }
+        let payloadBytes = try openPayload(
+            encryptedPayload: encryptedPayload,
+            contentKey: contentKey,
+            packageID: envelope.packageID,
+            schemaVersion: envelope.schemaVersion,
+            passwordProtected: envelope.isPasswordProtected,
+            password: password,
+            kdfSalt: envelope.kdfSalt,
+            kdfIterations: envelope.kdfIterations,
+            wrappedContentKey: envelope.wrappedContentKey,
+            publicContentKey: envelope.publicContentKey
+        )
 
         let decoder = PropertyListDecoder()
         if let wrapper = try? decoder.decode(PatchProjectPayload.self, from: payloadBytes) {
@@ -266,20 +281,9 @@ public final class PatchZipConverter {
             return patchData
         }
 
-        // Server giải mã envelope và dựng luôn tệp .zip (patch.json + payload).
-        let response = try await sendConvertHeader(
-            mode: "from_zip",
-            password: password,
-            payload: patchData,
-            fileName: "source.3105"
-        )
-        guard let encodedZip = response.zipBytesB64,
-              let zipBytes = Data(base64Encoded: encodedZip) else {
-            throw PatchZipConverterError.corruptedArchive(
-                response.note ?? "Máy chủ không trả tệp .zip."
-            )
-        }
-        return zipBytes
+        // Hybrid: server chỉ trả content key; client tự giải mã và dựng .zip local.
+        let project = try await decodeProject(patchData: patchData, password: password)
+        return try buildProjectZip(project)
     }
 
     // MARK: - .zip -> .3105 Conversion
@@ -330,21 +334,33 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.corruptedArchive("Tệp nguồn không phải ZIP hợp lệ.")
         }
 
+        let project = try buildPatchProject(fromZipData: zipData)
+        let metadataPayload = try manifestData(for: project)
         let response = try await sendConvertHeader(
             mode: "to_zip",
             password: password,
-            payload: zipData,
-            fileName: "source.zip"
+            payload: metadataPayload,
+            fileName: "manifest.json"
         )
-
-        guard let encodedPackage = response.packageBytesB64,
-              let packageBytes = Data(base64Encoded: encodedPackage) else {
-            throw PatchZipConverterError.corruptedArchive(
-                response.note ?? "Máy chủ không trả gói .3105."
-            )
+        guard let contentKeyB64 = response.contentKeyB64,
+              let contentKey = Data(base64Encoded: contentKeyB64) else {
+            throw PatchZipConverterError.corruptedArchive(response.note ?? "Máy chủ không trả content key.")
         }
-
-        return packageBytes
+        let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
+        let schemaVersion = 3
+        let isProtected = password != nil
+        let sealedPayload = try sealPayload(project: project, contentKey: contentKey, packageID: packageID, schemaVersion: 3)
+        let envelopeData = try buildEnvelope(
+            project: project,
+            packageID: packageID,
+            schemaVersion: 3,
+            contentKey: contentKey,
+            isProtected: isProtected,
+            password: password,
+            response: response,
+            sealedPayload: sealedPayload
+        )
+        return Data("3105PATCH\0".utf8) + envelopeData
     }
 
     // MARK: - Server transport
@@ -711,6 +727,360 @@ public final class PatchZipConverter {
         return crc ^ 0xFFFFFFFF
     }
 }
+
+// MARK: - Hybrid helpers
+
+    private struct ParsedEnvelope {
+        let packageID: UUID
+        let schemaVersion: Int
+        let isPasswordProtected: Bool
+        let encryptedPayload: Data?
+        let kdfSalt: Data?
+        let kdfIterations: Int?
+        let wrappedContentKey: Data?
+        let publicContentKey: Data?
+    }
+
+    private func parseEnvelope(_ data: Data) throws -> ParsedEnvelope {
+        let magic = Data("3105PATCH\0".utf8)
+        guard data.count > magic.count,
+              data.prefix(magic.count) == magic else {
+            throw PatchZipConverterError.invalidProject("Thiếu magic 3105PATCH.")
+        }
+        let body = data.dropFirst(magic.count)
+        guard let plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
+            throw PatchZipConverterError.invalidProject("Envelope không phải plist hợp lệ.")
+        }
+        guard let packageIDString = plist["packageID"] as? String,
+              let packageID = UUID(uuidString: packageIDString) else {
+            throw PatchZipConverterError.invalidProject("packageID không hợp lệ.")
+        }
+        let schemaVersion = plist["schemaVersion"] as? Int ?? 0
+        let isProtected = plist["isPasswordProtected"] as? Bool ?? false
+        let encryptedPayload = plist["encryptedPayload"] as? Data
+        let kdfSalt = plist["kdfSalt"] as? Data
+        let kdfIterations = plist["kdfIterations"] as? Int
+        let wrappedContentKey = plist["wrappedContentKey"] as? Data
+        let publicContentKey = plist["publicContentKey"] as? Data
+        return ParsedEnvelope(
+            packageID: packageID,
+            schemaVersion: schemaVersion,
+            isPasswordProtected: isProtected,
+            encryptedPayload: encryptedPayload,
+            kdfSalt: kdfSalt,
+            kdfIterations: kdfIterations,
+            wrappedContentKey: wrappedContentKey,
+            publicContentKey: publicContentKey
+        )
+    }
+
+    private func envelopeWithoutPayload(_ data: Data) throws -> Data {
+        let envelope = try parseEnvelope(data)
+        let magic = Data("3105PATCH\0".utf8)
+        let body = data.dropFirst(magic.count)
+        guard var plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
+            throw PatchZipConverterError.invalidProject("Envelope không phải plist hợp lệ.")
+        }
+        plist.removeValue(forKey: "encryptedPayload")
+        let serialized = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
+        return magic + serialized
+    }
+
+    private func openPayload(
+        encryptedPayload: Data,
+        contentKey: Data,
+        packageID: UUID,
+        schemaVersion: Int,
+        passwordProtected: Bool,
+        password: String?,
+        kdfSalt: Data?,
+        kdfIterations: Int?,
+        wrappedContentKey: Data?,
+        publicContentKey: Data?
+    ) throws -> Data {
+        let versions = [schemaVersion] + (1...16).filter { $0 != schemaVersion }
+        for version in versions {
+            let aad = Data("3105PATCH/v\(version)/payload/\(packageID.uuidString)".utf8)
+            do {
+                return try aesGCMOpen(ciphertext: encryptedPayload, key: contentKey, aad: aad)
+            } catch {
+                continue
+            }
+        }
+        throw PatchZipConverterError.invalidProject("Không giải mã được payload AES-GCM.")
+    }
+
+    private func aesGCMSeal(plaintext: Data, key: Data, aad: Data) throws -> Data {
+        let nonce = try AES.GCM.Nonce(data: Data(repeating: 0, count: 12))
+        let sealed = try AES.GCM.seal(plaintext, using: SymmetricKey(data: key), nonce: nonce, authenticating: aad)
+        return sealed.ciphertext + sealed.tag
+    }
+
+    private func aesGCMOpen(ciphertext: Data, key: Data, aad: Data) throws -> Data {
+        let nonce = try AES.GCM.Nonce(data: Data(repeating: 0, count: 12))
+        let tag = ciphertext.suffix(16)
+        let ct = ciphertext.dropLast(16)
+        let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct, tag: tag)
+        return try AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: aad)
+    }
+
+    public func buildProjectZip(_ project: PatchProject) throws -> Data {
+        let fallbackBundle = project.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest"
+        var payloadEntries: [(path: String, data: Data)] = []
+        var manifestRules: [[String: Any]] = []
+        var seenPayloadPaths = Set<String>()
+        for rule in project.rules {
+            let bundleID = rule.bundleID.isEmpty ? fallbackBundle : rule.bundleID
+            let relativePath = rule.relativePath
+            let payloadPath = "payload/\(bundleID)/\(relativePath)"
+            if !seenPayloadPaths.contains(payloadPath) {
+                seenPayloadPaths.insert(payloadPath)
+                payloadEntries.append((path: payloadPath, data: rule.replacementData))
+            }
+            var entry: [String: Any] = [
+                "id": rule.id.uuidString,
+                "bundleID": bundleID,
+                "relativePath": relativePath,
+                "replacementFilename": rule.replacementFilename,
+                "payloadPath": payloadPath,
+            ]
+            if rule.operation != "replace" { entry["operation"] = rule.operation }
+            if rule.containerKind != "application" { entry["containerKind"] = rule.containerKind }
+            manifestRules.append(entry)
+        }
+        let formatter = ISO8601DateFormatter()
+        let now = formatter.string(from: Date())
+        let manifest: [String: Any] = [
+            "schemaVersion": 3,
+            "id": project.id.uuidString,
+            "name": project.name,
+            "author": project.author,
+            "isPrivate": project.isPrivate,
+            "createdAt": now,
+            "updatedAt": now,
+            "bundleIdentifiers": project.bundleIdentifiers,
+            "directories": project.directories.map { dir in
+                [
+                    "id": dir.id.uuidString,
+                    "bundleID": dir.bundleID,
+                    "relativePath": dir.relativePath,
+                ] as [String: Any]
+            },
+            "rules": manifestRules,
+        ]
+        let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+        payloadEntries.append((path: "patch.json", data: manifestData))
+        return try buildZipArchive(entries: payloadEntries)
+    }
+
+    private func manifestData(for project: PatchProject) throws -> Data {
+        let fallbackBundle = project.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest"
+        var manifestRules: [[String: Any]] = []
+        for rule in project.rules {
+            let bundleID = rule.bundleID.isEmpty ? fallbackBundle : rule.bundleID
+            let relativePath = rule.relativePath
+            let payloadPath = "payload/\(bundleID)/\(relativePath)"
+            var entry: [String: Any] = [
+                "id": rule.id.uuidString,
+                "bundleID": bundleID,
+                "relativePath": relativePath,
+                "replacementFilename": rule.replacementFilename,
+                "payloadPath": payloadPath,
+            ]
+            if rule.operation != "replace" { entry["operation"] = rule.operation }
+            if rule.containerKind != "application" { entry["containerKind"] = rule.containerKind }
+            manifestRules.append(entry)
+        }
+        let formatter = ISO8601DateFormatter()
+        let now = formatter.string(from: Date())
+        let manifest: [String: Any] = [
+            "schemaVersion": 3,
+            "id": project.id.uuidString,
+            "name": project.name,
+            "author": project.author,
+            "isPrivate": project.isPrivate,
+            "createdAt": now,
+            "updatedAt": now,
+            "bundleIdentifiers": project.bundleIdentifiers,
+            "directories": project.directories.map { dir in
+                [
+                    "id": dir.id.uuidString,
+                    "bundleID": dir.bundleID,
+                    "relativePath": dir.relativePath,
+                ] as [String: Any]
+            },
+            "rules": manifestRules,
+        ]
+        return try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+    }
+
+    private func buildPatchProject(fromZipData zipData: Data) throws -> PatchProject {
+        let entries = try parseZipArchive(zipData)
+        // Try manifest
+        var manifest: [String: Any]?
+        for name in ["patch.json", "manifest.json"] {
+            if let data = entries[name],
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                manifest = json
+                break
+            }
+        }
+
+        func normalizedBundle(_ raw: String) -> String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "com.apple.mobile.MobileHouseArrest" : trimmed
+        }
+
+        func payloadFor(relativePath: String, payloadPath: String, bundleID: String) -> Data {
+            let candidates = [
+                payloadPath,
+                relativePath,
+                "payload/\(normalizedBundle(bundleID))/\(relativePath)",
+                "\(normalizedBundle(bundleID))/\(relativePath)",
+            ]
+            for candidate in candidates {
+                let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty, let data = entries[trimmed] {
+                    return data
+                }
+            }
+            return Data()
+        }
+
+        if let manifest = manifest,
+           let rulesArray = manifest["rules"] as? [[String: Any]] {
+            var rules: [PatchRule] = []
+            for item in rulesArray {
+                let relativePath = (item["relativePath"] as? String) ?? ""
+                guard !relativePath.isEmpty else { continue }
+                let bundleID = normalizedBundle((item["bundleID"] as? String) ?? "")
+                let payload = payloadFor(
+                    relativePath: relativePath,
+                    payloadPath: (item["payloadPath"] as? String) ?? "",
+                    bundleID: bundleID
+                )
+                let rule = PatchRule(
+                    id: (item["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID(),
+                    bundleID: bundleID,
+                    relativePath: relativePath,
+                    replacementFilename: (item["replacementFilename"] as? String) ?? (relativePath as NSString).lastPathComponent,
+                    replacementData: payload,
+                    operation: (item["operation"] as? String) ?? "replace",
+                    containerKind: (item["containerKind"] as? String) ?? "application"
+                )
+                rules.append(rule)
+            }
+            if !rules.isEmpty {
+                let bundleIdentifiers = (manifest["bundleIdentifiers"] as? [String]) ?? []
+                let directoriesRaw = (manifest["directories"] as? [[String: Any]]) ?? []
+                let directories = directoriesRaw.map { dir in
+                    PatchDirectory(
+                        id: (dir["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID(),
+                        bundleID: normalizedBundle((dir["bundleID"] as? String) ?? ""),
+                        relativePath: (dir["relativePath"] as? String) ?? ""
+                    )
+                }
+                return PatchProject(
+                    id: (manifest["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID(),
+                    name: (manifest["name"] as? String) ?? "Patch",
+                    author: (manifest["author"] as? String) ?? "",
+                    isPrivate: (manifest["isPrivate"] as? Bool) ?? false,
+                    bundleIdentifiers: bundleIdentifiers,
+                    directories: directories,
+                    rules: rules
+                )
+            }
+        }
+
+        // Infer bundle id and paths
+        var detectedBundle: String?
+        for name in entries.keys.sorted() {
+            if name.hasPrefix("__MACOSX/") || name.hasSuffix(".DS_Store") { continue }
+            for part in name.split(separator: "/") {
+                let candidate = String(part)
+                if candidate.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil {
+                    detectedBundle = candidate
+                    break
+                }
+            }
+            if detectedBundle != nil { break }
+        }
+        let bundleID = detectedBundle ?? "com.apple.mobile.MobileHouseArrest"
+
+        var rules: [PatchRule] = []
+        for name in entries.keys.sorted() {
+            if name == "patch.json" || name == "manifest.json" { continue }
+            if name.hasPrefix("__MACOSX/") || name.hasSuffix(".DS_Store") { continue }
+            var relativePath = name
+            for prefix in ["payload/\(bundleID)/", "\(bundleID)/"] {
+                if relativePath.hasPrefix(prefix) {
+                    relativePath = String(relativePath.dropFirst(prefix.count))
+                    break
+                }
+            }
+            guard !relativePath.isEmpty else { continue }
+            let rule = PatchRule(
+                bundleID: bundleID,
+                relativePath: relativePath,
+                replacementFilename: (relativePath as NSString).lastPathComponent,
+                replacementData: entries[name] ?? Data(),
+                operation: "replace",
+                containerKind: "application"
+            )
+            rules.append(rule)
+        }
+        guard !rules.isEmpty else {
+            throw PatchZipConverterError.invalidProject("ZIP không chứa rule nào.")
+        }
+        return PatchProject(
+            name: "Converted Patch",
+            author: "Totorox",
+            bundleIdentifiers: [bundleID],
+            rules: rules
+        )
+    }
+
+    private func buildEnvelope(
+        project: PatchProject,
+        packageID: UUID,
+        schemaVersion: Int,
+        contentKey: Data,
+        isProtected: Bool,
+        password: String?,
+        response: ConvertHeaderResponse,
+        sealedPayload: Data
+    ) throws -> Data {
+        var envelope: [String: Any] = [
+            "schemaVersion": schemaVersion,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": isProtected,
+            "keyFingerprint": Data(SHA256.hash(data: contentKey)),
+            "encryptedPayload": sealedPayload,
+        ]
+        if isProtected {
+            envelope["keyAADVersion"] = schemaVersion
+            if let saltB64 = response.kdfSaltB64,
+               let salt = Data(base64Encoded: saltB64) {
+                envelope["kdfSalt"] = salt
+            }
+            if let iterations = response.kdfIterations {
+                envelope["kdfIterations"] = iterations
+            }
+            if let wrappedB64 = response.wrappedContentKeyB64,
+               let wrapped = Data(base64Encoded: wrappedB64) {
+                envelope["wrappedContentKey"] = wrapped
+            }
+        } else {
+            envelope["publicContentKey"] = contentKey
+        }
+        return try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+    }
+
+    private func sealPayload(project: PatchProject, contentKey: Data, packageID: UUID, schemaVersion: Int) throws -> Data {
+        let plistData = try PropertyListEncoder().encode(PatchProjectPayload(project: project))
+        let aad = Data("3105PATCH/v\(schemaVersion)/payload/\(packageID.uuidString)".utf8)
+        return try aesGCMSeal(plaintext: plistData, key: contentKey, aad: aad)
+    }
 
 // MARK: - Binary Data Helpers
 
