@@ -3,17 +3,32 @@ import UIKit
 
 struct ContentView: View {
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
+    @ObservedObject private var license = LicenseManager.shared
     @State private var showSettings: Bool = false
     @State private var showLogs: Bool = false
 
     var body: some View {
+        Group {
+            if license.status.isActive {
+                mainAppBody
+            } else {
+                activationBody
+            }
+        }
+        .background(TotoroxTheme.pageBackground)
+    }
+
+    /// Chưa có license hợp lệ thì chỉ hiện màn hình kích hoạt.
+    private var activationBody: some View {
+        ActivationView()
+    }
+
+    private var mainAppBody: some View {
         VStack(spacing: 0) {
-            // Main Top Bar (Avatar + Engine Status + Title + Gear Button)
             TotoroxTopHeader {
                 showSettings = true
             }
 
-            // Tab View Body
             ZStack {
                 switch navCoordinator.selectedTab {
                 case .overwrite:
@@ -28,10 +43,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Custom Clean White TabBar with Indicator
             TotoroxTabBar(selectedTab: $navCoordinator.selectedTab)
         }
-        .background(TotoroxTheme.pageBackground)
         .preferredColorScheme(.light)
         .sheet(isPresented: $showSettings) {
             SettingsView()

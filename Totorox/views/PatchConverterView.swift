@@ -342,8 +342,10 @@ struct PatchConverterView: View {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
                     summary = "Gói .3105 vượt quá giới hạn 3.6 GB nên không thể xem trước."
                 } else if let data = try? Data(contentsOf: url),
-                   let decoded = try? PatchPackageCodec.decode(data, password: currentPassword) {
-                    let project = decoded.project
+                   let project = try? await PatchZipConverter.shared.decodeProject(
+                       patchData: data,
+                       password: currentPassword
+                   ) {
                     summary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
                 } else {
                     summary = "Gói .3105 hợp lệ. Sẵn sàng giải mã sang .zip."
@@ -387,7 +389,11 @@ struct PatchConverterView: View {
             do {
                 if currentDirection == .zipToPatch {
                     let outURL = tempDir.appendingPathComponent("\(baseName).3105")
-                    try converter.convertZipToPatch(zipURL: source, destinationPatchURL: outURL, password: password)
+                    try await converter.convertZipToPatch(
+                        zipURL: source,
+                        destinationPatchURL: outURL,
+                        password: password
+                    )
                     let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
                     let outSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                     let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)
@@ -410,7 +416,11 @@ struct PatchConverterView: View {
                     }
                 } else {
                     let outURL = tempDir.appendingPathComponent("\(baseName).zip")
-                    try converter.convertPatchToZip(patchURL: source, destinationZipURL: outURL, password: password)
+                    try await converter.convertPatchToZip(
+                        patchURL: source,
+                        destinationZipURL: outURL,
+                        password: password
+                    )
                     let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
                     let outSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                     let sizeStr = ByteCountFormatter.string(fromByteCount: outSize, countStyle: .file)

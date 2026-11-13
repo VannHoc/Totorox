@@ -1,0 +1,78 @@
+public func jgDecrypt(_ data: Data, stem: String) throws -> Data {
+        guard data.count > 8 else {
+            return data
+        }
+        let b0 = data[data.startIndex]
+        let b1 = data[data.startIndex + 1]
+        let b2 = data[data.startIndex + 2]
+        let b3 = data[data.startIndex + 3]
+
+        // Check AoV container magic: 22 4A
+        guard b0 == 0x22 && b1 == 0x4A else {
+            // Raw unencrypted MSES or generic binary
+            return data
+        }
+
+        let uncompressedLen = Int(readUInt32LE(data, 4))
+        let payload = data.subdata(in: 8..<data.count)
+
+        // Case 1: b2 == 0x67 -> AES-128-CBC encrypted
+        if b2 == 0x67 {
+            let key = deriveJgKey(stem: stem)
+            var iv = [UInt8](repeating: 0, count: 16)
+            let outCapacity = payload.count + kCCBlockSizeAES128
+            var decryptedBuffer = Data(count: outCapacity)
+            var numBytesDecrypted: size_t = 0
+
+            let status = payload.withUnsafeBytes { cipherBytes in
+                decryptedBuffer.withUnsafeMutableBytes { outBytes in
+                    CCCrypt(
+                        CCOperation(kCCDecrypt),
+                        CCAlgorithm(kCCAlgorithmAES128),
+                        CCOptions(kCCOptionPKCS7Padding),
+                        key,
+                        kCCKeySizeAES128,
+                        &iv,
+                        cipherBytes.baseAddress,
+                        payload.count,
+                        outBytes.baseAddress,
+                        outCapacity,
+                        &numBytesDecrypted
+                    )
+                }
+            }
+
+            guard status == kCCSuccess else {
+                throw AovModMergerError.cryptoFailed("CCCrypt decrypt thất bại (\(stem), status=\(status))")
+            }
+            decryptedBuffer.count = Int(numBytesDecrypted)
+
+            // If b3 == 0xEF, the decrypted payload is a Zstd frame
+            if b3 == 0xEF {
+                if let decomp = decompressAovZstd(decryptedBuffer, expectedUncompressedSize: uncompressedLen) {
+                    return decomp
+                }
+                throw AovModMergerError.cryptoFailed("Zstd decompress thất bại sau khi giải mã AES (\(stem))")
+            } else {
+                if uncompressedLen > 0 && uncompressedLen <= decryptedBuffer.count {
+                    decryptedBuffer.count = uncompressedLen
+                }
+                return decryptedBuffer
+            }
+        }
+
+        // Case 2: b2 == 0x00 -> Unencrypted
+        if b2 == 0x00 {
+            if b3 == 0xEF {
+                // Unencrypted Zstd frame (Edras skillcombine, BattleBank, etc.)
+                if let decomp = decompressAovZstd(payload, expectedUncompressedSize: uncompressedLen) {
+                    return decomp
+                }
+                throw AovModMergerError.cryptoFailed("Zstd decompress thất bại (\(stem))")
+            } else {
+                return payload
+            }
+        }
+
+        return data
+    }

@@ -1,10 +1,10 @@
 import SwiftUI
+import UIKit
 
-/// License activation screen.
+/// Màn hình kích hoạt license.
 ///
-/// Phase 1: the screen exists and works against the backend, but it is **not** wired into
-/// `App.swift` / `ContentView`, so the app keeps running without a server or a key.
-/// When the server is live, present this view and gate the UI on `LicenseManager.status.isActive`.
+/// Khi server backend sẵn sàng, màn hình này được hiển thị thay cho giao diện chính
+/// nếu `LicenseManager.status.isActive == false`.
 struct ActivationView: View {
     @ObservedObject private var license = LicenseManager.shared
     @State private var keyInput: String = ""
@@ -12,6 +12,7 @@ struct ActivationView: View {
 
     var onActivated: (() -> Void)? = nil
 
+    /// Màn hình kích hoạt license — hiện khi `LicenseManager.status.isActive == false`.
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 20) {
@@ -48,12 +49,6 @@ struct ActivationView: View {
                 .padding(.horizontal, 16)
 
                 deviceCard
-
-                Text("Key được khoá theo thiết bị. Mỗi key chỉ dùng được trên một máy và không thể chuyển sang máy khác.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
             }
             .padding(.bottom, 24)
         }

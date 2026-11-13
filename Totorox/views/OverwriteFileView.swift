@@ -876,13 +876,14 @@ struct OverwriteFileView: View {
             var autoBundleID: String? = nil
             var isProtected = false
             if url.pathExtension.lowercased() == "3105",
-               !PatchPackageLimits.exceedsExpandedLimit(Int64(size)),
-               let data = try? Data(contentsOf: url) {
-                if let summary = try? PatchPackageCodec.inspect(data) {
+               !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) {
+                let converter = PatchZipConverter.shared
+                if let summary = try? await converter.inspect(patchURL: url) {
                     isProtected = summary.isPasswordProtected
                 }
-                if let decoded = try? PatchPackageCodec.decode(data, password: nil),
-                   let bid = decoded.project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                if let data = try? Data(contentsOf: url),
+                   let project = try? await converter.decodeProject(patchData: data),
+                   let bid = project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !bid.isEmpty {
                     autoBundleID = bid
                 }
@@ -916,8 +917,8 @@ struct OverwriteFileView: View {
             guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
                   !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) else { return }
             guard let data = try? Data(contentsOf: url),
-                  let decoded = try? PatchPackageCodec.decode(data, password: password),
-                  let bid = decoded.project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let project = try? await PatchZipConverter.shared.decodeProject(patchData: data, password: password),
+                  let bid = project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !bid.isEmpty else {
                 return
             }
@@ -1034,7 +1035,11 @@ struct OverwriteFileView: View {
                 do {
                     let converter = PatchZipConverter()
                     let zipOutput = stagingDir.appendingPathComponent("converted.zip")
-                    try converter.convertPatch3105ToZip(inputURL: patchURL, outputZipURL: zipOutput, password: currentPassword)
+                    try await converter.convertPatch3105ToZip(
+                        inputURL: patchURL,
+                        outputZipURL: zipOutput,
+                        password: currentPassword
+                    )
                     let payloadDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                     try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
                     do {

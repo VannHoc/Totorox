@@ -14,6 +14,7 @@ struct TotoroxApp: App {
         setupLogCapture()
         log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
         AppState.runEarlyPrivilegeInit()
+        LicenseManager.shared.refresh() // xác minh license ngay từ đầu
     }
 
     private var language: AppLanguage {
@@ -30,6 +31,7 @@ struct TotoroxApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
+                // ContentView tự chặn cổng: chưa kích hoạt thì chỉ hiện ActivationView.
                 ContentView()
                     .environmentObject(appState)
                     .environment(\.appLanguage, language)
@@ -39,6 +41,9 @@ struct TotoroxApp: App {
 
                 if showOnboarding {
                     OnboardingView {
+                        await MainActor.run {
+                            LicenseManager.shared.refresh()
+                        }
                         OnboardingStore.markCompleted()
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
                             showOnboarding = false
@@ -77,8 +82,13 @@ struct TotoroxApp: App {
             .onChange(of: scenePhase) { phase in
                 guard phase == .active, !showOnboarding else { return }
                 appState.detectSupport()
+                Task {
+                    await LicenseManager.shared.refresh()
+                }
             }
             .onOpenURL { url in
+                // Chưa kích hoạt license thì không xử lý deep link.
+                guard LicenseManager.shared.status.isActive else { return }
                 AppNavigationCoordinator.shared.handleIncomingURL(url)
             }
         }
