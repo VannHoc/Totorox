@@ -226,3 +226,12 @@
 "logs.copy" = "Sao chép";
 "logs.share" = "Chia sẻ";
 "accessibility.log_entry" = "Dòng log %lld: %@";
+
+/* --- Server endpoint --- */
+"server.config_btn" = "Cấu hình máy chủ";
+"server.config_hint" = "Địa chỉ backend Totorox. Dấu \"/\" thừa ở cuối sẽ tự động bị cắt bỏ.";
+"server.config_placeholder" = "https://ten-mien-cua-ban.com";
+"server.config_save" = "Lưu máy chủ";
+"server.config_reset" = "Khôi phục máy chủ mặc định";
+"server.config_saved" = "Đã lưu máy chủ mới.";
+"server.config_invalid" = "URL không hợp lệ. Ví dụ: https://ten-mien-cua-ban.com";

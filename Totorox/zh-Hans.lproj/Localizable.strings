@@ -226,3 +226,12 @@
 "logs.copy" = "复制";
 "logs.share" = "分享";
 "accessibility.log_entry" = "日志条目 %lld：%@";
+
+/* --- Server endpoint --- */
+"server.config_btn" = "服务器配置";
+"server.config_hint" = "Totorox 后端地址，末尾多余的 “/” 会被自动移除。";
+"server.config_placeholder" = "https://your-server.com";
+"server.config_save" = "保存服务器";
+"server.config_reset" = "恢复默认服务器";
+"server.config_saved" = "服务器已保存。";
+"server.config_invalid" = "URL 无效。例如：https://your-server.com";

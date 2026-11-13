@@ -154,6 +154,9 @@ struct SettingsView: View {
                     }
                     .totoroxCard()
 
+                    // Server Endpoint Configuration
+                    ServerConfigView()
+
                     // Credits & Authors
                     VStack(alignment: .leading, spacing: 12) {
                         Text(language.text("settings.section_credits"))

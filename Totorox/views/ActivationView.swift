@@ -49,6 +49,9 @@ struct ActivationView: View {
                 .padding(.horizontal, 16)
 
                 deviceCard
+
+                ServerConfigView()
+                    .padding(.horizontal, 16)
             }
             .padding(.bottom, 24)
         }
