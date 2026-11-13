@@ -117,7 +117,7 @@ public final class PatchZipConverter {
     // MARK: - Server-backed inspection (chỉ gửi header/metadata nhẹ)
 
     /// Đọc metadata gói `.3105` bằng cách gửi header nhẹ lên `/api/v1/convert-header` (mode `inspect`).
-    public func inspect(patchData: Data) async throws -> PatchPackageSummary {
+    func inspect(patchData: Data) async throws -> PatchPackageSummary {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
@@ -155,7 +155,7 @@ public final class PatchZipConverter {
         )
     }
 
-    public func inspect(patchURL: URL) async throws -> PatchPackageSummary {
+    func inspect(patchURL: URL) async throws -> PatchPackageSummary {
         guard fileManager.fileExists(atPath: patchURL.path) else {
             throw PatchZipConverterError.ioFailure("Không tìm thấy gói .3105 nguồn.")
         }
@@ -190,7 +190,7 @@ public final class PatchZipConverter {
     }
 
     /// Giải mã gói `.3105` trên server (`mode: from_zip`) và dựng `PatchProject` ở local.
-    public func decodeProject(patchData: Data, password: String? = nil) async throws -> PatchProject {
+    func decodeProject(patchData: Data, password: String? = nil) async throws -> PatchProject {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
