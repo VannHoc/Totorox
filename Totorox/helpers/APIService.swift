@@ -53,8 +53,11 @@ struct LicenseActivation: Equatable, Sendable {
 final class APIService {
     static let shared = APIService()
 
-    /// Base URL của Totorox backend. Ghi đè khi machine có server riêng.
-    static let defaultBaseURL = URL(string: "https://api.totorox.app")!
+    /// Base URL mặc định của Totorox backend. Ghi đè khi machine có server riêng.
+    static let defaultBaseURL = URL(string: "https://two-eos-galleries-excellence.trycloudflare.com")!
+
+    /// Khoá `UserDefaults` lưu base URL động do người dùng cấu hình.
+    static let baseURLDefaultsKey = "totorox.api.baseURL"
 
     /// Giới hạn tổng kích thước upload (server giới hạn 15 MB — giữ thấp để tránh upload thất bại).
     static let maximumUploadBytes: Int64 = 15 * 1024 * 1024
@@ -76,13 +79,58 @@ final class APIService {
         return d
     }()
 
-    init(baseURL: URL = APIService.defaultBaseURL, session: URLSession = APIService.defaultSession) {
-        self.baseURL = baseURL
+    /// - Parameter baseURL: `nil` để ưu tiên URL đã lưu trong `UserDefaults`, sau đó tới `defaultBaseURL`.
+    init(baseURL: URL? = nil, session: URLSession = APIService.defaultSession) {
+        self.baseURL = baseURL ?? APIService.storedBaseURL ?? APIService.defaultBaseURL
         self.session = session
     }
 
+    /// Chuẩn hoá chuỗi URL người dùng nhập: bỏ khoảng trắng, thêm `https://` nếu thiếu scheme
+    /// và tự động cắt bỏ mọi dấu `/` thừa ở cuối.
+    static func normalizedBaseURL(from raw: String) -> URL? {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if !trimmed.contains("://") {
+            trimmed = "https://" + trimmed
+        }
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        guard let url = URL(string: trimmed),
+              let host = url.host,
+              !host.isEmpty,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return url
+    }
+
+    /// Base URL đang được lưu trong `UserDefaults` (nếu có và hợp lệ).
+    static var storedBaseURL: URL? {
+        guard let raw = UserDefaults.standard.string(forKey: baseURLDefaultsKey) else { return nil }
+        return normalizedBaseURL(from: raw)
+    }
+
+    /// Lưu base URL mới vào `UserDefaults` và dùng ngay cho các request tiếp theo.
     func setBaseURL(_ url: URL) {
-        baseURL = url
+        let normalized = APIService.normalizedBaseURL(from: url.absoluteString) ?? url
+        baseURL = normalized
+        UserDefaults.standard.set(normalized.absoluteString, forKey: APIService.baseURLDefaultsKey)
+    }
+
+    /// Áp dụng URL người dùng nhập. Trả `false` nếu chuỗi không phải URL http(s) hợp lệ.
+    @discardableResult
+    func updateBaseURL(_ raw: String) -> Bool {
+        guard let url = APIService.normalizedBaseURL(from: raw) else { return false }
+        setBaseURL(url)
+        return true
+    }
+
+    /// Xoá cấu hình động và quay lại `defaultBaseURL`.
+    func resetBaseURL() {
+        UserDefaults.standard.removeObject(forKey: APIService.baseURLDefaultsKey)
+        baseURL = APIService.defaultBaseURL
     }
 
     // MARK: - License
