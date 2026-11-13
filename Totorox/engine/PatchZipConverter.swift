@@ -418,7 +418,7 @@ public final class PatchZipConverter {
         }
     }
 
-    private struct PatchProjectPayload: Decodable {
+    private struct PatchProjectPayload: Codable {
         let project: PatchProject
     }
 
@@ -824,7 +824,7 @@ public final class PatchZipConverter {
         return try AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: aad)
     }
 
-    public func buildProjectZip(_ project: PatchProject) throws -> Data {
+    func buildProjectZip(_ project: PatchProject) throws -> Data {
         let fallbackBundle = project.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest"
         var payloadEntries: [(path: String, data: Data)] = []
         var manifestRules: [[String: Any]] = []
