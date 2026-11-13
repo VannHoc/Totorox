@@ -104,29 +104,134 @@ public struct PatchZipManifest: Codable, Equatable {
 
 public final class PatchZipConverter {
     public static let shared = PatchZipConverter()
+
+    /// Kích thước header/metadata nhẹ được gửi lên server cho mode `inspect`.
+    private static let headerSliceLimit = 4 * 1024 * 1024
+
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
     }
 
-    public func convertPatch3105ToZip(inputURL: URL, outputZipURL: URL, password: String? = nil) throws {
-        try convertPatchToZip(patchURL: inputURL, destinationZipURL: outputZipURL, password: password)
+    // MARK: - Server-backed inspection (chỉ gửi header/metadata nhẹ)
+
+    /// Đọc metadata gói `.3105` bằng cách gửi header nhẹ lên `/api/v1/convert-header` (mode `inspect`).
+    public func inspect(patchData: Data) async throws -> PatchPackageSummary {
+        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+
+        let slice = patchData.count > Self.headerSliceLimit
+            ? patchData.prefix(Self.headerSliceLimit)
+            : patchData.prefix(patchData.count)
+
+        let response = try await sendConvertHeader(
+            mode: "inspect",
+            password: nil,
+            payload: Data(slice),
+            fileName: "header.bin"
+        )
+
+        let header = response.header
+        let kind = header["kind"]?.string ?? ""
+        guard kind == "patch_package" else {
+            throw PatchZipConverterError.unsupportedFormat(
+                header["note"]?.string ?? "Không nhận diện được gói .3105 (kind=\(kind.isEmpty ? "?" : kind))."
+            )
+        }
+
+        let packageID = header["package_id"]?.string.flatMap(UUID.init(uuidString:)) ?? UUID()
+        let schemaVersion = header["schema_version"]?.int ?? 0
+        let isProtected = header["is_password_protected"]?.bool ?? false
+        let fingerprintData = header["key_fingerprint"]?.string
+            .flatMap { Data(base64Encoded: $0) } ?? Data()
+
+        return PatchPackageSummary(
+            packageID: packageID,
+            schemaVersion: schemaVersion,
+            isPasswordProtected: isProtected,
+            keyFingerprint: fingerprintData
+        )
     }
 
-    public func convertZipToPatch3105(inputZipURL: URL, outputPatchURL: URL, password: String? = nil) throws {
-        try convertZipToPatch(zipURL: inputZipURL, destinationPatchURL: outputPatchURL, password: password)
+    public func inspect(patchURL: URL) async throws -> PatchPackageSummary {
+        guard fileManager.fileExists(atPath: patchURL.path) else {
+            throw PatchZipConverterError.ioFailure("Không tìm thấy gói .3105 nguồn.")
+        }
+        let size = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+
+        let handle = try FileHandle(forReadingFrom: patchURL)
+        defer { try? handle.close() }
+        let slice = (try? handle.read(upToCount: Self.headerSliceLimit)) ?? Data()
+
+        let response = try await sendConvertHeader(
+            mode: "inspect",
+            password: nil,
+            payload: slice,
+            fileName: "header.bin"
+        )
+
+        let header = response.header
+        guard header["kind"]?.string == "patch_package" else {
+            throw PatchZipConverterError.unsupportedFormat(
+                header["note"]?.string ?? "Không nhận diện được gói .3105."
+            )
+        }
+        return PatchPackageSummary(
+            packageID: header["package_id"]?.string.flatMap(UUID.init(uuidString:)) ?? UUID(),
+            schemaVersion: header["schema_version"]?.int ?? 0,
+            isPasswordProtected: header["is_password_protected"]?.bool ?? false,
+            keyFingerprint: header["key_fingerprint"]?.string.flatMap { Data(base64Encoded: $0) } ?? Data()
+        )
+    }
+
+    /// Giải mã gói `.3105` trên server (`mode: from_zip`) và dựng `PatchProject` ở local.
+    public func decodeProject(patchData: Data, password: String? = nil) async throws -> PatchProject {
+        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+
+        let response = try await sendConvertHeader(
+            mode: "from_zip",
+            password: password,
+            payload: patchData,
+            fileName: "package.3105"
+        )
+
+        guard let encodedPayload = response.payloadBytesB64,
+              let payloadBytes = Data(base64Encoded: encodedPayload) else {
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? "Máy chủ không trả payload đã giải mã."
+            )
+        }
+
+        let decoder = PropertyListDecoder()
+        if let wrapper = try? decoder.decode(PatchProjectPayload.self, from: payloadBytes) {
+            return wrapper.project
+        }
+        if let project = try? decoder.decode(PatchProject.self, from: payloadBytes) {
+            return project
+        }
+        throw PatchZipConverterError.invalidProject("Không giải mã được payload PLIST của gói .3105.")
     }
 
     // MARK: - .3105 -> .zip Conversion
+
+    public func convertPatch3105ToZip(inputURL: URL, outputZipURL: URL, password: String? = nil) async throws {
+        try await convertPatchToZip(patchURL: inputURL, destinationZipURL: outputZipURL, password: password)
+    }
 
     public func convertPatchToZip(
         patchURL: URL,
         destinationZipURL: URL,
         password: String? = nil
-    ) throws {
+    ) async throws {
         guard fileManager.fileExists(atPath: patchURL.path) else {
-            throw PatchZipConverterError.ioFailure("Source .3105 patch file not found.")
+            throw PatchZipConverterError.ioFailure("Không tìm thấy gói .3105 nguồn.")
         }
         let patchFileSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(patchFileSize)) else {
@@ -136,48 +241,137 @@ public final class PatchZipConverter {
         do {
             patchData = try Data(contentsOf: patchURL)
         } catch {
-            throw PatchZipConverterError.ioFailure("Cannot read .3105 patch: \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure("Không đọc được gói .3105: \(error.localizedDescription)")
         }
 
-        let zipData = try convertPatchDataToZipData(patchData, password: password)
-
-        do {
-            let parent = destinationZipURL.deletingLastPathComponent()
-            if !fileManager.fileExists(atPath: parent.path) {
-                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-            }
-            if fileManager.fileExists(atPath: destinationZipURL.path) {
-                try fileManager.removeItem(at: destinationZipURL)
-            }
-            try zipData.write(to: destinationZipURL, options: .atomic)
-        } catch {
-            throw PatchZipConverterError.ioFailure("Cannot write output .zip file: \(error.localizedDescription)")
-        }
+        let zipData = try await convertPatchDataToZipData(patchData, password: password)
+        try writeAtomically(zipData, to: destinationZipURL, description: "tệp .zip đầu ra")
     }
 
     public func convertPatchDataToZipData(
         _ patchData: Data,
         password: String? = nil
-    ) throws -> Data {
+    ) async throws -> Data {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
+
+        // Nguồn đã là ZIP hợp lệ: không cần server.
         if patchData.count >= 4,
            patchData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]),
            (try? parseZipArchive(patchData)) != nil {
             return patchData
         }
 
-        let decoded: DecodedPatchPackage
+        // Server giải mã envelope, trả payload PLIST; phần đóng ZIP nặng dựng ở local.
+        let project = try await decodeProject(patchData: patchData, password: password)
+        return try buildZipData(from: project)
+    }
+
+    // MARK: - .zip -> .3105 Conversion
+
+    public func convertZipToPatch3105(inputZipURL: URL, outputPatchURL: URL, password: String? = nil) async throws {
+        try await convertZipToPatch(zipURL: inputZipURL, destinationPatchURL: outputPatchURL, password: password)
+    }
+
+    public func convertZipToPatch(
+        zipURL: URL,
+        destinationPatchURL: URL,
+        password: String? = nil
+    ) async throws {
+        guard fileManager.fileExists(atPath: zipURL.path) else {
+            throw PatchZipConverterError.ioFailure("Không tìm thấy tệp .zip nguồn.")
+        }
+        let zipFileSize = (try? zipURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(zipFileSize)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+        let zipData: Data
         do {
-            decoded = try PatchPackageCodec.decode(patchData, password: password)
+            zipData = try Data(contentsOf: zipURL)
         } catch {
-            throw PatchZipConverterError.corruptedArchive("Failed to decode .3105 patch package: \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure("Không đọc được tệp .zip: \(error.localizedDescription)")
         }
 
-        let project = decoded.project
+        let patchData = try await convertZipDataToPatchData(zipData, password: password)
+        try writeAtomically(patchData, to: destinationPatchURL, description: "tệp .3105 đầu ra")
+    }
 
-        // Construct Manifest
+    public func convertZipDataToPatchData(
+        _ zipData: Data,
+        password: String? = nil
+    ) async throws -> Data {
+        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(zipData.count)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+
+        let project = try projectFromZipData(zipData)
+        guard !project.rules.isEmpty else {
+            throw PatchZipConverterError.invalidProject("Dự án không có rule nào để đóng gói `.3105`.")
+        }
+
+        // Gửi `PatchProject` dạng PLIST (kèm replacementData) để server dựng envelope
+        // `.3105` đầy đủ; phần mã hoá AES-GCM/PBKDF2 chạy hoàn toàn trên server.
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let projectPayload: Data
+        do {
+            projectPayload = try encoder.encode(project)
+        } catch {
+            throw PatchZipConverterError.invalidProject("Không encode được project sang PLIST: \(error.localizedDescription)")
+        }
+
+        let expectedPayloadBytes = project.rules.reduce(0) { $0 + $1.replacementData.count }
+        guard Int64(projectPayload.count) <= APIService.maximumUploadBytes else {
+            let limit = ByteCountFormatter.string(fromByteCount: APIService.maximumUploadBytes, countStyle: .file)
+            throw PatchZipConverterError.ioFailure(
+                "Dự án cần \(ByteCountFormatter.string(fromByteCount: Int64(projectPayload.count), countStyle: .file)) "
+                    + "payload, vượt giới hạn \(limit)/lần convert nên không gửi lên máy chủ được."
+            )
+        }
+
+        let response = try await sendConvertHeader(
+            mode: "to_zip",
+            password: password,
+            payload: projectPayload,
+            fileName: "project.plist"
+        )
+
+        guard let encodedPackage = response.packageBytesB64,
+              let packageBytes = Data(base64Encoded: encodedPackage) else {
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? "Máy chủ không trả gói .3105."
+            )
+        }
+
+        // Xác minh gói server tạo thực sự chứa dự án của client (số rule, tên, byte payload)
+        // trước khi ghi ra đĩa — tránh ghi đè bằng gói rỗng.
+        let echoed = try? await decodeProject(patchData: packageBytes, password: password)
+        if let echoed {
+            let echoedPayloadBytes = echoed.rules.reduce(0) { $0 + $1.replacementData.count }
+            let sameName = echoed.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                == project.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard echoed.rules.count == project.rules.count,
+                  sameName,
+                  echoedPayloadBytes == expectedPayloadBytes else {
+                throw PatchZipConverterError.invalidProject(
+                    "Máy chủ `to_zip` trả gói không khớp dự án client gửi lên "
+                        + "(\(project.rules.count) rule / \(expectedPayloadBytes) byte, nhận về "
+                        + "\(echoed.rules.count) rule / \(echoedPayloadBytes) byte)."
+                )
+            }
+        } else {
+            throw PatchZipConverterError.invalidProject(
+                "Máy chủ trả gói `.3105` nhưng client không giải mã lại được để xác minh nội dung."
+            )
+        }
+
+        return packageBytes
+    }
+
+    // MARK: - Project <-> ZIP assembly (local)
+
+    func buildZipData(from project: PatchProject) throws -> Data {
         let directoryEntries = project.directories.map {
             PatchZipManifest.DirectoryEntry(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
         }
@@ -234,80 +428,20 @@ public final class PatchZipConverter {
         do {
             manifestData = try encoder.encode(manifest)
         } catch {
-            throw PatchZipConverterError.invalidManifest("Failed to encode manifest JSON: \(error.localizedDescription)")
+            throw PatchZipConverterError.invalidManifest("Không mã hoá được manifest JSON: \(error.localizedDescription)")
         }
 
         zipEntries.append((path: "patch.json", data: manifestData))
-
-        // Build standard uncompressed PKZIP archive
         return try buildZipArchive(entries: zipEntries)
     }
 
-    // MARK: - .zip -> .3105 Conversion
-
-    public func convertZipToPatch(
-        zipURL: URL,
-        destinationPatchURL: URL,
-        password: String? = nil
-    ) throws {
-        guard fileManager.fileExists(atPath: zipURL.path) else {
-            throw PatchZipConverterError.ioFailure("Source .zip archive not found.")
-        }
-        let zipFileSize = (try? zipURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(zipFileSize)) else {
-            throw PatchZipConverterError.sizeLimitExceeded
-        }
-        let zipData: Data
-        do {
-            zipData = try Data(contentsOf: zipURL)
-        } catch {
-            throw PatchZipConverterError.ioFailure("Cannot read .zip file: \(error.localizedDescription)")
-        }
-
-        let patchData = try convertZipDataToPatchData(zipData, password: password)
-
-        do {
-            let parent = destinationPatchURL.deletingLastPathComponent()
-            if !fileManager.fileExists(atPath: parent.path) {
-                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-            }
-            if fileManager.fileExists(atPath: destinationPatchURL.path) {
-                try fileManager.removeItem(at: destinationPatchURL)
-            }
-            try patchData.write(to: destinationPatchURL, options: .atomic)
-        } catch {
-            throw PatchZipConverterError.ioFailure("Cannot write output .3105 file: \(error.localizedDescription)")
-        }
-    }
-
-    public func convertZipDataToPatchData(
-        _ zipData: Data,
-        password: String? = nil
-    ) throws -> Data {
-        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(zipData.count)) else {
-            throw PatchZipConverterError.sizeLimitExceeded
-        }
+    func projectFromZipData(_ zipData: Data) throws -> PatchProject {
         var entries = try parseZipArchive(zipData)
-
-        if entries["patch.json"] == nil,
-           let plistData = entries[".3105-project.plist"],
-           var plistProject = try? PropertyListDecoder().decode(PatchProject.self, from: plistData) {
-            for idx in plistProject.rules.indices {
-                let rel = plistProject.rules[idx].relativePath
-                let bid = plistProject.rules[idx].bundleID
-                if let fileData = entries[rel] ?? entries["payload/\(bid)/\(rel)"] ?? entries["\(bid)/\(rel)"] {
-                    plistProject.rules[idx].replacementData = fileData
-                }
-            }
-            let encoded = try PatchPackageCodec.encodeNew(project: plistProject, password: password)
-            return encoded.data
-        }
 
         let manifestData: Data
         if let existingManifest = entries["patch.json"] {
             manifestData = existingManifest
         } else {
-            // Không tồn tại patch.json -> Tự động tạo file patch.json mặc định hợp lệ
             manifestData = try generateDefaultManifest(from: entries)
             entries["patch.json"] = manifestData
         }
@@ -318,33 +452,34 @@ public final class PatchZipConverter {
         do {
             manifest = try decoder.decode(PatchZipManifest.self, from: manifestData)
         } catch {
-            throw PatchZipConverterError.invalidManifest("Failed to parse manifest JSON: \(error.localizedDescription)")
+            throw PatchZipConverterError.invalidManifest("Không đọc được manifest JSON: \(error.localizedDescription)")
         }
 
-        // Reconstruct PatchDirectories
         let directories = manifest.directories.map {
             PatchDirectory(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
         }
 
-        // Reconstruct PatchRules with payload bytes
         var rules: [PatchRule] = []
         for ruleEntry in manifest.rules {
             guard let payloadData = entries[ruleEntry.payloadPath] ?? entries[ruleEntry.relativePath] else {
-                throw PatchZipConverterError.missingPayloadFile("Payload file missing for rule at: \(ruleEntry.payloadPath)")
+                throw PatchZipConverterError.missingPayloadFile(
+                    "Thiếu payload cho rule tại: \(ruleEntry.payloadPath)"
+                )
             }
-            let rule = PatchRule(
-                id: ruleEntry.id,
-                bundleID: ruleEntry.bundleID,
-                relativePath: ruleEntry.relativePath,
-                replacementFilename: ruleEntry.replacementFilename,
-                replacementData: payloadData,
-                operation: ruleEntry.operation ?? "replace",
-                containerKind: ruleEntry.containerKind ?? "application"
+            rules.append(
+                PatchRule(
+                    id: ruleEntry.id,
+                    bundleID: ruleEntry.bundleID,
+                    relativePath: ruleEntry.relativePath,
+                    replacementFilename: ruleEntry.replacementFilename,
+                    replacementData: payloadData,
+                    operation: ruleEntry.operation ?? "replace",
+                    containerKind: ruleEntry.containerKind ?? "application"
+                )
             )
-            rules.append(rule)
         }
 
-        let project = PatchProject(
+        return PatchProject(
             id: manifest.id,
             name: manifest.name,
             author: manifest.author,
@@ -355,27 +490,9 @@ public final class PatchZipConverter {
             directories: directories,
             rules: rules
         )
-
-        do {
-            try PatchPackageCodec.validate(project)
-        } catch {
-            throw PatchZipConverterError.invalidProject("Validation failed for reconstructed patch project: \(error.localizedDescription)")
-        }
-
-        let encoded: EncodedPatchPackage
-        do {
-            encoded = try PatchPackageCodec.encodeNew(project: project, password: password)
-        } catch {
-            throw PatchZipConverterError.corruptedArchive("Failed to encode .3105 patch package: \(error.localizedDescription)")
-        }
-
-        return encoded.data
     }
 
-    private func generateDefaultManifest(
-        from entries: [String: Data],
-        defaultName: String = "Converted Patch"
-    ) throws -> Data {
+    private func generateDefaultManifest(from entries: [String: Data]) throws -> Data {
         let validEntries = entries.filter { key, _ in
             !key.hasPrefix("__MACOSX/") &&
             !key.hasSuffix("/") &&
@@ -384,16 +501,15 @@ public final class PatchZipConverter {
         }
 
         guard !validEntries.isEmpty else {
-            throw PatchZipConverterError.invalidManifest("Tệp ZIP không chứa bất kỳ dữ liệu nào để đóng gói.")
+            throw PatchZipConverterError.invalidManifest("Tệp ZIP không chứa dữ liệu nào để đóng gói.")
         }
 
-        var detectedBundleID: String? = nil
+        var detectedBundleID: String?
         for path in validEntries.keys {
-            let parts = path.split(separator: "/")
-            for part in parts {
-                let str = String(part)
-                if (try? PatchPathValidator.canonicalBundleIdentifier(str)) == str {
-                    detectedBundleID = str
+            for part in path.split(separator: "/") {
+                let candidate = String(part)
+                if (try? PatchPathValidator.canonicalBundleIdentifier(candidate)) == candidate {
+                    detectedBundleID = candidate
                     break
                 }
             }
@@ -408,7 +524,7 @@ public final class PatchZipConverter {
         var dirEntries: [PatchZipManifest.DirectoryEntry] = []
         var seenDirs = Set<String>()
 
-        for (path, _) in validEntries {
+        for path in validEntries.keys {
             var rel = path
             if rel.hasPrefix("payload/\(bundleID)/") {
                 rel = String(rel.dropFirst("payload/\(bundleID)/".count))
@@ -418,10 +534,9 @@ public final class PatchZipConverter {
             guard !rel.isEmpty else { continue }
 
             let filename = (rel as NSString).lastPathComponent
-            let ruleID = UUID()
             ruleEntries.append(
                 PatchZipManifest.RuleEntry(
-                    id: ruleID,
+                    id: UUID(),
                     bundleID: bundleID,
                     relativePath: rel,
                     replacementFilename: filename,
@@ -429,12 +544,13 @@ public final class PatchZipConverter {
                 )
             )
 
-            let comps = rel.split(separator: "/").dropLast()
             var currentSub = ""
-            for comp in comps {
-                currentSub += (currentSub.isEmpty ? "" : "/") + comp
+            for component in rel.split(separator: "/").dropLast() {
+                currentSub += (currentSub.isEmpty ? "" : "/") + component
                 if seenDirs.insert(currentSub).inserted {
-                    dirEntries.append(PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub))
+                    dirEntries.append(
+                        PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub)
+                    )
                 }
             }
         }
@@ -442,7 +558,7 @@ public final class PatchZipConverter {
         let manifest = PatchZipManifest(
             schemaVersion: 3,
             id: UUID(),
-            name: defaultName,
+            name: "Converted Patch",
             author: "Totorox",
             isPrivate: false,
             createdAt: Date(),
@@ -456,6 +572,65 @@ public final class PatchZipConverter {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return try encoder.encode(manifest)
+    }
+
+    // MARK: - Server transport
+
+    private func sendConvertHeader(
+        mode: String,
+        password: String?,
+        payload: Data,
+        fileName: String
+    ) async throws -> ConvertHeaderResponse {
+        guard Int64(payload.count) <= APIService.maximumUploadBytes else {
+            throw PatchZipConverterError.ioFailure(
+                "Header/ngữ cảnh vượt quá \(ByteCountFormatter.string(fromByteCount: APIService.maximumUploadBytes, countStyle: .file)) nên không gửi được lên máy chủ."
+            )
+        }
+
+        let workDir = fileManager.temporaryDirectory
+            .appendingPathComponent("TotoroxConvert_\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: workDir) }
+
+        let payloadURL = workDir.appendingPathComponent(fileName)
+        do {
+            try payload.write(to: payloadURL, options: .atomic)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Không tạo được tệp tạm: \(error.localizedDescription)")
+        }
+
+        switch await APIService.shared.convertHeader(
+            mode: mode,
+            password: password,
+            fileURL: payloadURL,
+            licenseKey: LicenseManager.shared.licenseKey,
+            hwid: LicenseManager.shared.deviceIdentifier
+        ) {
+        case .success(let response):
+            return response
+        case .failure(let error):
+            throw PatchZipConverterError.ioFailure("Máy chủ convert-header: \(error.localizedDescription)")
+        }
+    }
+
+    private func writeAtomically(_ data: Data, to destinationURL: URL, description: String) throws {
+        do {
+            let parent = destinationURL.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: parent.path) {
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+            }
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            try data.write(to: destinationURL, options: .atomic)
+        } catch {
+            throw PatchZipConverterError.ioFailure("Không ghi được \(description): \(error.localizedDescription)")
+        }
+    }
+
+    private struct PatchProjectPayload: Decodable {
+        let project: PatchProject
     }
 
     /// Đảm bảo thư mục tạm chứa file patch.json hợp lệ trước khi đóng gói thành .3105
