@@ -237,6 +237,10 @@ public final class PatchZipConverter {
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(patchFileSize)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
+        let hasScope = patchURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasScope { patchURL.stopAccessingSecurityScopedResource() }
+        }
         let patchData: Data
         do {
             patchData = try Data(contentsOf: patchURL)
@@ -258,14 +262,24 @@ public final class PatchZipConverter {
 
         // Nguồn đã là ZIP hợp lệ: không cần server.
         if patchData.count >= 4,
-           patchData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]),
-           (try? parseZipArchive(patchData)) != nil {
+           patchData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) {
             return patchData
         }
 
-        // Server giải mã envelope, trả payload PLIST; phần đóng ZIP nặng dựng ở local.
-        let project = try await decodeProject(patchData: patchData, password: password)
-        return try buildZipData(from: project)
+        // Server giải mã envelope và dựng luôn tệp .zip (patch.json + payload).
+        let response = try await sendConvertHeader(
+            mode: "from_zip",
+            password: password,
+            payload: patchData,
+            fileName: "source.3105"
+        )
+        guard let encodedZip = response.zipBytesB64,
+              let zipBytes = Data(base64Encoded: encodedZip) else {
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? "Máy chủ không trả tệp .zip."
+            )
+        }
+        return zipBytes
     }
 
     // MARK: - .zip -> .3105 Conversion
@@ -286,6 +300,10 @@ public final class PatchZipConverter {
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(zipFileSize)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
+        let hasScope = zipURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasScope { zipURL.stopAccessingSecurityScopedResource() }
+        }
         let zipData: Data
         do {
             zipData = try Data(contentsOf: zipURL)
@@ -305,36 +323,18 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.sizeLimitExceeded
         }
 
-        let project = try projectFromZipData(zipData)
-        guard !project.rules.isEmpty else {
-            throw PatchZipConverterError.invalidProject("Dự án không có rule nào để đóng gói `.3105`.")
-        }
-
-        // Gửi `PatchProject` dạng PLIST (kèm replacementData) để server dựng envelope
-        // `.3105` đầy đủ; phần mã hoá AES-GCM/PBKDF2 chạy hoàn toàn trên server.
-        let encoder = PropertyListEncoder()
-        encoder.outputFormat = .binary
-        let projectPayload: Data
-        do {
-            projectPayload = try encoder.encode(project)
-        } catch {
-            throw PatchZipConverterError.invalidProject("Không encode được project sang PLIST: \(error.localizedDescription)")
-        }
-
-        let expectedPayloadBytes = project.rules.reduce(0) { $0 + $1.replacementData.count }
-        guard Int64(projectPayload.count) <= APIService.maximumUploadBytes else {
-            let limit = ByteCountFormatter.string(fromByteCount: APIService.maximumUploadBytes, countStyle: .file)
-            throw PatchZipConverterError.ioFailure(
-                "Dự án cần \(ByteCountFormatter.string(fromByteCount: Int64(projectPayload.count), countStyle: .file)) "
-                    + "payload, vượt giới hạn \(limit)/lần convert nên không gửi lên máy chủ được."
-            )
+        // Chỉ kiểm tra magic ZIP để báo lỗi sớm; toàn bộ việc dựng manifest/project và
+        // niêm phong `.3105` chạy trên server (thin client).
+        guard zipData.count >= 4,
+              zipData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) else {
+            throw PatchZipConverterError.corruptedArchive("Tệp nguồn không phải ZIP hợp lệ.")
         }
 
         let response = try await sendConvertHeader(
             mode: "to_zip",
             password: password,
-            payload: projectPayload,
-            fileName: "project.plist"
+            payload: zipData,
+            fileName: "source.zip"
         )
 
         guard let encodedPackage = response.packageBytesB64,
@@ -344,234 +344,7 @@ public final class PatchZipConverter {
             )
         }
 
-        // Xác minh gói server tạo thực sự chứa dự án của client (số rule, tên, byte payload)
-        // trước khi ghi ra đĩa — tránh ghi đè bằng gói rỗng.
-        let echoed = try? await decodeProject(patchData: packageBytes, password: password)
-        if let echoed {
-            let echoedPayloadBytes = echoed.rules.reduce(0) { $0 + $1.replacementData.count }
-            let sameName = echoed.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                == project.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard echoed.rules.count == project.rules.count,
-                  sameName,
-                  echoedPayloadBytes == expectedPayloadBytes else {
-                throw PatchZipConverterError.invalidProject(
-                    "Máy chủ `to_zip` trả gói không khớp dự án client gửi lên "
-                        + "(\(project.rules.count) rule / \(expectedPayloadBytes) byte, nhận về "
-                        + "\(echoed.rules.count) rule / \(echoedPayloadBytes) byte)."
-                )
-            }
-        } else {
-            throw PatchZipConverterError.invalidProject(
-                "Máy chủ trả gói `.3105` nhưng client không giải mã lại được để xác minh nội dung."
-            )
-        }
-
         return packageBytes
-    }
-
-    // MARK: - Project <-> ZIP assembly (local)
-
-    func buildZipData(from project: PatchProject) throws -> Data {
-        let directoryEntries = project.directories.map {
-            PatchZipManifest.DirectoryEntry(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
-        }
-
-        var ruleEntries: [PatchZipManifest.RuleEntry] = []
-        var zipEntries: [(path: String, data: Data)] = []
-        var addedPaths = Set<String>()
-
-        for rule in project.rules {
-            let cleanBundle = rule.bundleID.isEmpty
-                ? (project.bundleIdentifiers.first ?? "com.apple.mobile.MobileHouseArrest")
-                : rule.bundleID
-            let payloadRelativePath = "payload/\(cleanBundle)/\(rule.relativePath)"
-            let filename = rule.replacementFilename.isEmpty
-                ? (rule.relativePath as NSString).lastPathComponent
-                : rule.replacementFilename
-            ruleEntries.append(
-                PatchZipManifest.RuleEntry(
-                    id: rule.id,
-                    bundleID: cleanBundle,
-                    relativePath: rule.relativePath,
-                    replacementFilename: filename,
-                    payloadPath: payloadRelativePath,
-                    operation: rule.operation == "replace" ? nil : rule.operation,
-                    containerKind: rule.containerKind == "application" ? nil : rule.containerKind
-                )
-            )
-            if addedPaths.insert(payloadRelativePath).inserted {
-                zipEntries.append((path: payloadRelativePath, data: rule.replacementData))
-            }
-        }
-
-        let bundleList = project.bundleIdentifiers.isEmpty
-            ? project.allBundleIdentifiers
-            : project.bundleIdentifiers
-
-        let manifest = PatchZipManifest(
-            schemaVersion: 3,
-            id: project.id,
-            name: project.name,
-            author: project.author,
-            isPrivate: project.isPrivate,
-            createdAt: project.createdAt,
-            updatedAt: project.updatedAt,
-            bundleIdentifiers: bundleList,
-            directories: directoryEntries,
-            rules: ruleEntries
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let manifestData: Data
-        do {
-            manifestData = try encoder.encode(manifest)
-        } catch {
-            throw PatchZipConverterError.invalidManifest("Không mã hoá được manifest JSON: \(error.localizedDescription)")
-        }
-
-        zipEntries.append((path: "patch.json", data: manifestData))
-        return try buildZipArchive(entries: zipEntries)
-    }
-
-    func projectFromZipData(_ zipData: Data) throws -> PatchProject {
-        var entries = try parseZipArchive(zipData)
-
-        let manifestData: Data
-        if let existingManifest = entries["patch.json"] {
-            manifestData = existingManifest
-        } else {
-            manifestData = try generateDefaultManifest(from: entries)
-            entries["patch.json"] = manifestData
-        }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let manifest: PatchZipManifest
-        do {
-            manifest = try decoder.decode(PatchZipManifest.self, from: manifestData)
-        } catch {
-            throw PatchZipConverterError.invalidManifest("Không đọc được manifest JSON: \(error.localizedDescription)")
-        }
-
-        let directories = manifest.directories.map {
-            PatchDirectory(id: $0.id, bundleID: $0.bundleID, relativePath: $0.relativePath)
-        }
-
-        var rules: [PatchRule] = []
-        for ruleEntry in manifest.rules {
-            guard let payloadData = entries[ruleEntry.payloadPath] ?? entries[ruleEntry.relativePath] else {
-                throw PatchZipConverterError.missingPayloadFile(
-                    "Thiếu payload cho rule tại: \(ruleEntry.payloadPath)"
-                )
-            }
-            rules.append(
-                PatchRule(
-                    id: ruleEntry.id,
-                    bundleID: ruleEntry.bundleID,
-                    relativePath: ruleEntry.relativePath,
-                    replacementFilename: ruleEntry.replacementFilename,
-                    replacementData: payloadData,
-                    operation: ruleEntry.operation ?? "replace",
-                    containerKind: ruleEntry.containerKind ?? "application"
-                )
-            )
-        }
-
-        return PatchProject(
-            id: manifest.id,
-            name: manifest.name,
-            author: manifest.author,
-            isPrivate: manifest.isPrivate,
-            createdAt: manifest.createdAt,
-            updatedAt: manifest.updatedAt,
-            bundleIdentifiers: manifest.bundleIdentifiers,
-            directories: directories,
-            rules: rules
-        )
-    }
-
-    private func generateDefaultManifest(from entries: [String: Data]) throws -> Data {
-        let validEntries = entries.filter { key, _ in
-            !key.hasPrefix("__MACOSX/") &&
-            !key.hasSuffix("/") &&
-            !key.contains(".DS_Store") &&
-            key != "patch.json"
-        }
-
-        guard !validEntries.isEmpty else {
-            throw PatchZipConverterError.invalidManifest("Tệp ZIP không chứa dữ liệu nào để đóng gói.")
-        }
-
-        var detectedBundleID: String?
-        for path in validEntries.keys {
-            for part in path.split(separator: "/") {
-                let candidate = String(part)
-                if (try? PatchPathValidator.canonicalBundleIdentifier(candidate)) == candidate {
-                    detectedBundleID = candidate
-                    break
-                }
-            }
-            if detectedBundleID != nil { break }
-        }
-
-        let bundleID = detectedBundleID
-            ?? AppContainerScanner.shared.apps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
-            ?? "com.apple.mobile.MobileHouseArrest"
-
-        var ruleEntries: [PatchZipManifest.RuleEntry] = []
-        var dirEntries: [PatchZipManifest.DirectoryEntry] = []
-        var seenDirs = Set<String>()
-
-        for path in validEntries.keys {
-            var rel = path
-            if rel.hasPrefix("payload/\(bundleID)/") {
-                rel = String(rel.dropFirst("payload/\(bundleID)/".count))
-            } else if rel.hasPrefix("\(bundleID)/") {
-                rel = String(rel.dropFirst("\(bundleID)/".count))
-            }
-            guard !rel.isEmpty else { continue }
-
-            let filename = (rel as NSString).lastPathComponent
-            ruleEntries.append(
-                PatchZipManifest.RuleEntry(
-                    id: UUID(),
-                    bundleID: bundleID,
-                    relativePath: rel,
-                    replacementFilename: filename,
-                    payloadPath: path
-                )
-            )
-
-            var currentSub = ""
-            for component in rel.split(separator: "/").dropLast() {
-                currentSub += (currentSub.isEmpty ? "" : "/") + component
-                if seenDirs.insert(currentSub).inserted {
-                    dirEntries.append(
-                        PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub)
-                    )
-                }
-            }
-        }
-
-        let manifest = PatchZipManifest(
-            schemaVersion: 3,
-            id: UUID(),
-            name: "Converted Patch",
-            author: "Totorox",
-            isPrivate: false,
-            createdAt: Date(),
-            updatedAt: Date(),
-            bundleIdentifiers: [bundleID],
-            directories: dirEntries,
-            rules: ruleEntries
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(manifest)
     }
 
     // MARK: - Server transport
@@ -631,103 +404,6 @@ public final class PatchZipConverter {
 
     private struct PatchProjectPayload: Decodable {
         let project: PatchProject
-    }
-
-    /// Đảm bảo thư mục tạm chứa file patch.json hợp lệ trước khi đóng gói thành .3105
-    public static func ensureManifestExists(in directoryURL: URL, defaultName: String = "Converted Patch") throws {
-        let manifestURL = directoryURL.appendingPathComponent("patch.json")
-        if FileManager.default.fileExists(atPath: manifestURL.path) {
-            return
-        }
-
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: directoryURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        var fileURLs: [URL] = []
-        for case let fileURL as URL in enumerator {
-            guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            if fileURL.lastPathComponent == "patch.json" || fileURL.lastPathComponent == ".DS_Store" { continue }
-            fileURLs.append(fileURL)
-        }
-
-        guard !fileURLs.isEmpty else { return }
-
-        let dirPrefix = directoryURL.standardizedFileURL.path + "/"
-        var detectedBundleID: String? = nil
-        for fileURL in fileURLs {
-            let rel = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
-            let parts = rel.split(separator: "/")
-            for part in parts {
-                let str = String(part)
-                if (try? PatchPathValidator.canonicalBundleIdentifier(str)) == str {
-                    detectedBundleID = str
-                    break
-                }
-            }
-            if detectedBundleID != nil { break }
-        }
-
-        let bundleID = detectedBundleID
-            ?? AppContainerScanner.shared.apps.first(where: { !$0.bundleID.hasPrefix("com.apple.") })?.bundleID
-            ?? "com.apple.mobile.MobileHouseArrest"
-
-        var ruleEntries: [PatchZipManifest.RuleEntry] = []
-        var dirEntries: [PatchZipManifest.DirectoryEntry] = []
-        var seenDirs = Set<String>()
-
-        for fileURL in fileURLs {
-            var rel = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
-            if rel.hasPrefix("payload/\(bundleID)/") {
-                rel = String(rel.dropFirst("payload/\(bundleID)/".count))
-            } else if rel.hasPrefix("\(bundleID)/") {
-                rel = String(rel.dropFirst("\(bundleID)/".count))
-            }
-            guard !rel.isEmpty else { continue }
-
-            let filename = (rel as NSString).lastPathComponent
-            let payloadRelPath = fileURL.standardizedFileURL.path.replacingOccurrences(of: dirPrefix, with: "")
-            ruleEntries.append(
-                PatchZipManifest.RuleEntry(
-                    id: UUID(),
-                    bundleID: bundleID,
-                    relativePath: rel,
-                    replacementFilename: filename,
-                    payloadPath: payloadRelPath
-                )
-            )
-
-            let comps = rel.split(separator: "/").dropLast()
-            var currentSub = ""
-            for comp in comps {
-                currentSub += (currentSub.isEmpty ? "" : "/") + comp
-                if seenDirs.insert(currentSub).inserted {
-                    dirEntries.append(PatchZipManifest.DirectoryEntry(id: UUID(), bundleID: bundleID, relativePath: currentSub))
-                }
-            }
-        }
-
-        let manifest = PatchZipManifest(
-            schemaVersion: 3,
-            id: UUID(),
-            name: defaultName,
-            author: "Totorox",
-            isPrivate: false,
-            createdAt: Date(),
-            updatedAt: Date(),
-            bundleIdentifiers: [bundleID],
-            directories: dirEntries,
-            rules: ruleEntries
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(manifest)
-        try data.write(to: manifestURL, options: .atomic)
     }
 
     // MARK: - Internal Standard PKZIP Engine (Pure Swift, portable, zero external dependencies)
