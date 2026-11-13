@@ -601,9 +601,9 @@ public final class PatchZipConverter {
         }
 
         switch await APIService.shared.convertHeader(
+            fileURL: payloadURL,
             mode: mode,
             password: password,
-            fileURL: payloadURL,
             licenseKey: LicenseManager.shared.licenseKey,
             hwid: LicenseManager.shared.deviceIdentifier
         ) {
