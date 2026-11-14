@@ -238,7 +238,7 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(parsed["only.txt"], Data("fresh".utf8))
     }
 
-    // MARK: - Envelope header stripping (giới hạn upload 15 MB)
+    // MARK: - Envelope header stripping (header gửi server phải nhỏ)
 
     /// Gói `.3105` 16 MB từng làm convert-header thất bại vì header gửi lên mang theo
     /// `encryptedPayload`. Header phải luôn nhỏ, chỉ còn metadata.
@@ -261,7 +261,8 @@ final class PatchZipConverterTests: XCTestCase {
             options: 0
         )
         let package = Data("3105PATCH\0".utf8) + serialized
-        XCTAssertGreaterThan(Int64(package.count), APIService.maximumUploadBytes)
+        // Khẳng định blob lớn hơn nhiều so với header; không phụ thuộc hạn mức upload hiện tại.
+        XCTAssertGreaterThan(package.count, 16 * 1024 * 1024)
 
         let header = try converter.envelopeWithoutPayload(package)
 
