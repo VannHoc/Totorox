@@ -132,12 +132,12 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
         try? handle.close()
 
-        if let data = try? Data(contentsOf: url),
-           let entries = try? PatchZipConverter.shared.parseZipArchive(data) {
+        // Đọc danh mục Central Directory trong vài ms mà KHÔNG giải nén bất kỳ payload nào
+        if let headers = try? PatchZipConverter.shared.readZipArchiveHeaders(from: url) {
             return Self.summary(
                 url: url,
                 fileSize: fileSize,
-                entryNames: Array(entries.keys)
+                entryNames: Array(headers.keys)
             )
         }
 
@@ -182,13 +182,14 @@ public final class AovModMergerEngine: @unchecked Sendable {
         )
     }
 
-    /// Gộp nhiều gói mod `.zip` theo mô hình hybrid.
+    /// Gộp nhiều gói mod `.zip` theo mô hình tối ưu siêu tốc (Zero-Decompression Streaming).
     ///
-    /// - Lượt 1: chỉ trích các file cấu hình mà server thật sự merge
-    ///   (`CommonActions` / `Databin` / `Thanos` / RP-RV metadata), đóng gói thành
-    ///   `config_bundle.zip` vài trăm KB rồi gửi `/api/v1/merge-plan`.
-    /// - Lượt 2: đọc lại từng gói mod một, ghép asset nặng vào `outURL` bằng writer
-    ///   streaming. Không gói mod nào (có thể 150 MB) bị upload, và RAM đỉnh chỉ ~1 gói.
+    /// - Nhóm toàn bộ entry từ các gói mod theo đường dẫn chuẩn hóa (Resources/<targetVersion>/...).
+    /// - Phát hiện Path Collision: Chỉ upload những file cấu hình (XML, MSES, HeroSkin, RP/RV)
+    ///   thực sự xuất hiện ở >= 2 gói mod. File cấu hình không đè lên nhau được giữ nguyên ở local.
+    /// - Đóng gói kết quả siêu tốc: ghi file đã merge từ server, các file còn lại (cấu hình
+    ///   local và toàn bộ assetbundle nặng) được copy thẳng luồng byte đã nén (Deflate/STORE)
+    ///   trực tiếp từ file mod gốc sang file zip kết quả mà KHÔNG cần giải nén hay nén lại.
     public func mergeModArchives(
         inputURLs: [URL],
         progress: @escaping @Sendable (String, Double) -> Void
@@ -197,13 +198,23 @@ public final class AovModMergerEngine: @unchecked Sendable {
             throw AovModMergerError.insufficientInputMods
         }
 
-        struct PreparedMod: Sendable {
-            let summary: AovModSummary
-            let lightEntries: [(path: String, data: Data)]
+        struct ModHeaderRef: Sendable {
+            let modIndex: Int
+            let originalPath: String
+            let remappedPath: String
+            let header: PatchZipConverter.ZipArchiveEntryHeader
         }
 
-        let prepared = try await Task.detached(priority: .userInitiated) { () -> [PreparedMod] in
-            var items: [PreparedMod] = []
+        struct ModMetadata: Sendable {
+            let summary: AovModSummary
+            let headers: [String: PatchZipConverter.ZipArchiveEntryHeader]
+        }
+
+        // BƯỚC 1: Đọc nhanh danh mục Central Directory của tất cả các gói mod (< 5ms mỗi gói)
+        progress("Đang đọc danh mục các gói mod...", 0.05)
+
+        let modMetas: [ModMetadata] = try await Task.detached(priority: .userInitiated) { () -> [ModMetadata] in
+            var items: [ModMetadata] = []
             for (idx, url) in inputURLs.enumerated() {
                 guard url.pathExtension.lowercased() != "3105" else {
                     throw AovModMergerError.invalidArchive(
@@ -211,81 +222,94 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     )
                 }
 
-                progress(
-                    "Đang đọc gói mod (\(idx + 1)/\(inputURLs.count)): \(url.lastPathComponent)...",
-                    Double(idx) / Double(inputURLs.count) * 0.2
-                )
-
-                let hasSecurity = url.startAccessingSecurityScopedResource()
-                defer {
-                    if hasSecurity { url.stopAccessingSecurityScopedResource() }
-                }
-
                 let fileSize = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
                 guard !PatchPackageLimits.exceedsExpandedLimit(fileSize) else {
                     throw AovModMergerError.sizeLimitExceeded
                 }
 
-                let data: Data
-                do {
-                    data = try Data(contentsOf: url)
-                } catch {
-                    throw AovModMergerError.invalidArchive(
-                        "\(url.lastPathComponent): \(error.localizedDescription)"
-                    )
-                }
-                guard data.count >= 4, data.prefix(2) == Data([0x50, 0x4B]) else {
-                    throw AovModMergerError.invalidArchive("\(url.lastPathComponent) (Không phải tệp .zip hợp lệ)")
-                }
-
-                let entries = try PatchZipConverter.shared.parseZipArchive(data)
-                var light: [(path: String, data: Data)] = []
-                for path in entries.keys.sorted() {
-                    guard let fileData = entries[path] else { continue }
-                    if Self.isServerConfigPath(path) {
-                        light.append((path: path, data: fileData))
-                    }
-                }
-
+                let headers = try PatchZipConverter.shared.readZipArchiveHeaders(from: url)
                 let summary = Self.summary(
                     url: url,
                     fileSize: fileSize,
-                    entryNames: Array(entries.keys)
+                    entryNames: Array(headers.keys)
                 )
-                items.append(PreparedMod(summary: summary, lightEntries: light))
-                // `data` và `entries` được giải phóng khi vòng lặp sang mod kế tiếp.
+                items.append(ModMetadata(summary: summary, headers: headers))
             }
             return items
         }.value
 
-        let summaries = prepared.map(\.summary)
+        let summaries = modMetas.map(\.summary)
         let logs = summaries.map { "Đã đọc \($0.fileName) (\($0.fileSize) byte)." }
 
-        // Đóng gói config nhẹ thành config_bundle.zip theo layout mod_<idx>/...
-        var configBundleEntries: [(path: String, data: Data)] = []
-        for (idx, mod) in prepared.enumerated() {
-            for entry in mod.lightEntries {
-                configBundleEntries.append((path: "mod_\(idx)/\(entry.path)", data: entry.data))
+        let targetVersion = Self.resolveTargetVersion(summaries)
+
+        // BƯỚC 2: Nhóm toàn bộ entry theo đường dẫn chuẩn hóa (Resources/<targetVersion>/...)
+        var pathGroups: [String: [ModHeaderRef]] = [:]
+        for (modIdx, modMeta) in modMetas.enumerated() {
+            let sourceVersion = modMeta.summary.resourceVersion
+            for (origPath, header) in modMeta.headers {
+                let remapped = Self.remapResourceVersion(
+                    path: origPath,
+                    from: sourceVersion,
+                    to: targetVersion
+                )
+                let normalizedKey = remapped.lowercased()
+                let entryRef = ModHeaderRef(
+                    modIndex: modIdx,
+                    originalPath: origPath,
+                    remappedPath: remapped,
+                    header: header
+                )
+                pathGroups[normalizedKey, default: []].append(entryRef)
             }
         }
+
+        // BƯỚC 3: Phát hiện Path Collision cho file cấu hình
+        // Chỉ upload những file:
+        // 1. Thỏa isServerConfigPath (CommonActions XML, Databin MSES, Thanos IFix, RP/RV assetbundle)
+        // 2. VÀ xuất hiện ở ít nhất 2 gói mod khác nhau (distinctMods.count >= 2)
+        // File cấu hình chỉ có ở 1 mod duy nhất sẽ được giữ nguyên ở local để đóng gói trực tiếp!
+        var collidingRefs: [ModHeaderRef] = []
+        var detectedConflicts = 0
+
+        for (_, refs) in pathGroups {
+            guard let first = refs.first else { continue }
+            if Self.isServerConfigPath(first.remappedPath) {
+                let distinctMods = Set(refs.map(\.modIndex))
+                if distinctMods.count >= 2 {
+                    detectedConflicts += 1
+                    collidingRefs.append(contentsOf: refs)
+                }
+            }
+        }
+
+        // BƯỚC 4: Chuẩn bị config_bundle.zip gửi lên máy chủ
+        var configBundleEntries: [(path: String, data: Data)] = []
+        if !collidingRefs.isEmpty {
+            progress("Đang trích xuất \(detectedConflicts) tệp cấu hình xung đột...", 0.2)
+            for ref in collidingRefs {
+                let modURL = inputURLs[ref.modIndex]
+                let fileData = try PatchZipConverter.shared.extractZipEntry(header: ref.header, from: modURL)
+                configBundleEntries.append((path: "mod_\(ref.modIndex)/\(ref.originalPath)", data: fileData))
+            }
+        }
+
         let configBundleData = try PatchZipConverter.shared.buildZipArchive(entries: configBundleEntries)
         let workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("TotoroxMerge_\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workDir) }
+
         let configBundleURL = workDir.appendingPathComponent("config_bundle.zip")
         try configBundleData.write(to: configBundleURL, options: .atomic)
 
-        let modPayloads: [[String: Any]] = prepared.map { mod in
+        let modPayloads: [[String: Any]] = summaries.map { s in
             [
-                "name": mod.summary.fileName,
-                "heroIDs": mod.summary.heroIDs,
-                "skinIDs": mod.summary.skinIDs,
+                "name": s.fileName,
+                "heroIDs": s.heroIDs,
+                "skinIDs": s.skinIDs,
             ]
         }
-        // Server remap mọi `Resources/<ver>/...` về `target_version`. Client phải dùng
-        // cùng version đó khi ghép asset nặng, nếu không asset sẽ rơi vào thư mục
-        // version cũ và game bỏ qua.
-        let targetVersion = Self.resolveTargetVersion(summaries)
         let configObject: [String: Any] = [
             "mods": modPayloads,
             "output": ["resourcesVersion": targetVersion],
@@ -315,19 +339,18 @@ public final class AovModMergerEngine: @unchecked Sendable {
             throw AovModMergerError.invalidArchive("Máy chủ trả về merge-plan không hợp lệ.")
         }
 
-        progress("Đang nhận kết quả gộp từ máy chủ...", 0.8)
+        progress("Đang đóng gói tệp .zip kết quả...", 0.75)
 
-        guard let encoded = plan.zipBytesB64,
-              let bundle = Data(base64Encoded: encoded),
-              let entries = try? PatchZipConverter.shared.parseZipArchive(bundle) else {
-            throw AovModMergerError.zipCreationFailed(
-                plan.note ?? "Máy chủ không trả gói kết quả (.zip)."
-            )
+        // BƯỚC 5: Nhận và giải nén các file server đã merge (nếu có)
+        var serverMergedEntries: [String: Data] = [:]
+        if let encoded = plan.zipBytesB64,
+           let bundle = Data(base64Encoded: encoded),
+           !bundle.isEmpty {
+            serverMergedEntries = (try? PatchZipConverter.shared.parseZipArchive(bundle)) ?? [:]
         }
+        let serverMergedKeys = Set(serverMergedEntries.keys.map { $0.lowercased() })
 
-        // Hybrid: ghép file cấu hình đã merge (server) với tài nguyên nặng từ mod gốc (client).
-        let mergedPaths = Set(entries.keys.map { $0.lowercased() })
-
+        // BƯỚC 6: Tạo file .zip kết quả với tốc độ cao (Streaming Copy)
         let fileManager = FileManager.default
         let outDir = fileManager.temporaryDirectory
             .appendingPathComponent("TotoroxMergedMods", isDirectory: true)
@@ -340,55 +363,72 @@ public final class AovModMergerEngine: @unchecked Sendable {
         let outURL = outDir.appendingPathComponent(outName)
         try? fileManager.removeItem(at: outURL)
 
-        // Hai lượt: upload chỉ cần config nhẹ; lượt ghép đọc lại từng gói mod một
-        // và ghi thẳng xuống đĩa. Nhờ vậy RAM đỉnh ~1 gói thay vì cả 4 gói mod.
+        var modHandles: [FileHandle?] = []
+        for url in inputURLs {
+            _ = url.startAccessingSecurityScopedResource()
+            let handle = try? FileHandle(forReadingFrom: url)
+            modHandles.append(handle)
+        }
+        defer {
+            for (idx, handle) in modHandles.enumerated() {
+                try? handle?.close()
+                inputURLs[idx].stopAccessingSecurityScopedResource()
+            }
+        }
+
         do {
             let writer = try PatchZipConverter.ZipArchiveWriter(destinationURL: outURL)
             defer { writer.cancel() }
-            var writtenPaths = Set<String>()
 
-            for mod in prepared {
-                progress("Đang ghép tài nguyên nặng: \(mod.summary.fileName)...", 0.85)
-                let entriesOfMod = try Self.readZipEntries(at: mod.summary.url)
-                for path in entriesOfMod.keys.sorted() {
-                    guard let fileData = entriesOfMod[path] else { continue }
-                    guard !Self.isServerConfigPath(path) else { continue }
-                    let remapped = Self.remapResourceVersion(
-                        path: path,
-                        from: mod.summary.resourceVersion,
-                        to: targetVersion
-                    )
-                    guard !mergedPaths.contains(remapped.lowercased()) else { continue }
-                    guard writtenPaths.insert(remapped.lowercased()).inserted else { continue }
-                    try writer.add(path: remapped, data: fileData)
-                }
-            }
-
-            for path in entries.keys.sorted() {
-                guard let data = entries[path] else { continue }
+            // 1. Ghi các file cấu hình server đã merge
+            for path in serverMergedEntries.keys.sorted() {
+                guard let data = serverMergedEntries[path] else { continue }
                 try writer.add(path: path, data: data)
             }
 
+            // 2. Ghi toàn bộ các file còn lại (cấu hình không xung đột + tài nguyên nặng)
+            // Sao chép nguyên luồng dữ liệu (Deflate/STORE) từ mod gốc, không giải nén và không nén lại
+            for normalizedKey in pathGroups.keys.sorted() {
+                guard !serverMergedKeys.contains(normalizedKey) else { continue }
+                guard let refs = pathGroups[normalizedKey], let winner = refs.last else { continue }
+                guard let sourceHandle = modHandles[winner.modIndex] else {
+                    throw AovModMergerError.invalidArchive("Không thể mở tệp mod nguồn: \(inputURLs[winner.modIndex].lastPathComponent)")
+                }
+
+                try writer.copyRawEntry(
+                    destinationPath: winner.remappedPath,
+                    from: sourceHandle,
+                    payloadOffset: winner.header.payloadOffset,
+                    compressedSize: winner.header.compressedSize,
+                    uncompressedSize: winner.header.uncompressedSize,
+                    compressionMethod: winner.header.compressionMethod,
+                    crc32: winner.header.crc32
+                )
+            }
+
             try writer.finish()
+
+            let outputSize = Int64((try? outURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            let totalFiles = writer.totalEntriesWritten
+            let mergedConflicts = plan.mergePlan?.conflicts ?? detectedConflicts
+            let serverFilesCount = serverMergedEntries.count
+
+            let finalLogs = logs + ["Máy chủ trả \(serverFilesCount) file đã gộp (xung đột: \(mergedConflicts))."]
+            progress("Hoàn tất", 1.0)
+
+            return AovMergeResult(
+                outputZipURL: outURL,
+                outputFileSize: outputSize,
+                resourceVersion: targetVersion,
+                mergedMods: summaries,
+                totalFilesWritten: totalFiles,
+                smartMergedConflicts: mergedConflicts,
+                logs: finalLogs
+            )
         } catch {
             try? fileManager.removeItem(at: outURL)
             throw AovModMergerError.zipCreationFailed(error.localizedDescription)
         }
-
-        let outputSize = Int64((try? outURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-
-        let finalLogs = logs + ["Máy chủ trả \(plan.mergePlan?.fileCount ?? 0) file đã gộp."]
-        progress("Hoàn tất", 1.0)
-
-        return AovMergeResult(
-            outputZipURL: outURL,
-            outputFileSize: outputSize,
-            resourceVersion: targetVersion,
-            mergedMods: summaries,
-            totalFilesWritten: plan.mergePlan?.fileCount ?? 0,
-            smartMergedConflicts: 0,
-            logs: finalLogs
-        )
     }
 
     // MARK: - Helpers
@@ -397,11 +437,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
     /// `CommonActions` (XML), `Databin` (MSES), `Thanos` (HeroSkin_1/2) và hai assetbundle
     /// metadata `ResourcePackerInfoSetAll` / `ResourceVerificationInfoSetAll` (thêm entry
     /// cho asset mới). Mọi file khác do client giữ nguyên và ghép local.
-    static func isServerConfigPath(_ relativePath: String) -> Bool {
-        let lower = relativePath.lowercased()
+    public static func isServerConfigPath(_ relativePath: String) -> Bool {
+        let lower = relativePath.replacingOccurrences(of: "\\", with: "/").lowercased()
         return lower.contains("commonactions")
-            || lower.contains("/databin/")
-            || lower.contains("/thanos/")
+            || lower.contains("databin")
+            || lower.contains("thanos")
+            || lower.hasSuffix(".xml")
+            || lower.hasSuffix(".mses")
             || lower.hasSuffix("resourcepackerinfosetall.assetbundle")
             || lower.hasSuffix("resourceverificationinfosetall.assetbundle")
     }

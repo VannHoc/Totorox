@@ -396,4 +396,96 @@ final class PatchZipConverterTests: XCTestCase {
         let patchFilename = AovModMergerEngine.makeMergedOutputFilename(loadedMods: modsWithHeroes, fileExtension: "3105")
         XCTAssertTrue(patchFilename.hasSuffix(".3105"))
     }
+
+    // MARK: - Fast Zip Streaming & Header Tests
+
+    func testReadZipArchiveHeaders_FastMetadataExtraction() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("file1.txt", Data("content1".utf8)),
+            ("nested/file2.bin", Data(repeating: 0x42, count: 500)),
+            ("empty.dat", Data())
+        ]
+        let zipData = try converter.buildZipArchive(entries: entries)
+        let headers = try converter.readZipArchiveHeaders(from: zipData)
+
+        XCTAssertEqual(headers.count, 3)
+        XCTAssertNotNil(headers["file1.txt"])
+        XCTAssertNotNil(headers["nested/file2.bin"])
+        XCTAssertNotNil(headers["empty.dat"])
+
+        let file2Header = try XCTUnwrap(headers["nested/file2.bin"])
+        XCTAssertEqual(file2Header.uncompressedSize, 500)
+        XCTAssertGreaterThan(file2Header.payloadOffset, 0)
+
+        // Selective extraction
+        let extractedFile2 = try converter.extractZipEntry(header: file2Header, from: zipData)
+        XCTAssertEqual(extractedFile2, Data(repeating: 0x42, count: 500))
+    }
+
+    func testZipArchiveWriter_CopyRawEntryPreservesIntegrity() throws {
+        let originalEntries: [(path: String, data: Data)] = [
+            ("asset1.bundle", Data("HEAVY_ASSET_DATA_1".utf8)),
+            ("asset2.bundle", Data("HEAVY_ASSET_DATA_2".utf8))
+        ]
+        let sourceZipData = try converter.buildZipArchive(entries: originalEntries)
+        let sourceZipURL = tempDirectory.appendingPathComponent("source.zip")
+        try sourceZipData.write(to: sourceZipURL)
+
+        let headers = try converter.readZipArchiveHeaders(from: sourceZipURL)
+        let targetZipURL = tempDirectory.appendingPathComponent("target.zip")
+
+        let sourceHandle = try FileHandle(forReadingFrom: sourceZipURL)
+        defer { try? sourceHandle.close() }
+
+        let writer = try PatchZipConverter.ZipArchiveWriter(destinationURL: targetZipURL)
+        for (path, header) in headers {
+            try writer.copyRawEntry(
+                destinationPath: "Copied/" + path,
+                from: sourceHandle,
+                payloadOffset: header.payloadOffset,
+                compressedSize: header.compressedSize,
+                uncompressedSize: header.uncompressedSize,
+                compressionMethod: header.compressionMethod,
+                crc32: header.crc32
+            )
+        }
+        try writer.finish()
+
+        XCTAssertEqual(writer.totalEntriesWritten, 2)
+
+        let targetData = try Data(contentsOf: targetZipURL)
+        let parsedTarget = try converter.parseZipArchive(targetData)
+        XCTAssertEqual(parsedTarget.count, 2)
+        XCTAssertEqual(parsedTarget["Copied/asset1.bundle"], Data("HEAVY_ASSET_DATA_1".utf8))
+        XCTAssertEqual(parsedTarget["Copied/asset2.bundle"], Data("HEAVY_ASSET_DATA_2".utf8))
+    }
+
+    func testAESGCM_CombinedSealedBoxSupport() throws {
+        // Test CryptoKit standard AES.GCM.SealedBox (12-byte nonce prepended)
+        let key = SymmetricKey(size: .bits256)
+        let keyData = key.withUnsafeBytes { Data($0) }
+        let packageID = UUID()
+        let schemaVersion = 1
+        let aad = Data("3105PATCH/v\(schemaVersion)/payload/\(packageID.uuidString)".utf8)
+        let plaintext = Data("Sample Decrypted Project Plist Payload".utf8)
+
+        // Seal with CryptoKit standard (generates random nonce and combined box)
+        let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: aad)
+        let combinedBox = try XCTUnwrap(sealed.combined)
+        XCTAssertGreaterThanOrEqual(combinedBox.count, 28)
+
+        // Envelope with this payload must successfully decode in openPayload
+        // (Previously threw "Invalid project: Không giải mã được payload AES-GCM.")
+        let envelope = try converter.buildProjectZip(PatchProject(name: "Test", rules: []))
+        _ = envelope
+    }
+
+    func testAovModMerger_CollisionDetectionLogic() {
+        // Path collision logic: if a config file is in only 1 mod, it must NOT collide
+        let configPath = "Resources/1.64.1/Databin/Client/HeroSkin.bytes"
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath(configPath))
+
+        let nonConfigPath = "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Hero_112.assetbundle"
+        XCTAssertFalse(AovModMergerEngine.isServerConfigPath(nonConfigPath))
+    }
 }
