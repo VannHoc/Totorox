@@ -557,4 +557,117 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(summary.schemaVersion, 9)
         XCTAssertTrue(summary.isPasswordProtected)
     }
+
+    func testBuildPatchProject_3105FolderStructureWithApplicationAppGroupAndSettings() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("ABC/settings.json", Data("{}".utf8)),
+            ("ABC/Application/com.abc.xyz/Documents/config.json", Data(#"{"ok":true}"#.utf8)),
+            ("ABC/AppGroup/group.com.example.shared/Library/ConfigurationProfiles/SharedDeviceConfiguration.plist", Data("plist".utf8)),
+            ("ABC/SystemAppGroup/group.system.shared/Preferences/prefs.plist", Data("sys".utf8)),
+        ]
+        let zipData = try converter.buildZipArchive(entries: entries)
+        let project = try converter.buildPatchProject(fromZipData: zipData)
+
+        XCTAssertEqual(project.name, "ABC")
+        XCTAssertEqual(project.rules.count, 3, "settings.json không được biến thành rule")
+
+        let appRule = project.rules.first { $0.containerKind == "application" }
+        XCTAssertEqual(appRule?.bundleID, "com.abc.xyz")
+        XCTAssertEqual(appRule?.relativePath, "Documents/config.json")
+
+        let groupRule = project.rules.first { $0.containerKind == "appGroup" }
+        XCTAssertEqual(groupRule?.bundleID, "group.com.example.shared")
+        XCTAssertEqual(groupRule?.relativePath, "Library/ConfigurationProfiles/SharedDeviceConfiguration.plist")
+
+        let sysGroupRule = project.rules.first { $0.containerKind == "systemAppGroup" }
+        XCTAssertEqual(sysGroupRule?.bundleID, "group.system.shared")
+        XCTAssertEqual(sysGroupRule?.relativePath, "Preferences/prefs.plist")
+
+        let plistData = try PatchZipConverter.native3105PayloadPlist(project: project, packageID: project.id)
+        let decoded = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
+        let projDict = try XCTUnwrap(decoded?["project"] as? [String: Any])
+        XCTAssertEqual(projDict["bundleIdentifiers"] as? [String], ["com.abc.xyz"])
+        XCTAssertEqual(projDict["appGroupIdentifiers"] as? [String], ["group.com.example.shared"])
+        XCTAssertEqual(projDict["systemAppGroupIdentifiers"] as? [String], ["group.system.shared"])
+        let dirs = try XCTUnwrap(projDict["directories"] as? [[String: Any]])
+        XCTAssertTrue(dirs.contains { ($0["containerKind"] as? String) == "appGroup" && ($0["relativePath"] as? String) == "Library/ConfigurationProfiles" })
+    }
+
+    func testBuildPatchProject_RawAovModMapsToGarenaBundleAndDocuments() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes", Data("pkg".utf8)),
+            ("Resources/1.64.1/Databin/Client/HeroSkin.bytes", Data("skin".utf8)),
+        ]
+        let zipData = try converter.buildZipArchive(entries: entries)
+        let project = try converter.buildPatchProject(fromZipData: zipData)
+
+        XCTAssertEqual(project.bundleIdentifiers, ["com.garena.game.kgvn"])
+        XCTAssertEqual(project.rules.count, 2)
+        for rule in project.rules {
+            XCTAssertEqual(rule.bundleID, "com.garena.game.kgvn")
+            XCTAssertEqual(rule.containerKind, "application")
+            XCTAssertTrue(rule.relativePath.hasPrefix("Documents/Resources/1.64.1/"), "Unexpected path: \(rule.relativePath)")
+        }
+
+        let plistData = try PatchZipConverter.native3105PayloadPlist(project: project, packageID: project.id)
+        let decoded = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
+        let projDict = try XCTUnwrap(decoded?["project"] as? [String: Any])
+        let dirs = try XCTUnwrap(projDict["directories"] as? [[String: Any]])
+        let dirPaths = Set(dirs.compactMap { $0["relativePath"] as? String })
+        XCTAssertTrue(dirPaths.contains("Documents"))
+        XCTAssertTrue(dirPaths.contains("Documents/Resources"))
+        XCTAssertTrue(dirPaths.contains("Documents/Resources/1.64.1"))
+    }
+
+    func testBuildPatchProject_TotoroxExportZipPreservesBundleMapping() throws {
+        let path = "com.garena.game.kgvn/Documents/Resources/1.64.1/Databin/Client/HeroSkin.bytes"
+        let zipData = try converter.buildZipArchive(entries: [(path, Data("skin".utf8))])
+        let project = try converter.buildPatchProject(fromZipData: zipData)
+
+        XCTAssertEqual(project.rules.count, 1)
+        XCTAssertEqual(project.rules.first?.bundleID, "com.garena.game.kgvn")
+        XCTAssertEqual(project.rules.first?.containerKind, "application")
+        XCTAssertEqual(project.rules.first?.relativePath, "Documents/Resources/1.64.1/Databin/Client/HeroSkin.bytes")
+    }
+
+    func testAovModMerger_EnsurePkgArchiveStoredRepacksDeflateInnerEntries() throws {
+        // Inner entry "hello" compressed with RFC 1951 DEFLATE (method 8): CB 48 CD C9 C9 07 00
+        let nameData = Data("Kernel/hello.lua".utf8)
+        let deflated = Data([0xCB, 0x48, 0xCD, 0xC9, 0xC9, 0x07, 0x00])
+        let crc: UInt32 = 0x3610_A686
+        let uncompressedSize: UInt32 = 5
+
+        var pkgZip = Data()
+        func appendU16(_ v: UInt16) {
+            pkgZip.append(UInt8(v & 0xFF))
+            pkgZip.append(UInt8((v >> 8) & 0xFF))
+        }
+        func appendU32(_ v: UInt32) {
+            pkgZip.append(UInt8(v & 0xFF))
+            pkgZip.append(UInt8((v >> 8) & 0xFF))
+            pkgZip.append(UInt8((v >> 16) & 0xFF))
+            pkgZip.append(UInt8((v >> 24) & 0xFF))
+        }
+
+        appendU32(0x0403_4B50); appendU16(20); appendU16(0); appendU16(8); appendU16(0); appendU16(0x0021)
+        appendU32(crc); appendU32(UInt32(deflated.count)); appendU32(uncompressedSize)
+        appendU16(UInt16(nameData.count)); appendU16(0)
+        pkgZip.append(nameData)
+        pkgZip.append(deflated)
+
+        let cdOff = UInt32(pkgZip.count)
+        appendU32(0x0201_4B50); appendU16(20); appendU16(20); appendU16(0); appendU16(8); appendU16(0); appendU16(0x0021)
+        appendU32(crc); appendU32(UInt32(deflated.count)); appendU32(uncompressedSize)
+        appendU16(UInt16(nameData.count)); appendU16(0); appendU16(0); appendU16(0); appendU16(0); appendU32(0); appendU32(0)
+        pkgZip.append(nameData)
+
+        let cdSize = UInt32(pkgZip.count) - cdOff
+        appendU32(0x0605_4B50); appendU16(0); appendU16(0); appendU16(1); appendU16(1); appendU32(cdSize); appendU32(cdOff); appendU16(0)
+
+        let repacked = AovModMergerEngine.ensurePkgArchiveStored(pkgZip)
+        let repackedHeaders = try converter.readZipArchiveHeaders(from: repacked)
+        XCTAssertEqual(repackedHeaders["Kernel/hello.lua"]?.compressionMethod, 0)
+        let repackedParsed = try converter.parseZipArchive(repacked)
+        XCTAssertEqual(repackedParsed["Kernel/hello.lua"], Data("hello".utf8))
+    }
 }

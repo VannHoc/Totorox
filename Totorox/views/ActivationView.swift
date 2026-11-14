@@ -16,6 +16,7 @@ struct ActivationView: View {
     @State private var serverURLInput = ""
     @State private var serverConfigError: String?
     @State private var serverConfigSaved = false
+    @State private var didCopyUDID = false
 
     var onActivated: (() -> Void)? = nil
 
@@ -60,6 +61,8 @@ struct ActivationView: View {
                 }
                 .totoroxCard()
                 .padding(.horizontal, 16)
+
+                telegramCard
 
                 deviceCard
             }
@@ -172,21 +175,57 @@ struct ActivationView: View {
         }
     }
 
-    private var deviceCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Mã thiết bị (HWID)")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(TotoroxTheme.textSecondary)
+    private var telegramCard: some View {
+        TotoroxLinkRow(
+            urlString: "https://t.me/milototoro",
+            title: language.text("activation.buy_telegram_title"),
+            subtitle: language.text("activation.buy_telegram_subtitle"),
+            icon: "paperplane.fill"
+        )
+        .totoroxCard(padding: 14)
+        .padding(.horizontal, 16)
+    }
 
-            Text(license.deviceIdentifier)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(TotoroxTheme.textPrimary)
-                .textSelection(.enabled)
-                .lineLimit(1)
-                .truncationMode(.middle)
+    private var deviceCard: some View {
+        Button {
+            UIPasteboard.general.string = license.deviceIdentifier
+            withAnimation(.easeInOut(duration: 0.2)) {
+                didCopyUDID = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    didCopyUDID = false
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(language.text("activation.device_udid"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+
+                    Spacer()
+
+                    HStack(spacing: 4) {
+                        Image(systemName: didCopyUDID ? "checkmark.circle.fill" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(didCopyUDID ? language.text("activation.copied_udid") : language.text("logs.copy"))
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(TotoroxTheme.mintAccent)
+                }
+
+                Text(license.deviceIdentifier)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .totoroxCard(padding: 12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .totoroxCard(padding: 12)
+        .buttonStyle(.plain)
         .padding(.horizontal, 16)
     }
 

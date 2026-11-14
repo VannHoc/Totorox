@@ -235,3 +235,9 @@
 "server.config_reset" = "恢复默认服务器";
 "server.config_saved" = "服务器已保存。";
 "server.config_invalid" = "URL 无效。例如：https://your-server.com";
+
+/* --- Activation --- */
+"activation.device_udid" = "设备 UDID";
+"activation.copied_udid" = "已复制 UDID";
+"activation.buy_telegram_title" = "Telegram 购买与售后频道";
+"activation.buy_telegram_subtitle" = "联系 @milototoro 获取密钥与售后支持";
