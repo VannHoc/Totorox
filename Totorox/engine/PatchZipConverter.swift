@@ -446,7 +446,8 @@ public final class PatchZipConverter {
         }
 
         let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
-        let project = try buildPatchProject(fromZipData: zipData)
+        let built = try buildPatchProjectWithSettings(fromZipData: zipData)
+        let project = built.project
         let metadataPayload = try manifestData(for: project)
         let response = try await sendConvertHeader(
             mode: "to_zip",
@@ -459,9 +460,15 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.corruptedArchive(response.note ?? "Máy chủ không trả content key.")
         }
         let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
-        let schemaVersion = 3
+        let schemaVersion = 9
         let isProtected = cleanPassword != nil
-        let sealedPayload = try sealPayload(project: project, contentKey: contentKey, packageID: packageID, schemaVersion: schemaVersion)
+        let sealedPayload = try sealPayload(
+            project: project,
+            contentKey: contentKey,
+            packageID: packageID,
+            schemaVersion: schemaVersion,
+            settingsPlist: built.settings
+        )
         let envelopeData = try buildEnvelope(
             project: project,
             packageID: packageID,
@@ -1700,6 +1707,11 @@ public final class PatchZipConverter {
         return try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
     }
 
+    private static func isVersionSegment(_ segment: String) -> Bool {
+        let parts = segment.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count >= 2 && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+    }
+
     private static func isLikelyBundleIDSegment(_ segment: String) -> Bool {
         let lower = segment.lowercased()
         let forbiddenSuffixes = [
@@ -1712,15 +1724,116 @@ public final class PatchZipConverter {
         return segment.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil
     }
 
-    private func buildPatchProject(fromZipData zipData: Data) throws -> PatchProject {
+    private static func unwrapCommonRootWrappers(
+        _ rawItems: [(parts: [String], data: Data)]
+    ) -> (items: [(parts: [String], data: Data)], inferredName: String?) {
+        let protectedRoots: Set<String> = [
+            "application", "appgroup", "systemappgroup", "payload",
+            "documents", "library", "tmp",
+            "resources", "databin", "ages", "assetrefs", "prefab_characters",
+            "thanos", "commonactions", "sound", "sound_vn", "languages", "assetbundles"
+        ]
+        var current = rawItems
+        var lastStripped: String?
+        for _ in 0..<4 {
+            guard !current.isEmpty,
+                  current.allSatisfy({ $0.parts.count > 1 }),
+                  let candidate = current.first?.parts.first else {
+                break
+            }
+            let lower = candidate.lowercased()
+            if protectedRoots.contains(lower)
+                || isLikelyBundleIDSegment(candidate)
+                || isVersionSegment(candidate) {
+                break
+            }
+            guard current.allSatisfy({ $0.parts.first == candidate }) else {
+                break
+            }
+            lastStripped = candidate
+            current = current.map { (parts: Array($0.parts.dropFirst()), data: $0.data) }
+        }
+        return (current, lastStripped)
+    }
+
+    private static func classifyContainerParts(
+        _ parts: [String]
+    ) -> (containerKind: String, bundleID: String, relativePath: String)? {
+        guard !parts.isEmpty else { return nil }
+        let rootLower = parts[0].lowercased()
+        if parts.count >= 3 {
+            let targetID = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let relPath = parts.dropFirst(2).joined(separator: "/")
+            if !targetID.isEmpty, targetID != ".", targetID != "..", !relPath.isEmpty {
+                switch rootLower {
+                case "application":
+                    return ("application", targetID, relPath)
+                case "appgroup":
+                    return ("appGroup", targetID, relPath)
+                case "systemappgroup":
+                    return ("systemAppGroup", targetID, relPath)
+                case "payload" where isLikelyBundleIDSegment(targetID):
+                    return ("application", targetID, relPath)
+                default:
+                    break
+                }
+            }
+        }
+        if parts.count >= 2, isLikelyBundleIDSegment(parts[0]) {
+            let relPath = parts.dropFirst().joined(separator: "/")
+            if !relPath.isEmpty {
+                return ("application", parts[0], relPath)
+            }
+        }
+        return nil
+    }
+
+    func buildPatchProject(fromZipData zipData: Data) throws -> PatchProject {
+        try buildPatchProjectWithSettings(fromZipData: zipData).project
+    }
+
+    private func buildPatchProjectWithSettings(fromZipData zipData: Data) throws -> (project: PatchProject, settings: [Any]) {
         let entries = try parseZipArchive(zipData)
-        // Try manifest if present (legacy ZIPs)
+        let rawItems: [(parts: [String], data: Data)] = entries.keys.sorted().compactMap { rawName in
+            let cleaned = rawName.replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let parts = cleaned.split(separator: "/").map(String.init)
+            guard !parts.isEmpty else { return nil }
+            if parts.contains(where: { $0.caseInsensitiveCompare("__MACOSX") == .orderedSame }) { return nil }
+            if let last = parts.last, last == ".DS_Store" || last.hasPrefix("._") { return nil }
+            return (parts: parts, data: entries[rawName] ?? Data())
+        }
+        let unwrapped = Self.unwrapCommonRootWrappers(rawItems)
+        let items = unwrapped.items
+
         var manifest: [String: Any]?
         for name in ["patch.json", "manifest.json"] {
-            if let data = entries[name],
+            let foundData = entries[name]
+                ?? items.first(where: { $0.parts.count == 1 && $0.parts[0].lowercased() == name })?.data
+            if let data = foundData,
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 manifest = json
                 break
+            }
+        }
+
+        var settingsPlist: [Any] = []
+        var settingsName: String?
+        var settingsAuthor: String?
+        var settingsIsPrivate: Bool?
+        if let settingsItem = items.first(where: { $0.parts.count == 1 && $0.parts[0].lowercased() == "settings.json" }),
+           let json = try? JSONSerialization.jsonObject(with: settingsItem.data) {
+            if let array = json as? [Any] {
+                settingsPlist = array
+            } else if let dict = json as? [String: Any] {
+                settingsName = dict["name"] as? String
+                settingsAuthor = dict["author"] as? String
+                settingsIsPrivate = dict["isPrivate"] as? Bool
+                if let fields = dict["fields"] as? [Any] {
+                    settingsPlist = fields
+                } else if let nested = dict["settings"] as? [Any] {
+                    settingsPlist = nested
+                }
             }
         }
 
@@ -1729,11 +1842,19 @@ public final class PatchZipConverter {
             return trimmed.isEmpty ? "com.garena.game.kgvn" : trimmed
         }
 
-        func payloadFor(relativePath: String, payloadPath: String, bundleID: String) -> Data {
+        func payloadFor(relativePath: String, payloadPath: String, bundleID: String, containerKind: String) -> Data {
+            let target = normalizedBundle(bundleID)
+            let kindFolder: String
+            switch containerKind {
+            case "appGroup": kindFolder = "AppGroup"
+            case "systemAppGroup": kindFolder = "SystemAppGroup"
+            default: kindFolder = "Application"
+            }
             let candidates = [
                 payloadPath,
-                "\(normalizedBundle(bundleID))/\(relativePath)",
-                "payload/\(normalizedBundle(bundleID))/\(relativePath)",
+                "\(kindFolder)/\(target)/\(relativePath)",
+                "\(target)/\(relativePath)",
+                "payload/\(target)/\(relativePath)",
                 relativePath,
             ]
             for candidate in candidates {
@@ -1752,10 +1873,12 @@ public final class PatchZipConverter {
                 let relativePath = (item["relativePath"] as? String) ?? ""
                 guard !relativePath.isEmpty else { continue }
                 let bundleID = normalizedBundle((item["bundleID"] as? String) ?? "")
+                let containerKind = (item["containerKind"] as? String) ?? "application"
                 let payload = payloadFor(
                     relativePath: relativePath,
                     payloadPath: (item["payloadPath"] as? String) ?? "",
-                    bundleID: bundleID
+                    bundleID: bundleID,
+                    containerKind: containerKind
                 )
                 let rule = PatchRule(
                     id: (item["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID(),
@@ -1764,12 +1887,14 @@ public final class PatchZipConverter {
                     replacementFilename: (item["replacementFilename"] as? String) ?? (relativePath as NSString).lastPathComponent,
                     replacementData: payload,
                     operation: (item["operation"] as? String) ?? "replace",
-                    containerKind: (item["containerKind"] as? String) ?? "application"
+                    containerKind: containerKind
                 )
                 rules.append(rule)
             }
             if !rules.isEmpty {
-                let bundleIdentifiers = (manifest["bundleIdentifiers"] as? [String]) ?? [rules[0].bundleID]
+                let appBundles = (manifest["bundleIdentifiers"] as? [String])
+                    ?? rules.filter { $0.containerKind == "application" }.map(\.bundleID)
+                let bundleIdentifiers = appBundles.isEmpty ? [rules[0].bundleID] : appBundles
                 let directoriesRaw = (manifest["directories"] as? [[String: Any]]) ?? []
                 let directories = directoriesRaw.map { dir in
                     PatchDirectory(
@@ -1778,7 +1903,7 @@ public final class PatchZipConverter {
                         relativePath: (dir["relativePath"] as? String) ?? ""
                     )
                 }
-                return PatchProject(
+                let project = PatchProject(
                     id: (manifest["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID(),
                     name: (manifest["name"] as? String) ?? "Patch",
                     author: (manifest["author"] as? String) ?? "",
@@ -1787,81 +1912,122 @@ public final class PatchZipConverter {
                     directories: directories,
                     rules: rules
                 )
+                return (project, settingsPlist)
             }
         }
 
-        // Infer bundle ID from directory segments ONLY (never match filenames like Actor_116_Infos.pkg.bytes)
-        var detectedBundle: String?
+        let aovMarkers: Set<String> = [
+            "resources", "databin", "ages", "assetrefs", "prefab_characters",
+            "thanos", "commonactions", "sound", "sound_vn", "languages", "assetbundles"
+        ]
         var hasAovStructure = false
-        for name in entries.keys.sorted() {
-            if name.hasPrefix("__MACOSX/") || name.hasSuffix(".DS_Store") { continue }
-            let parts = name.split(separator: "/").map(String.init)
-            if parts.count > 1 {
-                for dirSegment in parts.dropLast() {
-                    if Self.isLikelyBundleIDSegment(dirSegment) {
-                        detectedBundle = dirSegment
-                        break
+        var detectedAovVersion: String?
+        var explicitAppBundles: [String] = []
+        let metadataRoots: Set<String> = ["patch.json", "manifest.json", "settings.json"]
+
+        for item in items {
+            if item.parts.count == 1 && metadataRoots.contains(item.parts[0].lowercased()) {
+                continue
+            }
+            if let classified = Self.classifyContainerParts(item.parts) {
+                if classified.containerKind == "application" && !explicitAppBundles.contains(classified.bundleID) {
+                    explicitAppBundles.append(classified.bundleID)
+                }
+                continue
+            }
+            for (idx, seg) in item.parts.enumerated() {
+                let lowerSeg = seg.lowercased()
+                if aovMarkers.contains(lowerSeg) {
+                    hasAovStructure = true
+                    if lowerSeg == "resources", idx + 1 < item.parts.count, Self.isVersionSegment(item.parts[idx + 1]) {
+                        detectedAovVersion = detectedAovVersion ?? item.parts[idx + 1]
                     }
-                    let lowerSeg = dirSegment.lowercased()
-                    if lowerSeg == "resources" || lowerSeg == "databin" || lowerSeg == "ages" || lowerSeg == "assetrefs" || lowerSeg == "prefab_characters" {
-                        hasAovStructure = true
-                    }
+                } else if idx == 0 && item.parts.count > 1 && Self.isVersionSegment(seg) {
+                    hasAovStructure = true
+                    detectedAovVersion = detectedAovVersion ?? seg
                 }
             }
-            if detectedBundle != nil { break }
+            let lastLower = item.parts.last?.lowercased() ?? ""
+            if lastLower.hasSuffix(".pkg.bytes")
+                || lastLower.hasSuffix(".assetbundle")
+                || lastLower.hasSuffix(".mses")
+                || lastLower == "languagemap.txt" {
+                hasAovStructure = true
+            }
         }
-        let bundleID = detectedBundle ?? (hasAovStructure ? "com.garena.game.kgvn" : "com.apple.mobile.MobileHouseArrest")
+
+        let fallbackBundleID = explicitAppBundles.first
+            ?? (hasAovStructure ? "com.garena.game.kgvn" : "com.apple.mobile.MobileHouseArrest")
+        let fallbackAovVersion = detectedAovVersion ?? "1.64.1"
+        let containerRoots: [String: String] = [
+            "documents": "Documents",
+            "library": "Library",
+            "tmp": "tmp",
+        ]
 
         var rules: [PatchRule] = []
-        for name in entries.keys.sorted() {
-            if name == "patch.json" || name == "manifest.json" { continue }
-            if name.hasPrefix("__MACOSX/") || name.hasSuffix(".DS_Store") { continue }
-            let parts = name.split(separator: "/").map(String.init)
-            if let last = parts.last, last.hasPrefix("._") { continue }
+        var seenApplicationBundles: [String] = []
 
-            var relativePath = name
-            if let bidIdx = parts.dropLast().firstIndex(of: bundleID) {
-                relativePath = parts.suffix(from: bidIdx + 1).joined(separator: "/")
+        for item in items {
+            if item.parts.count == 1 && metadataRoots.contains(item.parts[0].lowercased()) {
+                continue
+            }
+
+            let containerKind: String
+            let targetBundleID: String
+            let relativePath: String
+
+            if let classified = Self.classifyContainerParts(item.parts) {
+                containerKind = classified.containerKind
+                targetBundleID = classified.bundleID
+                relativePath = classified.relativePath
             } else {
-                for prefix in ["payload/\(bundleID)/", "\(bundleID)/", "payload/"] {
-                    if relativePath.hasPrefix(prefix) {
-                        relativePath = String(relativePath.dropFirst(prefix.count))
-                        break
-                    }
-                }
-                // Normalize AOV mod paths (e.g. "files/Resources/1.64.1/..." or "Resources/1.64.1/...")
-                // into container-relative "Documents/Resources/1.64.1/..."
-                let relParts = relativePath.split(separator: "/").map(String.init)
-                if let resIdx = relParts.firstIndex(where: { $0.caseInsensitiveCompare("Resources") == .orderedSame }) {
-                    if resIdx == 0 || relParts[resIdx - 1].caseInsensitiveCompare("Documents") != .orderedSame {
-                        let tail = relParts.suffix(from: resIdx).joined(separator: "/")
-                        relativePath = "Documents/\(tail)"
-                    } else if resIdx > 1 {
-                        relativePath = relParts.suffix(from: resIdx - 1).joined(separator: "/")
-                    }
+                containerKind = "application"
+                targetBundleID = fallbackBundleID
+                let firstLower = item.parts[0].lowercased()
+                if let canonicalRoot = containerRoots[firstLower], item.parts.count >= 2 {
+                    relativePath = ([canonicalRoot] + item.parts.dropFirst()).joined(separator: "/")
+                } else if hasAovStructure,
+                          let aovNormalized = AovModMergerEngine.normalizeAovPath(
+                              item.parts.joined(separator: "/"),
+                              fallbackVersion: fallbackAovVersion
+                          ) {
+                    relativePath = "Documents/\(aovNormalized)"
+                } else {
+                    relativePath = item.parts.joined(separator: "/")
                 }
             }
 
             guard !relativePath.isEmpty else { continue }
-            let rule = PatchRule(
-                bundleID: bundleID,
-                relativePath: relativePath,
-                replacementFilename: (relativePath as NSString).lastPathComponent,
-                replacementData: entries[name] ?? Data(),
-                operation: "replace",
-                containerKind: "application"
+            if containerKind == "application", !seenApplicationBundles.contains(targetBundleID) {
+                seenApplicationBundles.append(targetBundleID)
+            }
+            rules.append(
+                PatchRule(
+                    bundleID: targetBundleID,
+                    relativePath: relativePath,
+                    replacementFilename: (relativePath as NSString).lastPathComponent,
+                    replacementData: item.data,
+                    operation: "replace",
+                    containerKind: containerKind
+                )
             )
-            rules.append(rule)
         }
         guard !rules.isEmpty else {
             throw PatchZipConverterError.invalidProject("ZIP không chứa rule nào.")
         }
-        return PatchProject(
-            name: "Converted Patch",
-            author: "Totorox",
-            bundleIdentifiers: [bundleID],
+        let patchName = (settingsName?.isEmpty == false ? settingsName : nil)
+            ?? (unwrapped.inferredName?.isEmpty == false ? unwrapped.inferredName : nil)
+            ?? "Converted Patch"
+        let patchAuthor = (settingsAuthor?.isEmpty == false ? settingsAuthor : nil) ?? "Totorox"
+        let project = PatchProject(
+            name: patchName,
+            author: patchAuthor,
+            isPrivate: settingsIsPrivate ?? false,
+            bundleIdentifiers: seenApplicationBundles.isEmpty ? [fallbackBundleID] : seenApplicationBundles,
             rules: rules
         )
+        return (project, settingsPlist)
     }
 
     private func buildEnvelope(
@@ -1876,6 +2042,7 @@ public final class PatchZipConverter {
     ) throws -> Data {
         var envelope: [String: Any] = [
             "schemaVersion": schemaVersion,
+            "keyAADVersion": schemaVersion,
             "packageID": packageID.uuidString,
             "isPasswordProtected": isProtected,
             "keyFingerprint": Data(SHA256.hash(data: contentKey)),
@@ -1889,7 +2056,7 @@ public final class PatchZipConverter {
                 _ = randomSalt.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
                 saltData = randomSalt
             }
-            let iterations = response.kdfIterations ?? 120_000
+            let iterations = response.kdfIterations ?? PatchPackageLimits.defaultKDFIterations
             envelope["kdfSalt"] = saltData
             envelope["kdfIterations"] = iterations
 
@@ -1909,10 +2076,102 @@ public final class PatchZipConverter {
         return try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
     }
 
-    private func sealPayload(project: PatchProject, contentKey: Data, packageID: UUID, schemaVersion: Int) throws -> Data {
-        let plistData = try PropertyListEncoder().encode(PatchProjectPayload(project: project))
+    private func sealPayload(
+        project: PatchProject,
+        contentKey: Data,
+        packageID: UUID,
+        schemaVersion: Int,
+        settingsPlist: [Any] = []
+    ) throws -> Data {
+        let plistData = try Self.native3105PayloadPlist(
+            project: project,
+            packageID: packageID,
+            settingsPlist: settingsPlist
+        )
         let aad = Data("3105PATCH/v\(schemaVersion)/payload/\(packageID.uuidString)".utf8)
         return try aesGCMSeal(plaintext: plistData, key: contentKey, aad: aad)
+    }
+
+    /// Dựng payload đúng chuẩn app 3105 gốc (schema v9, phân tích từ gói do admin 3105 xuất):
+    /// `{ project: {id, name, author, isPrivate, createdAt, updatedAt, bundleIdentifiers,
+    ///   appGroupIdentifiers, systemAppGroupIdentifiers, settings, directories, rules},
+    ///   replacementDigests: { ruleID: SHA256(replacementData) } }`.
+    /// `directories` phải liệt kê MỌI thư mục cha của từng rule (Documents, Documents/Resources,
+    /// Documents/Resources/1.64.1, ...) kèm `containerKind`; thiếu mục này app 3105 báo
+    /// "Không tìm thấy hoặc không thể mở đích patch 1.64.1".
+    static func native3105PayloadPlist(
+        project: PatchProject,
+        packageID: UUID,
+        settingsPlist: [Any] = []
+    ) throws -> Data {
+        let fallbackBundle = project.bundleIdentifiers.first(where: { !$0.isEmpty }) ?? "com.garena.game.kgvn"
+        var digests: [String: Data] = [:]
+        var ruleDicts: [[String: Any]] = []
+        var dirKeys: [String: (bundle: String, kind: String, path: String)] = [:]
+        var appBundles: [String] = []
+        var appGroupIDs: [String] = []
+        var sysAppGroupIDs: [String] = []
+
+        for rule in project.rules {
+            let bundleID = rule.bundleID.isEmpty ? fallbackBundle : rule.bundleID
+            let kind = rule.containerKind.isEmpty ? "application" : rule.containerKind
+            let relativePath = rule.relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !relativePath.isEmpty else { continue }
+            switch kind {
+            case "appGroup":
+                if !appGroupIDs.contains(bundleID) { appGroupIDs.append(bundleID) }
+            case "systemAppGroup":
+                if !sysAppGroupIDs.contains(bundleID) { sysAppGroupIDs.append(bundleID) }
+            default:
+                if !appBundles.contains(bundleID) { appBundles.append(bundleID) }
+            }
+            let ruleID = rule.id.uuidString
+            ruleDicts.append([
+                "id": ruleID,
+                "operation": rule.operation.isEmpty ? "replace" : rule.operation,
+                "containerKind": kind,
+                "bundleID": bundleID,
+                "relativePath": relativePath,
+                "replacementFilename": rule.replacementFilename.isEmpty
+                    ? (relativePath as NSString).lastPathComponent : rule.replacementFilename,
+                "replacementData": rule.replacementData,
+            ])
+            digests[ruleID] = Data(SHA256.hash(data: rule.replacementData))
+
+            let parts = relativePath.split(separator: "/").map(String.init)
+            if parts.count > 1 {
+                for depth in 1..<parts.count {
+                    let dirPath = parts.prefix(depth).joined(separator: "/")
+                    dirKeys["\(kind)|\(bundleID)|\(dirPath)"] = (bundleID, kind, dirPath)
+                }
+            }
+        }
+        for dir in project.directories where !dir.relativePath.isEmpty {
+            dirKeys["application|\(dir.bundleID)|\(dir.relativePath)"] = (dir.bundleID, "application", dir.relativePath)
+        }
+        let directories: [[String: Any]] = dirKeys.values
+            .sorted { ($0.kind, $0.bundle, $0.path) < ($1.kind, $1.bundle, $1.path) }
+            .map { ["id": UUID().uuidString, "containerKind": $0.kind, "bundleID": $0.bundle, "relativePath": $0.path] }
+
+        let resolvedAppBundles = (appBundles.isEmpty && appGroupIDs.isEmpty && sysAppGroupIDs.isEmpty)
+            ? [fallbackBundle]
+            : appBundles
+        let projectDict: [String: Any] = [
+            "id": packageID.uuidString,
+            "name": project.name.isEmpty ? "Patch" : project.name,
+            "author": project.author,
+            "isPrivate": project.isPrivate,
+            "createdAt": project.createdAt,
+            "updatedAt": Date(),
+            "bundleIdentifiers": resolvedAppBundles,
+            "appGroupIdentifiers": appGroupIDs,
+            "systemAppGroupIdentifiers": sysAppGroupIDs,
+            "settings": settingsPlist,
+            "directories": directories,
+            "rules": ruleDicts,
+        ]
+        let root: [String: Any] = ["project": projectDict, "replacementDigests": digests]
+        return try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
     }
 }
 

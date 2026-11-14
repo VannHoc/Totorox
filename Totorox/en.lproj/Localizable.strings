@@ -235,3 +235,9 @@
 "server.config_reset" = "Reset to default server";
 "server.config_saved" = "Server saved.";
 "server.config_invalid" = "Invalid URL. Example: https://your-server.com";
+
+/* --- Activation --- */
+"activation.device_udid" = "Device UDID";
+"activation.copied_udid" = "UDID Copied";
+"activation.buy_telegram_title" = "Telegram Channel for Key & Support";
+"activation.buy_telegram_subtitle" = "Contact @milototoro for key purchase & warranty";

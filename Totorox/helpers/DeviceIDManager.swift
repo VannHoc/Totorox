@@ -1,8 +1,9 @@
 import Foundation
 
-/// Quản lý HWID dùng cho backend: ưu tiên UUID cố định nằm ngoài sandbox
-/// (`/var/mobile/Library/Preferences/.totorox_device_id`), fallback xuống
-/// `UserDefaults` dùng chung ứng dụng nếu không thể đọc/ghi vùng đó.
+/// Quản lý định danh thiết bị dùng cho backend & bảo hành key:
+/// Ưu tiên đọc **UDID phần cứng** (`UniqueDeviceID` qua MobileGestalt);
+/// chỉ fallback sang tệp ngoài sandbox (`/var/mobile/Library/Preferences/.totorox_device_id`)
+/// hoặc `UserDefaults` khi môi trường không cho phép đọc UDID thật (ví dụ Simulator).
 ///
 /// Không phụ thuộc vào Keychain.
 final class DeviceIDManager {
@@ -14,6 +15,10 @@ final class DeviceIDManager {
     }
 
     private let preferencesDirectory = URL(fileURLWithPath: "/var/mobile/Library/Preferences")
+    private let hardwareUDIDProvider: () -> String?
+    private let defaults: UserDefaults
+    private let customFileURL: URL?
+    private let persistHardwareUDID: Bool
 
     private var _identifier: String?
     var identifier: String {
@@ -23,15 +28,40 @@ final class DeviceIDManager {
         return stable
     }
 
-    private init() {}
+    var isHardwareUDID: Bool {
+        normalizedNonEmpty(hardwareUDIDProvider()) != nil
+    }
+
+    init(
+        hardwareUDIDProvider: @escaping () -> String? = { TotoroxCopyHardwareUDID() },
+        defaults: UserDefaults = .standard,
+        fileURL: URL? = nil,
+        persistHardwareUDID: Bool = true
+    ) {
+        self.hardwareUDIDProvider = hardwareUDIDProvider
+        self.defaults = defaults
+        self.customFileURL = fileURL
+        self.persistHardwareUDID = persistHardwareUDID
+    }
 
     private var fileURL: URL {
-        preferencesDirectory.appendingPathComponent(Keys.fileID)
+        customFileURL ?? preferencesDirectory.appendingPathComponent(Keys.fileID)
     }
 
     // MARK: - Storage
 
     private func loadOrCreateIdentifier() -> String {
+        if let udid = normalizedNonEmpty(hardwareUDIDProvider()) {
+            if persistHardwareUDID {
+                if readFromFile() != udid {
+                    try? udid.write(to: fileURL, atomically: true, encoding: .utf8)
+                }
+                if defaults.string(forKey: Keys.userDefaultsKey) != udid {
+                    defaults.set(udid, forKey: Keys.userDefaultsKey)
+                }
+            }
+            return udid
+        }
         if let existing = readFromFile() {
             return existing
         }
@@ -44,20 +74,25 @@ final class DeviceIDManager {
         do {
             try fresh.write(to: fileURL, atomically: true, encoding: .utf8)
         } catch {
-            UserDefaults.standard.set(fresh, forKey: Keys.userDefaultsKey)
+            defaults.set(fresh, forKey: Keys.userDefaultsKey)
         }
         return fresh
     }
 
+    private func normalizedNonEmpty(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     private func readFromFile() -> String? {
         guard let raw = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return normalizedNonEmpty(raw)
     }
 
     private func storedFallback() -> String? {
-        guard let stored = UserDefaults.standard.string(forKey: Keys.userDefaultsKey),
-              !stored.isEmpty else { return nil }
-        return stored
+        return normalizedNonEmpty(defaults.string(forKey: Keys.userDefaultsKey))
     }
 }

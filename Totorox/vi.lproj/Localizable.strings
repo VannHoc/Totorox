@@ -235,3 +235,9 @@
 "server.config_reset" = "Khôi phục máy chủ mặc định";
 "server.config_saved" = "Đã lưu máy chủ mới.";
 "server.config_invalid" = "URL không hợp lệ. Ví dụ: https://ten-mien-cua-ban.com";
+
+/* --- Activation --- */
+"activation.device_udid" = "Mã thiết bị (UDID)";
+"activation.copied_udid" = "Đã sao chép UDID";
+"activation.buy_telegram_title" = "Kênh Telegram mua & bảo hành Key";
+"activation.buy_telegram_subtitle" = "Liên hệ @milototoro để nhận key và hỗ trợ";
