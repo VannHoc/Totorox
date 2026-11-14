@@ -61,15 +61,15 @@ struct MergeFileView: View {
     // MARK: - Card 1: Header Banner
 
     private var headerBannerCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(TotoroxTheme.mintAccent.opacity(0.15))
-                        .frame(width: 46, height: 46)
+                        .frame(width: 50, height: 50)
 
                     Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 21, weight: .bold))
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                 }
 
@@ -78,12 +78,16 @@ struct MergeFileView: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
 
-                    HStack(spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .bold))
-                        Text("Tính năng triển bởi VannHoc")
-                        Text("Tự nghĩ, tự làm không lấy của ai")
-                            .font(.system(size: 12, weight: .semibold))
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Tính năng triển bởi VannHoc")
+                            Text("Tự nghĩ, tự làm không lấy của ai")
+                                .opacity(0.8)
+                        }
+                        .font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(TotoroxTheme.mintAccent)
                 }
@@ -93,10 +97,11 @@ struct MergeFileView: View {
 
             Divider()
 
-            Text("Hợp nhất thông minh giữ trọn vẹn tất cả hiệu ứng mà bản mod có")
+            Text("Hợp nhất thông minh, giữ trọn vẹn mọi hiệu ứng gốc.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(TotoroxTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .minimumScaleFactor(0.9)
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
     }
