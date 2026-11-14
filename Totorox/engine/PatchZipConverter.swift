@@ -422,11 +422,12 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.corruptedArchive("Tệp nguồn không phải ZIP hợp lệ.")
         }
 
+        let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
         let project = try buildPatchProject(fromZipData: zipData)
         let metadataPayload = try manifestData(for: project)
         let response = try await sendConvertHeader(
             mode: "to_zip",
-            password: password,
+            password: cleanPassword,
             payload: metadataPayload,
             fileName: "manifest.json"
         )
@@ -436,7 +437,7 @@ public final class PatchZipConverter {
         }
         let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
         let schemaVersion = 3
-        let isProtected = password != nil
+        let isProtected = cleanPassword != nil
         let sealedPayload = try sealPayload(project: project, contentKey: contentKey, packageID: packageID, schemaVersion: schemaVersion)
         let envelopeData = try buildEnvelope(
             project: project,
@@ -444,7 +445,7 @@ public final class PatchZipConverter {
             schemaVersion: schemaVersion,
             contentKey: contentKey,
             isProtected: isProtected,
-            password: password,
+            password: cleanPassword,
             response: response,
             sealedPayload: sealedPayload
         )
@@ -477,17 +478,23 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.ioFailure("Không tạo được tệp tạm: \(error.localizedDescription)")
         }
 
+        let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
         switch await APIService.shared.convertHeader(
             fileURL: payloadURL,
             mode: mode,
-            password: password,
+            password: cleanPassword,
             licenseKey: LicenseManager.shared.licenseKey,
             hwid: LicenseManager.shared.deviceIdentifier
         ) {
         case .success(let response):
             return response
         case .failure(let error):
-            throw PatchZipConverterError.ioFailure("Máy chủ convert-header: \(error.localizedDescription)")
+            let message = error.localizedDescription
+            let lower = message.lowercased()
+            if lower.contains("mật khẩu") || lower.contains("password") || lower.contains("wrapped content key") || lower.contains("giải mã") {
+                throw PatchZipConverterError.cryptoFailed(message)
+            }
+            throw PatchZipConverterError.ioFailure("Máy chủ convert-header: \(message)")
         }
     }
 
