@@ -90,7 +90,7 @@ struct ActivationView: View {
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(TotoroxTheme.textPrimary)
 
-            Text("Nhập License Key để sử dụng các tính năng máy chủ.")
+            Text("Nhập Key để sử dụng các tính năng máy chủ.")
                 .font(.system(size: 13))
                 .foregroundStyle(TotoroxTheme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -176,12 +176,44 @@ struct ActivationView: View {
     }
 
     private var telegramCard: some View {
-        TotoroxLinkRow(
-            urlString: "https://t.me/milototoro",
-            title: language.text("activation.buy_telegram_title"),
-            subtitle: language.text("activation.buy_telegram_subtitle"),
-            icon: "paperplane.fill"
-        )
+        Link(destination: URL(string: "https://t.me/milototoro")!) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(TotoroxTheme.mintAccent.opacity(0.14))
+                        .frame(width: 42, height: 42)
+
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(language.text("activation.buy_telegram_title"))
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+
+                    Text(language.text("activation.buy_telegram_subtitle"))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .frame(width: 28, height: 28)
+                    .background(TotoroxTheme.mintAccent.opacity(0.1))
+                    .clipShape(Circle())
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .totoroxCard(padding: 14)
         .padding(.horizontal, 16)
     }
