@@ -22,6 +22,7 @@ final class LicenseManager: ObservableObject {
 
     private struct CachedLicenseSnapshot: Codable, Equatable {
         let licenseKey: String
+        let deviceIdentifier: String?
         let expiresAt: Date?
         let remaining: Int?
         let dailyQuota: Int?
@@ -32,17 +33,20 @@ final class LicenseManager: ObservableObject {
     enum Keys {
         static let licenseKey = "totorox.licenseKey"
         static let licenseSnapshot = "totorox.licenseSnapshot"
+        static let installInitialized = "totorox.licenseInstallInitialized"
     }
 
     @Published private(set) var status: Status = .unlicensed
     @Published private(set) var licenseKey: String = ""
     @Published private(set) var deviceIdentifier: String
+    @Published private(set) var isRefreshing: Bool = false
 
     private let api: APIService
     private let defaults: UserDefaults
     private let keyReader: () -> String?
     private let keyWriter: (String) -> Void
     private let keyRemover: () -> Void
+    private var inFlightRefreshTask: Task<Void, Never>?
 
     init(
         api: APIService = .shared,
@@ -51,7 +55,8 @@ final class LicenseManager: ObservableObject {
         keyWriter: @escaping (String) -> Void = { KeychainHelper.set($0, for: Keys.licenseKey) },
         keyRemover: @escaping () -> Void = { KeychainHelper.remove(Keys.licenseKey) },
         deviceIdentifierProvider: () -> String = { DeviceIDManager.shared.identifier },
-        autoRefresh: Bool = true
+        autoRefresh: Bool = true,
+        clearOrphanedKeyOnFreshDefaults: Bool? = nil
     ) {
         self.api = api
         self.defaults = defaults
@@ -60,10 +65,28 @@ final class LicenseManager: ObservableObject {
         self.keyRemover = keyRemover
         self.deviceIdentifier = deviceIdentifierProvider()
 
-        let normalizedStoredKey = Self.normalizeKey(keyReader() ?? "")
-        self.licenseKey = normalizedStoredKey
-        if !normalizedStoredKey.isEmpty {
-            if let snapshot = loadSnapshot(), snapshot.licenseKey == normalizedStoredKey {
+        let rawStoredKey = Self.normalizeKey(keyReader() ?? "")
+        let snapshot = loadSnapshot()
+        let hasPriorState = snapshot != nil
+            || defaults.bool(forKey: Keys.installInitialized)
+            || defaults.object(forKey: "totorox.deviceIdentifier") != nil
+            || defaults.object(forKey: "onboarding.completedVersion") != nil
+        defaults.set(true, forKey: Keys.installInitialized)
+
+        let shouldPurgeOrphan = clearOrphanedKeyOnFreshDefaults ?? (defaults === UserDefaults.standard)
+        if shouldPurgeOrphan && !rawStoredKey.isEmpty && !hasPriorState {
+            // Fresh container/UserDefaults install (app was deleted & reinstalled):
+            // clear orphaned Keychain license key so ActivationView is shown again.
+            keyRemover()
+            self.licenseKey = ""
+        } else {
+            self.licenseKey = rawStoredKey
+        }
+
+        if !self.licenseKey.isEmpty {
+            if let snapshot,
+               snapshot.licenseKey == self.licenseKey,
+               snapshot.deviceIdentifier == nil || snapshot.deviceIdentifier == self.deviceIdentifier {
                 if let expiresAt = snapshot.expiresAt, expiresAt <= Date() {
                     self.status = .unlicensed
                 } else {
@@ -74,9 +97,8 @@ final class LicenseManager: ObservableObject {
                     )
                 }
             } else {
-                // Key đã lưu từ trước khi có snapshot: vào thẳng màn hình chính không nháy ActivationView,
-                // sau đó xác minh ngầm ở nền.
-                self.status = .active(expiresAt: nil, remaining: nil, dailyQuota: nil)
+                // No valid cached snapshot for this key + UDID: require server verification before entering main UI.
+                self.status = .unlicensed
             }
             if autoRefresh {
                 Task(priority: .background) { [weak self] in
@@ -97,6 +119,9 @@ final class LicenseManager: ObservableObject {
             return
         }
 
+        inFlightRefreshTask?.cancel()
+        inFlightRefreshTask = nil
+        isRefreshing = false
         status = .activating
         switch await api.activate(licenseKey: key, hwid: deviceIdentifier) {
         case .success(let activation):
@@ -105,11 +130,13 @@ final class LicenseManager: ObservableObject {
             saveSnapshot(
                 CachedLicenseSnapshot(
                     licenseKey: key,
+                    deviceIdentifier: deviceIdentifier,
                     expiresAt: activation.expiresAt,
                     remaining: nil,
                     dailyQuota: nil
                 )
             )
+            defaults.set(true, forKey: Keys.installInitialized)
             status = .active(
                 expiresAt: activation.expiresAt,
                 remaining: nil,
@@ -122,25 +149,52 @@ final class LicenseManager: ObservableObject {
     }
 
     func refresh() async {
-        guard !licenseKey.isEmpty else {
+        if let existing = inFlightRefreshTask {
+            await existing.value
+            return
+        }
+        let task = Task { [weak self] in
+            await self?.performRefresh()
+        }
+        inFlightRefreshTask = task
+        isRefreshing = true
+        await task.value
+        inFlightRefreshTask = nil
+        isRefreshing = false
+    }
+
+    private func performRefresh() async {
+        let keyAtStart = licenseKey
+        let hwidAtStart = deviceIdentifier
+        guard !keyAtStart.isEmpty else {
             clearSnapshot()
             status = .unlicensed
             return
         }
-        switch await api.verify(licenseKey: licenseKey, hwid: deviceIdentifier) {
+
+        switch await api.verify(licenseKey: keyAtStart, hwid: hwidAtStart) {
         case .success(let resp):
+            guard !Task.isCancelled, licenseKey == keyAtStart else { return }
             if resp.error != nil || resp.status != 200 {
                 clearSnapshot()
-                status = .unlicensed
+                keyRemover()
+                licenseKey = ""
+                if let message = resp.error, !message.isEmpty {
+                    status = .rejected(message)
+                } else {
+                    status = .unlicensed
+                }
             } else {
                 saveSnapshot(
                     CachedLicenseSnapshot(
-                        licenseKey: licenseKey,
+                        licenseKey: keyAtStart,
+                        deviceIdentifier: hwidAtStart,
                         expiresAt: resp.expiresAt,
                         remaining: resp.remaining,
                         dailyQuota: resp.dailyQuota
                     )
                 )
+                defaults.set(true, forKey: Keys.installInitialized)
                 status = .active(
                     expiresAt: resp.expiresAt,
                     remaining: resp.remaining,
@@ -148,8 +202,11 @@ final class LicenseManager: ObservableObject {
                 )
             }
         case .failure(let error):
+            guard !Task.isCancelled, licenseKey == keyAtStart else { return }
             if Self.isAuthorizationRejection(error) {
                 clearSnapshot()
+                keyRemover()
+                licenseKey = ""
                 status = .rejected(error.localizedDescription)
             } else if !status.isActive {
                 status = .rejected(error.localizedDescription)
@@ -158,6 +215,9 @@ final class LicenseManager: ObservableObject {
     }
 
     func deactivate() {
+        inFlightRefreshTask?.cancel()
+        inFlightRefreshTask = nil
+        isRefreshing = false
         licenseKey = ""
         keyRemover()
         clearSnapshot()

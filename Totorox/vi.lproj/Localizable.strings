@@ -236,8 +236,24 @@
 "server.config_saved" = "Đã lưu máy chủ mới.";
 "server.config_invalid" = "URL không hợp lệ. Ví dụ: https://ten-mien-cua-ban.com";
 
-/* --- Activation --- */
+/* --- Activation & License Settings --- */
 "activation.device_udid" = "Mã thiết bị (UDID)";
 "activation.copied_udid" = "Đã sao chép UDID";
 "activation.buy_telegram_title" = "Kênh Telegram mua & bảo hành Key";
 "activation.buy_telegram_subtitle" = "Liên hệ @milototoro để nhận key và hỗ trợ";
+"settings.section_license" = "BẢN QUYỀN & THIẾT BỊ";
+"settings.license_key_label" = "License Key";
+"settings.license_copied_key" = "Đã sao chép Key";
+"settings.license_status_active" = "Đã kích hoạt";
+"settings.license_status_unlicensed" = "Chưa kích hoạt";
+"settings.license_expires_label" = "Hạn sử dụng";
+"settings.license_lifetime" = "Không giới hạn";
+"settings.license_remaining_label" = "Số lượt còn lại";
+"settings.license_unlimited" = "Không giới hạn";
+"settings.license_refresh_btn" = "Kiểm tra lại Key";
+"settings.license_switch_btn" = "Đổi / Nhập License Key";
+"settings.license_switch_confirm_title" = "Đổi License Key?";
+"settings.license_switch_confirm_msg" = "Key hiện tại sẽ được đăng xuất khỏi máy để mở lại màn hình nhập License Key.";
+"settings.license_switch_confirm_action" = "Mở màn hình nhập Key";
+"settings.udid_hardware" = "UDID phần cứng (MobileGestalt)";
+"settings.udid_fallback" = "Mã thiết bị dự phòng";

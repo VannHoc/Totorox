@@ -236,8 +236,24 @@
 "server.config_saved" = "Server saved.";
 "server.config_invalid" = "Invalid URL. Example: https://your-server.com";
 
-/* --- Activation --- */
+/* --- Activation & License Settings --- */
 "activation.device_udid" = "Device UDID";
 "activation.copied_udid" = "UDID Copied";
 "activation.buy_telegram_title" = "Telegram Channel for Key & Support";
 "activation.buy_telegram_subtitle" = "Contact @milototoro for key purchase & warranty";
+"settings.section_license" = "LICENSE & DEVICE";
+"settings.license_key_label" = "License Key";
+"settings.license_copied_key" = "Key Copied";
+"settings.license_status_active" = "Activated";
+"settings.license_status_unlicensed" = "Not Activated";
+"settings.license_expires_label" = "Expires At";
+"settings.license_lifetime" = "Unlimited";
+"settings.license_remaining_label" = "Remaining Uses";
+"settings.license_unlimited" = "Unlimited";
+"settings.license_refresh_btn" = "Refresh License Status";
+"settings.license_switch_btn" = "Change / Enter License Key";
+"settings.license_switch_confirm_title" = "Change License Key?";
+"settings.license_switch_confirm_msg" = "This will sign out the current key and return to the license key entry screen.";
+"settings.license_switch_confirm_action" = "Open Key Entry";
+"settings.udid_hardware" = "Hardware UDID (MobileGestalt)";
+"settings.udid_fallback" = "Fallback Device ID";

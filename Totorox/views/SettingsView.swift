@@ -1,13 +1,18 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var license = LicenseManager.shared
     @Environment(\.appLanguage) private var language
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
     @State private var showLogs = false
     @State private var showClearCacheAlert = false
     @State private var cacheClearedMessage = false
+    @State private var didCopyUDID = false
+    @State private var didCopyLicenseKey = false
+    @State private var showSwitchKeyConfirm = false
 
     private var appVersionDisplay: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1"
@@ -53,6 +58,9 @@ struct SettingsView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .totoroxCard()
+
+                    // License & Device UDID Card
+                    licenseAndDeviceCard
 
                     // Language Selection
                     VStack(alignment: .leading, spacing: 14) {
@@ -211,7 +219,232 @@ struct SettingsView: View {
             .alert(language.text("settings.clear_cache_success"), isPresented: $cacheClearedMessage) {
                 Button(language.text("common.ok"), role: .cancel) {}
             }
+            .alert(language.text("settings.license_switch_confirm_title"), isPresented: $showSwitchKeyConfirm) {
+                Button(language.text("settings.license_switch_confirm_action"), role: .destructive) {
+                    dismiss()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        license.deactivate()
+                    }
+                }
+                Button(language.text("common.cancel"), role: .cancel) {}
+            } message: {
+                Text(language.text("settings.license_switch_confirm_msg"))
+            }
         }
+    }
+
+    private var licenseAndDeviceCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text(language.text("settings.section_license"))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+
+                Spacer()
+
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(license.status.isActive ? TotoroxTheme.mintAccent : Color.orange)
+                        .frame(width: 7, height: 7)
+                    Text(license.status.isActive ? language.text("settings.license_status_active") : language.text("settings.license_status_unlicensed"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(license.status.isActive ? TotoroxTheme.mintAccent : Color.orange)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background((license.status.isActive ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
+                .clipShape(Capsule())
+            }
+
+            // Active License Key
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .frame(width: 24)
+
+                    Text(language.text("settings.license_key_label"))
+                        .font(.system(size: 14))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+
+                    Spacer()
+
+                    if !license.licenseKey.isEmpty {
+                        copyBadgeButton(
+                            copied: didCopyLicenseKey,
+                            copiedLabel: language.text("settings.license_copied_key")
+                        ) {
+                            copyToClipboard(license.licenseKey, isUDID: false)
+                        }
+                    }
+                }
+
+                Text(license.licenseKey.isEmpty ? "—" : license.licenseKey)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .padding(.leading, 34)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+
+            if case .active(let expiresAt, let remaining, let dailyQuota) = license.status {
+                Divider()
+                settingsRow(
+                    label: language.text("settings.license_expires_label"),
+                    value: formattedExpiry(expiresAt),
+                    icon: "calendar.badge.clock"
+                )
+                Divider()
+                settingsRow(
+                    label: language.text("settings.license_remaining_label"),
+                    value: formattedRemaining(remaining: remaining, dailyQuota: dailyQuota),
+                    icon: "speedometer"
+                )
+            }
+
+            Divider()
+
+            // Device UDID
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 16))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .frame(width: 24)
+
+                    Text(language.text("activation.device_udid"))
+                        .font(.system(size: 14))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+
+                    Spacer()
+
+                    copyBadgeButton(
+                        copied: didCopyUDID,
+                        copiedLabel: language.text("activation.copied_udid")
+                    ) {
+                        copyToClipboard(license.deviceIdentifier, isUDID: true)
+                    }
+                }
+
+                Text(license.deviceIdentifier)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .padding(.leading, 34)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(DeviceIDManager.shared.isHardwareUDID ? language.text("settings.udid_hardware") : language.text("settings.udid_fallback"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+                    .padding(.leading, 34)
+            }
+            .padding(.vertical, 2)
+
+            Divider()
+
+            Button {
+                Task { await license.refresh() }
+            } label: {
+                HStack(spacing: 12) {
+                    if license.isRefreshing {
+                        ProgressView()
+                            .frame(width: 24)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .frame(width: 24)
+                    }
+                    Text(language.text("settings.license_refresh_btn"))
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            }
+            .disabled(license.isRefreshing)
+
+            Divider()
+
+            Button {
+                showSwitchKeyConfirm = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .foregroundStyle(Color.orange)
+                        .frame(width: 24)
+                    Text(language.text("settings.license_switch_btn"))
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .totoroxCard()
+    }
+
+    private func copyBadgeButton(copied: Bool, copiedLabel: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(copied ? copiedLabel : language.text("logs.copy"))
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(TotoroxTheme.mintAccent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(TotoroxTheme.mintAccent.opacity(0.12))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func copyToClipboard(_ value: String, isUDID: Bool) {
+        UIPasteboard.general.string = value
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if isUDID {
+                didCopyUDID = true
+            } else {
+                didCopyLicenseKey = true
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if isUDID {
+                    didCopyUDID = false
+                } else {
+                    didCopyLicenseKey = false
+                }
+            }
+        }
+    }
+
+    private func formattedExpiry(_ date: Date?) -> String {
+        guard let date else {
+            return language.text("settings.license_lifetime")
+        }
+        let formatter = DateFormatter()
+        formatter.locale = language.locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func formattedRemaining(remaining: Int?, dailyQuota: Int?) -> String {
+        guard let remaining, remaining >= 0 else {
+            return language.text("settings.license_unlimited")
+        }
+        if let dailyQuota, dailyQuota > 0 {
+            return "\(remaining) / \(dailyQuota)"
+        }
+        return "\(remaining)"
     }
 
     private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false, isVertical: Bool = false) -> some View {
