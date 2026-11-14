@@ -22,7 +22,9 @@ struct PatchConverterView: View {
     @State private var selectedSourceURL: URL? = nil
     @State private var sourceFileSizeText: String = ""
     @State private var sourceMetadataSummary: String? = nil
+    @State private var isSourcePasswordProtected: Bool = false
     @State private var passwordText: String = ""
+    @State private var showPassword: Bool = false
     
     // Processing state
     @State private var isConverting: Bool = false
@@ -67,6 +69,7 @@ struct PatchConverterView: View {
                                 direction = dir
                                 selectedSourceURL = nil
                                 sourceMetadataSummary = nil
+                                isSourcePasswordProtected = false
                                 convertedFileURL = nil
                                 conversionError = nil
                             }
@@ -176,16 +179,57 @@ struct PatchConverterView: View {
                 .padding(.horizontal, 16)
 
                 // Optional Password Field
-                HStack {
-                    Image(systemName: "lock.fill")
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                    SecureField("Mật khẩu gói (nếu có mã hóa)", text: $passwordText)
+                let needsRequiredPassword = (direction == .patchToZip && isSourcePasswordProtected && passwordText.isEmpty)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: isSourcePasswordProtected ? "lock.shield.fill" : "lock.fill")
+                            .foregroundStyle(needsRequiredPassword ? Color.orange : TotoroxTheme.textSecondary)
+
+                        Group {
+                            if showPassword {
+                                TextField(
+                                    isSourcePasswordProtected ? "Nhập mật khẩu bắt buộc của gói .3105" : "Mật khẩu gói (nếu có mã hóa)",
+                                    text: $passwordText
+                                )
+                            } else {
+                                SecureField(
+                                    isSourcePasswordProtected ? "Nhập mật khẩu bắt buộc của gói .3105" : "Mật khẩu gói (nếu có mã hóa)",
+                                    text: $passwordText
+                                )
+                            }
+                        }
                         .font(.system(size: 14))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+
+                        if isSourcePasswordProtected && passwordText.isEmpty {
+                            Text("Bắt buộc")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.orange.opacity(0.14))
+                                .clipShape(Capsule())
+                        }
+
+                        Button {
+                            showPassword.toggle()
+                        } label: {
+                            Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .background(TotoroxTheme.searchBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(needsRequiredPassword ? Color.orange.opacity(0.75) : Color.clear, lineWidth: 1.2)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 44)
-                .background(TotoroxTheme.searchBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
 
                 // Error Banner
@@ -316,6 +360,7 @@ struct PatchConverterView: View {
         selectedSourceURL = url
         convertedFileURL = nil
         conversionError = nil
+        isSourcePasswordProtected = false
         
         let currentDirection = direction
         let currentPassword = passwordText.isEmpty ? nil : passwordText
@@ -332,6 +377,7 @@ struct PatchConverterView: View {
             let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
             let sizeStr = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
 
+            var detectedProtected = false
             let summary: String
             if currentDirection == .zipToPatch {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
@@ -347,20 +393,30 @@ struct PatchConverterView: View {
             } else {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
                     summary = "Gói .3105 vượt quá giới hạn 3.6 GB nên không thể xem trước."
-                } else if let data = try? Data(contentsOf: url),
-                   let project = try? await PatchZipConverter.shared.decodeProject(
-                       patchData: data,
-                       password: currentPassword
-                   ) {
-                    summary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
+                } else if let pkgSummary = try? await PatchZipConverter.shared.inspect(patchURL: url) {
+                    detectedProtected = pkgSummary.isPasswordProtected
+                    if pkgSummary.isPasswordProtected && currentPassword == nil {
+                        summary = "Gói .3105 (v\(pkgSummary.schemaVersion)) được bảo vệ bằng mật khẩu. Vui lòng nhập mật khẩu trước khi chuyển đổi."
+                    } else if let data = try? Data(contentsOf: url),
+                              let project = try? await PatchZipConverter.shared.decodeProject(
+                                  patchData: data,
+                                  password: currentPassword
+                              ) {
+                        summary = "Dự án: \(project.name) • Tác giả: \(project.author) • Quy tắc: \(project.rules.count) rules • Đích: \(project.bundleIdentifiers.joined(separator: ", "))"
+                    } else if pkgSummary.isPasswordProtected {
+                        summary = "Gói .3105 (v\(pkgSummary.schemaVersion)) có bảo vệ mật khẩu. Bấm Bắt đầu Chuyển đổi để kiểm tra mật khẩu và giải mã."
+                    } else {
+                        summary = "Gói .3105 hợp lệ (v\(pkgSummary.schemaVersion)). Sẵn sàng giải mã sang .zip."
+                    }
                 } else {
-                    summary = "Gói .3105 hợp lệ. Sẵn sàng giải mã sang .zip."
+                    summary = "Không đọc được header gói .3105. Vui lòng kiểm tra định dạng tệp."
                 }
             }
 
             await MainActor.run {
                 self.sourceFileSizeText = sizeStr
                 self.sourceMetadataSummary = summary
+                self.isSourcePasswordProtected = detectedProtected
             }
         }
     }
@@ -369,6 +425,10 @@ struct PatchConverterView: View {
         guard let source = selectedSourceURL else { return }
         let currentDirection = direction
         let password = passwordText.isEmpty ? nil : passwordText
+        if currentDirection == .patchToZip && isSourcePasswordProtected && password == nil {
+            conversionError = "Gói .3105 này được bảo vệ bằng mật khẩu. Vui lòng nhập đúng mật khẩu của tệp rồi thử lại."
+            return
+        }
         isConverting = true
         conversionError = nil
         convertedFileURL = nil

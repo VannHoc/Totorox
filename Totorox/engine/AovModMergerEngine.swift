@@ -152,13 +152,17 @@ public final class AovModMergerEngine: @unchecked Sendable {
         var resourceVersion: String?
 
         for name in entryNames {
-            let parts = name.replacingOccurrences(of: "\\", with: "/").split(separator: "/")
+            guard let normalized = Self.normalizeAovPath(name) else {
+                continue
+            }
+            let parts = normalized.split(separator: "/")
             if resourceVersion == nil,
                parts.count >= 2,
-               parts[0].caseInsensitiveCompare("Resources") == .orderedSame {
+               parts[0].caseInsensitiveCompare("Resources") == .orderedSame,
+               Self.isVersionComponent(String(parts[1])) {
                 resourceVersion = String(parts[1])
             }
-            for id in Self.heroIDs(inPath: name) {
+            for id in Self.heroIDs(inPath: normalized) {
                 heroIDs.insert(id)
             }
             if name.lowercased().contains("/skin") {
@@ -248,8 +252,11 @@ public final class AovModMergerEngine: @unchecked Sendable {
         for (modIdx, modMeta) in modMetas.enumerated() {
             let sourceVersion = modMeta.summary.resourceVersion
             for (origPath, header) in modMeta.headers {
+                guard let canonical = Self.normalizeAovPath(origPath, fallbackVersion: targetVersion) else {
+                    continue
+                }
                 let remapped = Self.remapResourceVersion(
-                    path: origPath,
+                    path: canonical,
                     from: sourceVersion,
                     to: targetVersion
                 )
@@ -290,7 +297,14 @@ public final class AovModMergerEngine: @unchecked Sendable {
             for ref in collidingRefs {
                 let modURL = inputURLs[ref.modIndex]
                 let fileData = try PatchZipConverter.shared.extractZipEntry(header: ref.header, from: modURL)
-                configBundleEntries.append((path: "mod_\(ref.modIndex)/\(ref.originalPath)", data: fileData))
+                let sourceVer = modMetas[ref.modIndex].summary.resourceVersion
+                let canonical = Self.normalizeAovPath(ref.originalPath, fallbackVersion: targetVersion) ?? ref.originalPath
+                let normalizedForServer = Self.remapResourceVersion(
+                    path: canonical,
+                    from: sourceVer,
+                    to: targetVersion
+                )
+                configBundleEntries.append((path: "mod_\(ref.modIndex)/\(normalizedForServer)", data: fileData))
             }
         }
 
@@ -346,7 +360,28 @@ public final class AovModMergerEngine: @unchecked Sendable {
         if let encoded = plan.zipBytesB64,
            let bundle = Data(base64Encoded: encoded),
            !bundle.isEmpty {
-            serverMergedEntries = (try? PatchZipConverter.shared.parseZipArchive(bundle)) ?? [:]
+            let outerEntries = (try? PatchZipConverter.shared.parseZipArchive(bundle)) ?? [:]
+            let rawMergedEntries: [String: Data]
+            if let innerResultData = outerEntries["result.zip"]
+                ?? outerEntries.first(where: { ($0.key as NSString).lastPathComponent.lowercased() == "result.zip" })?.value,
+               !innerResultData.isEmpty,
+               let parsedInner = try? PatchZipConverter.shared.parseZipArchive(innerResultData) {
+                rawMergedEntries = parsedInner
+            } else {
+                rawMergedEntries = outerEntries
+            }
+
+            for (rawKey, rawData) in rawMergedEntries {
+                guard let normalized = Self.normalizeAovPath(rawKey, fallbackVersion: targetVersion) else {
+                    continue
+                }
+                let remapped = Self.remapResourceVersion(
+                    path: normalized,
+                    from: nil,
+                    to: targetVersion
+                )
+                serverMergedEntries[remapped] = rawData
+            }
         }
         let serverMergedKeys = Set(serverMergedEntries.keys.map { $0.lowercased() })
 
@@ -437,6 +472,73 @@ public final class AovModMergerEngine: @unchecked Sendable {
     /// `CommonActions` (XML), `Databin` (MSES), `Thanos` (HeroSkin_1/2) và hai assetbundle
     /// metadata `ResourcePackerInfoSetAll` / `ResourceVerificationInfoSetAll` (thêm entry
     /// cho asset mới). Mọi file khác do client giữ nguyên và ghép local.
+    /// Chuẩn hóa đường dẫn entry trong gói mod AOV về dạng `Resources/<version>/...`.
+    /// Trả về `nil` nếu đây là tệp rác hệ thống (`__MACOSX`, `.DS_Store`, `._*`) hoặc metadata wrapper (`patch.json`, `config.json`, `merge_plan.json`, `result.zip`).
+    public static func normalizeAovPath(_ rawPath: String, fallbackVersion: String? = nil) -> String? {
+        var cleaned = rawPath.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: .whitespacesAndNewlines)
+        while cleaned.hasPrefix("./") {
+            cleaned.removeFirst(2)
+        }
+        while cleaned.hasPrefix("/") {
+            cleaned.removeFirst()
+        }
+        guard !cleaned.isEmpty, !cleaned.hasSuffix("/") else { return nil }
+
+        let parts = cleaned.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !parts.isEmpty else { return nil }
+
+        let lowerParts = parts.map { $0.lowercased() }
+        let fileNameLower = lowerParts.last ?? ""
+        if lowerParts.contains("__macosx") || fileNameLower.hasPrefix("._") || fileNameLower == ".ds_store" {
+            return nil
+        }
+        let metadataFiles: Set<String> = [
+            "patch.json", "manifest.json", "config.json", "merge_plan.json", "result.zip", "payload.3105"
+        ]
+        if metadataFiles.contains(fileNameLower) || fileNameLower.hasSuffix(".3105") {
+            return nil
+        }
+
+        if let resIdx = lowerParts.firstIndex(of: "resources") {
+            var tail = Array(parts[resIdx...])
+            tail[0] = "Resources"
+            guard tail.count >= 2 else { return nil }
+            return tail.joined(separator: "/")
+        }
+
+        var trimmed = parts
+        if let docIdx = lowerParts.firstIndex(of: "documents"), docIdx + 1 < parts.count {
+            trimmed = Array(parts[(docIdx + 1)...])
+        } else if let payloadIdx = lowerParts.firstIndex(of: "payload"), payloadIdx + 1 < parts.count {
+            trimmed = Array(parts[(payloadIdx + 1)...])
+            if let first = trimmed.first?.lowercased(), first.hasPrefix("com."), trimmed.count > 1 {
+                trimmed.removeFirst()
+            }
+        }
+
+        if let first = trimmed.first {
+            let lowerFirst = first.lowercased()
+            if lowerFirst == "resources" {
+                trimmed[0] = "Resources"
+                return trimmed.count >= 2 ? trimmed.joined(separator: "/") : nil
+            }
+            if Self.isVersionComponent(first) {
+                return "Resources/" + trimmed.joined(separator: "/")
+            }
+            if let fallback = fallbackVersion, !fallback.isEmpty {
+                return "Resources/\(fallback)/" + trimmed.joined(separator: "/")
+            }
+        }
+
+        return trimmed.joined(separator: "/")
+    }
+
+    private static func isVersionComponent(_ component: String) -> Bool {
+        guard component.contains(".") else { return false }
+        let parts = component.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count >= 2 && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+    }
+
     public static func isServerConfigPath(_ relativePath: String) -> Bool {
         let lower = relativePath.replacingOccurrences(of: "\\", with: "/").lowercased()
         return lower.contains("commonactions")
@@ -444,6 +546,11 @@ public final class AovModMergerEngine: @unchecked Sendable {
             || lower.contains("thanos")
             || lower.hasSuffix(".xml")
             || lower.hasSuffix(".mses")
+            || lower.hasSuffix(".pkg.bytes")
+            || lower.hasSuffix("/version.txt")
+            || lower == "version.txt"
+            || lower.hasSuffix("/languagemap.txt")
+            || lower == "languagemap.txt"
             || lower.hasSuffix("resourcepackerinfosetall.assetbundle")
             || lower.hasSuffix("resourceverificationinfosetall.assetbundle")
     }
@@ -512,16 +619,27 @@ public final class AovModMergerEngine: @unchecked Sendable {
     }
 
     private static func heroIDs(inPath path: String) -> [Int] {
-        let lower = path.lowercased()
-        guard let regex = try? NSRegularExpression(pattern: "hero[_\\-]?(\\d{3,4})", options: []) else {
-            return []
+        let lower = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        let patterns = [
+            "hero[_\\-]?(\\d{3,4})",
+            "actor_(\\d{3,4})",
+            "(?:^|/)(\\d{3,4})_assetref\\.bytes",
+            "/hero/(\\d{3,4})_"
+        ]
+        var found: [Int] = []
+        var seen = Set<Int>()
+        let nsRange = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
+            for match in regex.matches(in: lower, options: [], range: nsRange) {
+                guard match.numberOfRanges > 1,
+                      let idRange = Range(match.range(at: 1), in: lower),
+                      let id = Int(lower[idRange]),
+                      seen.insert(id).inserted else { continue }
+                found.append(id)
+            }
         }
-        let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
-        return regex.matches(in: lower, options: [], range: range).compactMap { match in
-            guard match.numberOfRanges > 1,
-                  let idRange = Range(match.range(at: 1), in: lower) else { return nil }
-            return Int(lower[idRange])
-        }
+        return found
     }
 
     // MARK: - Output Filename Helper (Short Hash, Max Length Protected)
