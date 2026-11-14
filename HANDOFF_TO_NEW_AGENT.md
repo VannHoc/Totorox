@@ -53,11 +53,14 @@ với đường dẫn gốc → asset rơi vào thư mục version cũ và game 
 Đã sửa: client gửi `output.resourcesVersion`, và `remapResourceVersion(path:from:to:)` + 
 `resolveTargetVersion(_:)` (so sánh theo từng thành phần số) đổi tiền tố asset nặng cho khớp.
 
-### 6. Hạn mức upload backend
-`Totorox-Backend/main.py`: `MAX_UPLOAD_BYTES` (convert-header, mặc định 15 MB) và
-`MAX_MERGE_UPLOAD_BYTES` (merge-plan, mặc định 64 MB) đều đọc từ env
-(`TOTOROX_MAX_UPLOAD_BYTES`, `TOTOROX_MAX_MERGE_BYTES`).
-Client guard `APIService.maximumMergeBundleBytes = 15 MB` trước khi upload.
+### 6. Hạn mức upload backend & quota
+`Totorox-Backend/main.py`: `MAX_UPLOAD_BYTES` (convert-header, mặc định **100 MB**) và
+`MAX_MERGE_UPLOAD_BYTES` (merge-plan, mặc định **100 MB**) đều đọc từ env
+(`TOTOROX_MAX_UPLOAD_BYTES`, `TOTOROX_MAX_MERGE_BYTES`). `Content-Length`, file upload và
+`config_json` đều bị chặn ở ngưỡng tương ứng trước khi xử lý.
+Client guard `APIService.maximumUploadBytes` / `maximumMergeBundleBytes` cũng đã nâng lên 100 MB.
+Quota chuyển từ đếm theo ngày sang **tích lũy** (`used_count`): gói 1 ngày = 5 lượt, 7 ngày = 30,
+>= 30 ngày = vô hạn (anti-spam 300/ngày); chỉ trừ khi convert/merge thành công.
 
 ## Test đã thêm (`TotoroxTests/PatchZipConverterTests.swift`)
 - `testWriteZipArchive_MatchesInMemoryBuilder`, `testWriteZipArchive_ReplacesExistingFile`
