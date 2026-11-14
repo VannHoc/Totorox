@@ -479,6 +479,7 @@ final class PatchZipConverterTests: XCTestCase {
         let sampleRule = PatchRule(
             bundleID: "com.garena.game.kgvn",
             relativePath: "Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes",
+            replacementFilename: "CommonActions.pkg.bytes",
             replacementData: Data("test_pkg".utf8)
         )
         let projectZip = try converter.buildProjectZip(PatchProject(name: "Test", rules: [sampleRule]))
