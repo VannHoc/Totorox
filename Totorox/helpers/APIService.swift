@@ -168,14 +168,14 @@ final class APIService {
             let payload = try parseJSON([String: AnyCodable].self, from: data)
             return .success(VerifyResponse(
                 status: http.statusCode,
-                expiresAt: payload["expires_at"]?.date,
+                expiresAt: payload["expires_at"]?.timestamp,
                 dailyQuota: payload["daily_quota"]?.int,
                 usedToday: payload["used_today"]?.int,
                 remaining: payload["remaining"]?.int,
                 error: payload["error"]?.string
             ))
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(Self.failure(from: error))
         }
     }
 
@@ -202,13 +202,13 @@ final class APIService {
                 ))
             }
             let payload = try parseJSON([String: AnyCodable].self, from: data)
-            let expiresAt = payload["expires_at"]?.double.map { Date(timeIntervalSince1970: $0) }
+            let expiresAt = payload["expires_at"]?.timestamp
             return .success(LicenseActivation(
                 expiresAt: expiresAt,
                 plan: payload["plan"]?.string
             ))
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(Self.failure(from: error))
         }
     }
 
@@ -273,7 +273,7 @@ final class APIService {
                 publicContentKeyB64: raw.publicContentKeyB64
             ))
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(Self.failure(from: error))
         }
     }
 
@@ -331,7 +331,7 @@ final class APIService {
                 note: raw.note
             ))
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(Self.failure(from: error))
         }
     }
 
@@ -425,6 +425,15 @@ final class APIService {
         try JSONDecoder().decode(type, from: data)
     }
 
+    /// Lỗi giải mã JSON có nghĩa là server đã trả 2xx nhưng body không khớp schema —
+    /// báo "phản hồi không hợp lệ" thay vì gán nhầm thành lỗi mạng.
+    private static func failure(from error: Error) -> APIServiceError {
+        if error is DecodingError {
+            return .invalidResponse
+        }
+        return .transport(error.localizedDescription)
+    }
+
     private static func errorMessage(from data: Data) -> String? {
         guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -447,7 +456,9 @@ struct AnyCodable: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let bool = try? container.decode(Bool.self) {
+        if container.decodeNil() {
+            value = NSNull()
+        } else if let bool = try? container.decode(Bool.self) {
             value = bool
         } else if let int = try? container.decode(Int.self) {
             value = int
@@ -467,6 +478,8 @@ struct AnyCodable: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch value {
+        case is NSNull:
+            try container.encodeNil()
         case let bool as Bool:
             try container.encode(bool)
         case let int as Int:
@@ -486,11 +499,19 @@ struct AnyCodable: Codable, Equatable {
 
     var bool: Bool? { value as? Bool }
     var int: Int? { value as? Int }
-    var double: Double? { value as? Double }
+    var double: Double? {
+        if let double = value as? Double { return double }
+        return (value as? Int).map(Double.init)
+    }
     var string: String? { value as? String }
-    var date: Date? { value as? Date }
     var array: [Any]? { value as? [Any] }
     var dictionary: [String: Any]? { value as? [String: Any] }
+
+    /// Timestamp tính bằng giây kể từ 1970 trong JSON thường được giải mã thành
+    /// `Int` hoặc `Double`, không bao giờ là `Date`.
+    var timestamp: Date? {
+        double.map { Date(timeIntervalSince1970: $0) }
+    }
 
     static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
         valuesEqual(lhs.value, rhs.value)
