@@ -153,8 +153,9 @@ final class LicenseManager: ObservableObject {
             await existing.value
             return
         }
-        let task = Task { [weak self] in
-            await self?.performRefresh()
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.performRefresh()
         }
         inFlightRefreshTask = task
         isRefreshing = true
