@@ -48,7 +48,7 @@ final class LicenseManager: ObservableObject {
     }
 
     func activate(_ rawKey: String) async {
-        let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !key.isEmpty else {
             status = .rejected("Vui lòng nhập License Key.")
             return
