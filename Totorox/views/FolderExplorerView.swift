@@ -189,8 +189,18 @@ struct FolderExplorerView: View {
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: FileIOResultWrapper? = nil
 
+    // File operation progress state
+    @State private var activeTaskTitle: String? = nil
+    @State private var activeTaskSubtitle: String = ""
+    @State private var activeTaskCompletedCount: Int = 0
+    @State private var activeTaskTotalCount: Int = 0
+
     private var canGoBack: Bool {
         currentURL.path != "/" && breadcrumbs.count > 1
+    }
+
+    private func dismissSearchKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     init(initialURL: URL? = nil) {
@@ -379,6 +389,14 @@ struct FolderExplorerView: View {
                         ? "Tìm ứng dụng hoặc Bundle ID..."
                         : "Tìm kiếm trong thư mục này..."
                 )
+
+                // Thanh hiển thị tiến trình tác vụ tệp (Copy/Paste, Giải nén, Nhập, Xóa...)
+                if let taskTitle = activeTaskTitle {
+                    fileOperationProgressBanner(title: taskTitle)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 2)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
             .padding(.bottom, 8)
             .background(TotoroxTheme.cardBackground)
@@ -555,6 +573,7 @@ struct FolderExplorerView: View {
     // MARK: - File & Folder Card View (Zero Main Thread I/O, Clean 3105 Layout, No UDID)
     private func fileEntryCard(_ entry: FileEntry) -> some View {
         Button {
+            dismissSearchKeyboard()
             if entry.isDirectory {
                 let canonCurrent = ContainerMetadataCache.canonicalPath(currentURL.path)
                 savedScrollItemID[canonCurrent] = entry.id
@@ -877,12 +896,90 @@ struct FolderExplorerView: View {
     }
 
     private func navigateTo(_ url: URL) {
+        dismissSearchKeyboard()
         let canonDest = ContainerMetadataCache.canonicalPath(url.path)
         searchText = ""
         pendingScrollToID = savedScrollItemID[canonDest]
         currentURL = url
         rebuildBreadcrumbs()
         loadCurrentDirectory(forceRefresh: false)
+    }
+
+    // MARK: - Thanh hiển thị tiến trình tác vụ tệp trong tab Thư mục
+    private func fileOperationProgressBanner(title: String) -> some View {
+        let fraction: Double? = {
+            guard activeTaskTotalCount > 0 else { return nil }
+            return min(max(Double(activeTaskCompletedCount) / Double(activeTaskTotalCount), 0.02), 1.0)
+        }()
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.85)
+                    .tint(TotoroxTheme.mintAccent)
+
+                Text(title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if let frac = fraction {
+                    Text("\(Int(frac * 100))%")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                } else if activeTaskCompletedCount > 0 {
+                    Text("\(activeTaskCompletedCount) mục")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                }
+            }
+
+            if let frac = fraction {
+                ProgressView(value: frac, total: 1.0)
+                    .tint(TotoroxTheme.mintAccent)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .tint(TotoroxTheme.mintAccent)
+            }
+
+            if !activeTaskSubtitle.isEmpty {
+                Text(activeTaskSubtitle)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(TotoroxTheme.mintAccent.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(TotoroxTheme.mintAccent.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private nonisolated static func countItemsRecursively(at url: URL) -> Int {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            return 1
+        }
+        guard isDir.boolValue else { return 1 }
+        var total = 1
+        if let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) {
+            for _ in enumerator {
+                total += 1
+            }
+        }
+        return max(total, 1)
     }
 
     private func restoreScrollIfNeeded(using scrollProxy: ScrollViewProxy) {
@@ -1015,17 +1112,24 @@ struct FolderExplorerView: View {
         guard let item = itemToDelete else { return }
         let baseDir = currentURL
         let src = URL(fileURLWithPath: item.path)
+        activeTaskTitle = "Đang xóa '\(item.name)'..."
+        activeTaskSubtitle = item.name
+        activeTaskCompletedCount = 0
+        activeTaskTotalCount = 0
+
         Task.detached(priority: .userInitiated) {
             do {
                 try await FileIOEngine.shared.deleteItem(at: src)
             } catch {
                 await MainActor.run {
+                    self.activeTaskTitle = nil
                     self.presentOperationError("Không thể xoá: \(error.localizedDescription)")
                 }
                 return
             }
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
+                self.activeTaskTitle = nil
                 self.loadCurrentDirectory(forceRefresh: true)
             }
         }
@@ -1058,14 +1162,36 @@ struct FolderExplorerView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
 
+        activeTaskTitle = "Đang nhập tệp '\(fileName)'..."
+        activeTaskSubtitle = fileName
+        activeTaskCompletedCount = 0
+        activeTaskTotalCount = 1
+
         Task.detached(priority: .userInitiated) {
             defer {
                 if hasSecurityAccess { src.stopAccessingSecurityScopedResource() }
             }
             _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
-            let result = await FileIOEngine.shared.copyAndMerge(from: src, to: dst, conflictResolver: resolver)
+            let totalItems = Self.countItemsRecursively(at: src)
+            await MainActor.run {
+                self.activeTaskTotalCount = totalItems
+            }
+            let result = await FileIOEngine.shared.copyAndMerge(
+                from: src,
+                to: dst,
+                progressHandler: { completed, currentName in
+                    if completed == 1 || completed == totalItems || completed % 4 == 0 {
+                        Task { @MainActor in
+                            self.activeTaskCompletedCount = completed
+                            self.activeTaskSubtitle = "Đã xử lý \(completed)/\(totalItems) mục • \(currentName)"
+                        }
+                    }
+                },
+                conflictResolver: resolver
+            )
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
+                self.activeTaskTitle = nil
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 self.loadCurrentDirectory(forceRefresh: true)
             }
@@ -1098,9 +1224,31 @@ struct FolderExplorerView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
 
+        activeTaskTitle = clip.isCut ? "Đang di chuyển '\(destName)'..." : "Đang sao chép '\(destName)'..."
+        activeTaskSubtitle = "Đang chuẩn bị dữ liệu..."
+        activeTaskCompletedCount = 0
+        activeTaskTotalCount = 0
+
         Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
-            let result = await FileIOEngine.shared.copyAndMerge(from: source, to: dest, conflictResolver: resolver)
+            let totalItems = Self.countItemsRecursively(at: source)
+            await MainActor.run {
+                self.activeTaskTotalCount = totalItems
+                self.activeTaskSubtitle = "0/\(totalItems) mục • \(destName)"
+            }
+            let result = await FileIOEngine.shared.copyAndMerge(
+                from: source,
+                to: dest,
+                progressHandler: { completed, currentName in
+                    if completed == 1 || completed == totalItems || completed % 4 == 0 {
+                        Task { @MainActor in
+                            self.activeTaskCompletedCount = completed
+                            self.activeTaskSubtitle = "Đã xử lý \(completed)/\(totalItems) mục • \(currentName)"
+                        }
+                    }
+                },
+                conflictResolver: resolver
+            )
 
             if clip.isCut {
                 if FileIOEngine.shared.canDeleteCutSource(
@@ -1108,6 +1256,9 @@ struct FolderExplorerView: View {
                     destinationURL: dest,
                     result: result
                 ) {
+                    await MainActor.run {
+                        self.activeTaskSubtitle = "Đang dọn dẹp tệp nguồn sau khi cắt..."
+                    }
                     do {
                         try await FileIOEngine.shared.deleteItem(at: source)
                         ContainerMetadataCache.shared.invalidate(path: source.deletingLastPathComponent().path)
@@ -1121,6 +1272,7 @@ struct FolderExplorerView: View {
 
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
+                self.activeTaskTitle = nil
                 self.clipboardItem = nil
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 self.loadCurrentDirectory(forceRefresh: true)
@@ -1142,6 +1294,11 @@ struct FolderExplorerView: View {
 
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
+
+        activeTaskTitle = "Đang giải nén '\(entry.name)'..."
+        activeTaskSubtitle = "Đang bung tệp nén..."
+        activeTaskCompletedCount = 0
+        activeTaskTotalCount = 0
 
         directoryVM.isLoading = true
         Task.detached(priority: .userInitiated) {
@@ -1176,7 +1333,8 @@ struct FolderExplorerView: View {
                             guard !parts.isEmpty,
                                   !parts.contains(".."),
                                   parts.first != "__MACOSX",
-                                  parts.last != ".DS_Store" else {
+                                  parts.last != ".DS_Store",
+                                  parts.last?.lowercased() != "patch.json" else {
                                 continue
                             }
                             var targetFileURL = tempStaging
@@ -1187,17 +1345,37 @@ struct FolderExplorerView: View {
                             try fileData.write(to: targetFileURL, options: .atomic)
                         }
                     }
+                    // Strip stray patch.json if present at archive root
+                    let strayPatchJSON = tempStaging.appendingPathComponent("patch.json")
+                    if FileManager.default.fileExists(atPath: strayPatchJSON.path) {
+                        try? FileManager.default.removeItem(at: strayPatchJSON)
+                    }
+                }
+
+                let totalItems = Self.countItemsRecursively(at: tempStaging)
+                await MainActor.run {
+                    self.activeTaskTotalCount = totalItems
+                    self.activeTaskSubtitle = "Đang sao chép \(totalItems) mục vào thư mục đích..."
                 }
 
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
                 let result = await FileIOEngine.shared.copyAndMerge(
                     from: tempStaging,
                     to: destinationDir,
+                    progressHandler: { completed, currentName in
+                        if completed == 1 || completed == totalItems || completed % 4 == 0 {
+                            Task { @MainActor in
+                                self.activeTaskCompletedCount = completed
+                                self.activeTaskSubtitle = "Đã chép \(completed)/\(totalItems) mục • \(currentName)"
+                            }
+                        }
+                    },
                     conflictResolver: resolver
                 )
 
                 ContainerMetadataCache.shared.invalidate(path: baseDir.path)
                 await MainActor.run {
+                    self.activeTaskTitle = nil
                     self.directoryVM.isLoading = false
                     self.selectedArchiveForExtraction = nil
                     self.outcomeResult = FileIOResultWrapper(result: result)
@@ -1205,6 +1383,7 @@ struct FolderExplorerView: View {
                 }
             } catch {
                 await MainActor.run {
+                    self.activeTaskTitle = nil
                     self.directoryVM.isLoading = false
                     self.selectedArchiveForExtraction = nil
                     if let extractorError = error as? ZIPArchiveExtractorError,
