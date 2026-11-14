@@ -382,13 +382,20 @@ struct PatchConverterView: View {
             if currentDirection == .zipToPatch {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
                     summary = "Tệp ZIP vượt quá giới hạn 3.6 GB nên không thể xem trước."
-                } else if let data = try? Data(contentsOf: url),
-                   let entries = try? PatchZipConverter().parseZipArchive(data),
-                   let manifestData = entries["patch.json"],
-                   let manifest = try? JSONDecoder().decode(PatchZipManifest.self, from: manifestData) {
-                    summary = "Gói: \(manifest.name) • Tác giả: \(manifest.author) • Quy tắc: \(manifest.rules.count) rules • Apps: \(manifest.bundleIdentifiers.joined(separator: ", "))"
+                } else if let headers = try? PatchZipConverter.shared.inspectZipCentralDirectory(url) {
+                    let detectedBundle = headers.lazy.compactMap { h -> String? in
+                        let parts = h.path.split(separator: "/").map(String.init)
+                        guard parts.count > 1 else { return nil }
+                        for seg in parts.dropLast() where seg.contains(".") && !seg.lowercased().hasSuffix(".bytes") && !seg.lowercased().hasSuffix(".assetbundle") {
+                            if seg.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil {
+                                return seg
+                            }
+                        }
+                        return nil
+                    }.first ?? "com.garena.game.kgvn"
+                    summary = "Gói ZIP hợp lệ (\(headers.count) tệp) • Ánh xạ Bundle ID: \(detectedBundle)"
                 } else {
-                    summary = "Tệp ZIP tiêu chuẩn. Sẽ tự động khởi tạo manifest nếu thiếu."
+                    summary = "Tệp ZIP tiêu chuẩn. Tự động ánh xạ theo Bundle ID ứng dụng."
                 }
             } else {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {

@@ -17,6 +17,7 @@ struct OverwriteFileView: View {
     
     // Custom folder dialog
     @State private var showCustomFolderSheet: Bool = false
+    @State private var showCustomPathInput: Bool = false
     @State private var customFolderInput: String = ""
     @State private var pendingTargetFolder: String = "Documents"
     @State private var currentBrowsingSubpath: String = ""
@@ -752,108 +753,105 @@ struct OverwriteFileView: View {
         }
     }
 
+    private func dismissPickerKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private var customFolderPickerSheet: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Thanh tìm kiếm trên cùng (đồng bộ với Bước 1 chọn App)
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(TotoroxTheme.textSecondary)
-                    TextField(
-                        selectedApp.map { "Tìm thư mục trong \($0.bundleID)..." } ?? "Tìm thư mục đích...",
-                        text: $folderSearchQuery
-                    )
-                    .font(.system(size: 14))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
-
-                    if !folderSearchQuery.isEmpty {
-                        Button {
-                            folderSearchQuery = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(TotoroxTheme.textSecondary)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 42)
-                .background(TotoroxTheme.searchBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-
-                // Thanh ánh xạ đường dẫn container của app đang chọn
-                if let app = selectedApp {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            if !currentBrowsingSubpath.isEmpty {
-                                Button {
-                                    navigateUpContainerFolder()
-                                } label: {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundColor(TotoroxTheme.mintAccent)
-                                        .frame(width: 28, height: 28)
-                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                        .clipShape(Circle())
-                                }
-                            }
-
+                // Header điều hướng & tìm kiếm đồng bộ với tab Thư mục
+                VStack(spacing: 8) {
+                    // Hàng nút Lùi + Thanh Breadcrumb dạng Pill cuộn ngang
+                    if let app = selectedApp {
+                        let canNavigateBack = !currentBrowsingSubpath.isEmpty
+                        let segments = currentBrowsingSubpath.split(separator: "/").map(String.init)
+                        HStack(spacing: 8) {
                             Button {
-                                browseContainerSubpath("")
+                                dismissPickerKeyboard()
+                                if canNavigateBack {
+                                    navigateUpContainerFolder()
+                                }
                             } label: {
-                                Text(app.bundleID)
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundColor(currentBrowsingSubpath.isEmpty ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                                HStack(spacing: 4) {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 13, weight: .bold))
+                                    Text("Lùi")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .lineLimit(1)
+                                }
+                                .fixedSize(horizontal: true, vertical: false)
+                                .foregroundStyle(canNavigateBack ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(Capsule())
                             }
+                            .buttonStyle(.plain)
+                            .disabled(!canNavigateBack)
 
-                            let segments = currentBrowsingSubpath.split(separator: "/").map(String.init)
-                            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(TotoroxTheme.textSecondary)
+                            ScrollViewReader { crumbProxy in
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        Button {
+                                            dismissPickerKeyboard()
+                                            browseContainerSubpath("")
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "internaldrive.fill")
+                                                    .font(.system(size: 12))
+                                                Text(app.bundleID)
+                                                    .font(.system(size: 12, weight: segments.isEmpty ? .bold : .medium))
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+                                            }
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(segments.isEmpty ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                            .foregroundColor(segments.isEmpty ? .white : TotoroxTheme.textPrimary)
+                                            .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(0)
 
-                                let partialPath = segments.prefix(index + 1).joined(separator: "/")
-                                Button {
-                                    browseContainerSubpath(partialPath)
-                                } label: {
-                                    Text(segment)
-                                        .font(.system(size: 12, weight: index == segments.count - 1 ? .bold : .medium, design: .monospaced))
-                                        .foregroundColor(index == segments.count - 1 ? TotoroxTheme.mintAccent : TotoroxTheme.textPrimary)
+                                        ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
+
+                                            let partialPath = segments.prefix(index + 1).joined(separator: "/")
+                                            let isLast = (index == segments.count - 1)
+                                            Button {
+                                                dismissPickerKeyboard()
+                                                pendingTargetFolder = partialPath
+                                                customFolderInput = partialPath
+                                                browseContainerSubpath(partialPath)
+                                            } label: {
+                                                Text(segment)
+                                                    .font(.system(size: 12, weight: isLast ? .bold : .medium))
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5)
+                                                    .background(isLast ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                                    .foregroundColor(isLast ? .white : TotoroxTheme.textPrimary)
+                                                    .clipShape(Capsule())
+                                            }
+                                            .buttonStyle(.plain)
+                                            .id(index + 1)
+                                        }
+                                    }
+                                    .padding(.trailing, 4)
+                                }
+                                .onChange(of: currentBrowsingSubpath) { _ in
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        crumbProxy.scrollTo(segments.count, anchor: .trailing)
+                                    }
+                                }
+                                .onAppear {
+                                    crumbProxy.scrollTo(segments.count, anchor: .trailing)
                                 }
                             }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                    }
-                } else {
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .font(.system(size: 12))
-                            .foregroundColor(.orange)
-                        Text("Chưa chọn ứng dụng ở Bước 1 — đang hiển thị thư mục gợi ý.")
-                            .font(.system(size: 12))
-                            .foregroundColor(TotoroxTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                }
-
-                Divider()
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Text(currentBrowsingSubpath.isEmpty
-                                 ? "Thư mục bên trong \(selectedApp?.bundleID ?? "Container"):"
-                                 : "Thư mục con trong \(currentBrowsingSubpath)/:")
-                                .font(.system(size: 13))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-
-                            Spacer()
 
                             if isLoadingFolders {
                                 ProgressView()
@@ -861,124 +859,229 @@ struct OverwriteFileView: View {
                                     .tint(TotoroxTheme.mintAccent)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-
-                        if let err = folderBrowseError, !err.isEmpty {
-                            Text(err)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 8)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle")
                                 .font(.system(size: 12))
                                 .foregroundColor(.orange)
-                                .padding(.horizontal, 16)
+                            Text("Chưa chọn ứng dụng ở Bước 1 — đang hiển thị thư mục gợi ý.")
+                                .font(.system(size: 12))
+                                .foregroundColor(TotoroxTheme.textSecondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 8)
+                    }
 
-                        if !isLoadingFolders && filteredBrowsingFolders.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "folder.badge.questionmark")
-                                    .font(.system(size: 28))
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
-                                Text(folderSearchQuery.isEmpty
-                                     ? "Thư mục này chưa có thư mục con. Bạn có thể chọn chính thư mục hiện tại hoặc nhập đường dẫn bên dưới."
-                                     : "Không tìm thấy thư mục khớp \"\(folderSearchQuery)\".")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
-                            .padding(.horizontal, 20)
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(filteredBrowsingFolders) { folder in
-                                    let isSelected = (pendingTargetFolder == folder.relativePath)
-                                    HStack(spacing: 8) {
-                                        Button {
-                                            pendingTargetFolder = folder.relativePath
-                                            customFolderInput = folder.relativePath
-                                            if !folder.isVirtualSuggestion {
-                                                browseContainerSubpath(folder.relativePath)
-                                            }
-                                        } label: {
-                                            HStack(spacing: 10) {
-                                                Image(systemName: "folder.fill")
-                                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text(folder.title)
-                                                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                                        .foregroundStyle(TotoroxTheme.textPrimary)
-                                                        .lineLimit(1)
-                                                    if let count = folder.childCount {
-                                                        Text("\(count) mục")
-                                                            .font(.system(size: 11))
-                                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                                    }
-                                                }
-                                                Spacer()
-                                                if isSelected {
-                                                    Image(systemName: "checkmark")
-                                                        .font(.system(size: 13, weight: .bold))
-                                                        .foregroundStyle(TotoroxTheme.mintAccent)
-                                                }
-                                            }
-                                            .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.plain)
+                    // Hàng Thanh tìm kiếm + Nút bật/tắt nhập đường dẫn tùy chỉnh (icon bút chì)
+                    HStack(spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
 
-                                        if !folder.isVirtualSuggestion {
-                                            Button {
-                                                pendingTargetFolder = folder.relativePath
-                                                customFolderInput = folder.relativePath
-                                            } label: {
-                                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                                    .font(.system(size: 18))
-                                                    .foregroundStyle(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.45))
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .frame(minHeight: 46)
-                                    .background(isSelected ? TotoroxTheme.mintAccent.opacity(0.10) : TotoroxTheme.searchBackground)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .stroke(isSelected ? TotoroxTheme.mintAccent.opacity(0.65) : Color.clear, lineWidth: 1.2)
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            TextField(
+                                selectedApp.map { "Tìm kiếm trong \($0.bundleID)..." } ?? "Tìm thư mục đích...",
+                                text: $folderSearchQuery
+                            )
+                            .font(.system(size: 15))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+
+                            if !folderSearchQuery.isEmpty {
+                                Button {
+                                    folderSearchQuery = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
                             }
-                            .padding(.horizontal, 16)
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        // Nhập đường dẫn tùy chỉnh
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Hoặc nhập đường dẫn tùy chỉnh:")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.textPrimary)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                showCustomPathInput.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(showCustomPathInput ? .white : TotoroxTheme.mintAccent)
+                                .frame(width: 40, height: 40)
+                                .background(showCustomPathInput ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Nhập đường dẫn tùy chỉnh")
+                    }
+                    .padding(.horizontal, 14)
+
+                    // Ô nhập đường dẫn tùy chỉnh thu gọn (chỉ hiện khi bấm nút bút chì)
+                    if showCustomPathInput {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.badge.gearshape")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
 
                             TextField("Ví dụ: Documents/Resources/1.64.1", text: $customFolderInput)
-                                .font(.system(size: 13, design: .monospaced))
+                                .font(.system(size: 13.5, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
-                                .padding(.horizontal, 12)
-                                .frame(height: 42)
-                                .background(TotoroxTheme.searchBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 .onChange(of: customFolderInput) { newVal in
                                     let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
                                     if !trimmed.isEmpty {
                                         pendingTargetFolder = trimmed
                                     }
                                 }
+
+                            if !customFolderInput.isEmpty {
+                                Button {
+                                    customFolderInput = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                }
+                            }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 16)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(TotoroxTheme.mintAccent.opacity(0.45), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 14)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
+                .padding(.bottom, 10)
+                .background(TotoroxTheme.cardBackground)
+                .shadow(color: Color.black.opacity(0.02), radius: 4, x: 0, y: 2)
 
-                // Nút Xác nhận màu xanh ghim dưới cùng
+                // Danh sách thư mục dạng Card trắng đồng bộ với tab Thư mục
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 8) {
+                        if let err = folderBrowseError, !err.isEmpty {
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                        }
+
+                        if !isLoadingFolders && filteredBrowsingFolders.isEmpty {
+                            VStack(spacing: 12) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 42))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                Text(folderSearchQuery.isEmpty
+                                     ? "Thư mục này chưa có thư mục con"
+                                     : "Không tìm thấy thư mục phù hợp")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 52)
+                        } else {
+                            ForEach(filteredBrowsingFolders) { folder in
+                                let isSelected = (pendingTargetFolder == folder.relativePath)
+                                HStack(spacing: 10) {
+                                    Button {
+                                        dismissPickerKeyboard()
+                                        pendingTargetFolder = folder.relativePath
+                                        customFolderInput = folder.relativePath
+                                        if !folder.isVirtualSuggestion {
+                                            browseContainerSubpath(folder.relativePath)
+                                        }
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                                                    .frame(width: 40, height: 40)
+
+                                                Image(systemName: "folder.fill")
+                                                    .font(.system(size: 18))
+                                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                            }
+
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(folder.title)
+                                                    .font(.system(size: 14.5, weight: .bold))
+                                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+
+                                                HStack(spacing: 4) {
+                                                    Text("Thư mục")
+                                                        .font(.system(size: 11, weight: .medium))
+                                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                                    if let count = folder.childCount {
+                                                        Text("(\(count) mục)")
+                                                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                                            .foregroundStyle(TotoroxTheme.mintAccent)
+                                                    }
+                                                }
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                                .clipShape(Capsule())
+                                            }
+
+                                            Spacer(minLength: 4)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        dismissPickerKeyboard()
+                                        pendingTargetFolder = folder.relativePath
+                                        customFolderInput = folder.relativePath
+                                    } label: {
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 20))
+                                            .foregroundStyle(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.35))
+                                            .frame(width: 30, height: 30)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .totoroxCard(cornerRadius: 14, padding: 12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(isSelected ? TotoroxTheme.mintAccent : Color.clear, lineWidth: 1.5)
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 20)
+                }
+                .background(TotoroxTheme.pageBackground)
+
+                // Nút Xác nhận màu xanh ghim dưới cùng (chỉ hiển thị tên ngắn gọn của thư mục)
                 VStack(spacing: 8) {
                     Divider()
                     let candidatePath = validatedTargetSubfolder(customFolderInput.isEmpty ? pendingTargetFolder : customFolderInput)
+                    let shortFolderTitle: String = {
+                        guard let clean = candidatePath else { return "Xác nhận" }
+                        let last = (clean as NSString).lastPathComponent
+                        return "Xác nhận (\(last.isEmpty ? clean : last))"
+                    }()
                     Button {
+                        dismissPickerKeyboard()
                         guard let clean = candidatePath else {
                             folderBrowseError = "Đường dẫn không hợp lệ. Vui lòng nhập đường dẫn con bên trong container."
                             return
@@ -990,7 +1093,7 @@ struct OverwriteFileView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 16, weight: .bold))
-                            Text(candidatePath.map { "Xác nhận (\($0))" } ?? "Xác nhận")
+                            Text(shortFolderTitle)
                                 .font(.system(size: 15, weight: .bold))
                                 .lineLimit(1)
                         }
@@ -1004,13 +1107,15 @@ struct OverwriteFileView: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 }
-                .background(TotoroxTheme.pageBackground)
+                .background(TotoroxTheme.cardBackground)
             }
+            .background(TotoroxTheme.pageBackground)
             .navigationTitle("Tùy chọn thư mục đích")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Hủy") {
+                        dismissPickerKeyboard()
                         showCustomFolderSheet = false
                     }
                     .foregroundColor(TotoroxTheme.mintAccent)
@@ -1028,6 +1133,7 @@ struct OverwriteFileView: View {
         currentBrowsingSubpath = ""
         folderSearchQuery = ""
         folderBrowseError = nil
+        showCustomPathInput = false
         showCustomFolderSheet = true
     }
 
@@ -1049,7 +1155,12 @@ struct OverwriteFileView: View {
         let defaultSuggestions: [DestinationFolderOption] = [
             "Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"
         ].map {
-            DestinationFolderOption(title: $0, relativePath: $0, childCount: nil, isVirtualSuggestion: true)
+            DestinationFolderOption(
+                title: ($0 as NSString).lastPathComponent,
+                relativePath: $0,
+                childCount: nil,
+                isVirtualSuggestion: true
+            )
         }
 
         guard let app = selectedApp else {
@@ -1076,7 +1187,7 @@ struct OverwriteFileView: View {
             var mapped: [DestinationFolderOption] = dirEntries.map { entry in
                 let rel = subpath.isEmpty ? entry.name : "\(subpath)/\(entry.name)"
                 return DestinationFolderOption(
-                    title: subpath.isEmpty ? entry.name : rel,
+                    title: entry.name,
                     relativePath: rel,
                     childCount: entry.childCount,
                     isVirtualSuggestion: false

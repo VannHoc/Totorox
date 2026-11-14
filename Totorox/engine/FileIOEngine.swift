@@ -131,6 +131,7 @@ public final class FileIOEngine: @unchecked Sendable {
     public func copyAndMerge(
         from sourceURL: URL,
         to destinationURL: URL,
+        progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)? = nil,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
         let cancelState = FileIOCancellationState()
@@ -222,6 +223,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
+                progressHandler: progressHandler,
                 conflictResolver: conflictResolver
             )
 
@@ -243,8 +245,13 @@ public final class FileIOEngine: @unchecked Sendable {
         conflictSession: FileIOConflictSession,
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
+        progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
         conflictResolver: FileIOConflictResolver
     ) async {
+        defer {
+            let totalDone = result.succeeded.count + result.skipped.count + result.failed.count
+            progressHandler?(totalDone, source.lastPathComponent)
+        }
         if cancelState.isCancelled || result.isCancelled {
             result.isCancelled = true
             result.skipped.append(source)
@@ -306,6 +313,7 @@ public final class FileIOEngine: @unchecked Sendable {
                     conflictSession: conflictSession,
                     result: &result,
                     cancelState: cancelState,
+                    progressHandler: progressHandler,
                     conflictResolver: conflictResolver
                 )
             } else {
@@ -329,6 +337,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
+                progressHandler: progressHandler,
                 conflictResolver: conflictResolver
             )
             return
@@ -386,6 +395,7 @@ public final class FileIOEngine: @unchecked Sendable {
                         conflictSession: conflictSession,
                         result: &result,
                         cancelState: cancelState,
+                        progressHandler: progressHandler,
                         conflictResolver: conflictResolver
                     )
                 } else {
@@ -420,6 +430,7 @@ public final class FileIOEngine: @unchecked Sendable {
                         conflictSession: conflictSession,
                         result: &result,
                         cancelState: cancelState,
+                        progressHandler: progressHandler,
                         conflictResolver: conflictResolver
                     )
                 } else {
@@ -443,6 +454,7 @@ public final class FileIOEngine: @unchecked Sendable {
         conflictSession: FileIOConflictSession,
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
+        progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
         conflictResolver: FileIOConflictResolver
     ) async {
         let contents: [URL]
@@ -500,6 +512,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
+                progressHandler: progressHandler,
                 conflictResolver: conflictResolver
             )
 
@@ -892,14 +905,17 @@ public final class FileIOEngine: @unchecked Sendable {
         }.value
     }
 
-    /// Unwraps a patch zip payload directory if it contains `patch.json` + `payload/<bundleID>/...`,
-    /// or stages a `.3105` package into a clean directory structure ready for container merge.
+    /// Unwraps a patch zip directory if it contains `<bundleID>/...` or legacy `payload/<bundleID>/...`,
+    /// and removes any stray `patch.json` metadata file so only clean container files remain.
     public func unwrapExtractedPayloadRoot(at extractedDir: URL, preferredBundleID: String? = nil) -> (rootURL: URL, usesContainerRootRelativePaths: Bool) {
         let patchJSON = extractedDir.appendingPathComponent("patch.json")
+        if fileManager.fileExists(atPath: patchJSON.path) {
+            try? fileManager.removeItem(at: patchJSON)
+        }
+
         let payloadDir = extractedDir.appendingPathComponent("payload")
         var isDir: ObjCBool = false
-        if fileManager.fileExists(atPath: patchJSON.path),
-           fileManager.fileExists(atPath: payloadDir.path, isDirectory: &isDir),
+        if fileManager.fileExists(atPath: payloadDir.path, isDirectory: &isDir),
            isDir.boolValue {
             if let bid = preferredBundleID, !bid.isEmpty {
                 let candidate = payloadDir.appendingPathComponent(bid)
@@ -916,6 +932,35 @@ public final class FileIOEngine: @unchecked Sendable {
             }
             return (payloadDir, true)
         }
+
+        if let bid = preferredBundleID, !bid.isEmpty {
+            let directBundleCandidate = extractedDir.appendingPathComponent(bid)
+            if fileManager.fileExists(atPath: directBundleCandidate.path, isDirectory: &isDir), isDir.boolValue {
+                return (directBundleCandidate, true)
+            }
+        }
+
+        if let children = try? fileManager.contentsOfDirectory(at: extractedDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            let dirChildren = children.filter {
+                var childIsDir: ObjCBool = false
+                return fileManager.fileExists(atPath: $0.path, isDirectory: &childIsDir) && childIsDir.boolValue
+            }
+            if dirChildren.count == 1, let singleDir = dirChildren.first {
+                let name = singleDir.lastPathComponent
+                let lower = name.lowercased()
+                if name.contains(".") && !lower.hasSuffix(".app") && !lower.hasSuffix(".bundle") && !lower.hasSuffix(".assetbundle") {
+                    let containerSubdirs = ["Documents", "Library", "tmp", "SystemData", "Resources"]
+                    let hasKnownSubdir = containerSubdirs.contains { sub in
+                        var subIsDir: ObjCBool = false
+                        return fileManager.fileExists(atPath: singleDir.appendingPathComponent(sub).path, isDirectory: &subIsDir) && subIsDir.boolValue
+                    }
+                    if hasKnownSubdir {
+                        return (singleDir, true)
+                    }
+                }
+            }
+        }
+
         return (extractedDir, false)
     }
 }

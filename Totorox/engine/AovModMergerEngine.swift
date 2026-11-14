@@ -202,18 +202,6 @@ public final class AovModMergerEngine: @unchecked Sendable {
             throw AovModMergerError.insufficientInputMods
         }
 
-        struct ModHeaderRef: Sendable {
-            let modIndex: Int
-            let originalPath: String
-            let remappedPath: String
-            let header: PatchZipConverter.ZipArchiveEntryHeader
-        }
-
-        struct ModMetadata: Sendable {
-            let summary: AovModSummary
-            let headers: [String: PatchZipConverter.ZipArchiveEntryHeader]
-        }
-
         // BƯỚC 1: Đọc nhanh danh mục Central Directory của tất cả các gói mod (< 5ms mỗi gói)
         progress("Đang đọc danh mục các gói mod...", 0.05)
 
@@ -247,6 +235,22 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         let targetVersion = Self.resolveTargetVersion(summaries)
 
+        // Xác định các gói mod có hệ thống Thanos (KianaMod HeroSkin_1) và có version.txt chuẩn
+        var kianaModIndices = Set<Int>()
+        var versionedModIndices = Set<Int>()
+        for (modIdx, modMeta) in modMetas.enumerated() {
+            if modMeta.summary.resourceVersion != nil {
+                versionedModIndices.insert(modIdx)
+            }
+            for origPath in modMeta.headers.keys {
+                let lower = origPath.replacingOccurrences(of: "\\", with: "/").lowercased()
+                if lower.hasSuffix("thanos/heroskin_1.bytes") || lower == "heroskin_1.bytes" {
+                    kianaModIndices.insert(modIdx)
+                }
+            }
+        }
+        let hasKianaMod = !kianaModIndices.isEmpty
+
         // BƯỚC 2: Nhóm toàn bộ entry theo đường dẫn chuẩn hóa (Resources/<targetVersion>/...)
         var pathGroups: [String: [ModHeaderRef]] = [:]
         for (modIdx, modMeta) in modMetas.enumerated() {
@@ -261,6 +265,19 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     to: targetVersion
                 )
                 let normalizedKey = remapped.lowercased()
+
+                // Loại bỏ các file Databin rác/watermark (< 32 byte, ví dụ 9 byte chữ ký tác giả)
+                // gây crash GameDataMgr và đứng game ở 88%
+                if normalizedKey.contains("/databin/") && normalizedKey.hasSuffix(".bytes") && header.uncompressedSize < 32 {
+                    continue
+                }
+
+                // Nếu gộp chung với hệ thống KianaMod (Thanos/HeroSkin_1), bỏ qua HeroInfoLua.pkg.bytes
+                // từ các gói mod cũ không có HeroSkin_1 vì không được đăng ký bypass MD5, tránh đứng 88%
+                if hasKianaMod && normalizedKey.hasSuffix("heroinfolua.pkg.bytes") && !kianaModIndices.contains(modIdx) {
+                    continue
+                }
+
                 let entryRef = ModHeaderRef(
                     modIndex: modIdx,
                     originalPath: origPath,
@@ -271,29 +288,69 @@ public final class AovModMergerEngine: @unchecked Sendable {
             }
         }
 
-        // BƯỚC 3: Phát hiện Path Collision cho file cấu hình
+        // BƯỚC 3: Phát hiện Path Collision thực sự cho file cấu hình
         // Chỉ upload những file:
         // 1. Thỏa isServerConfigPath (CommonActions XML, Databin MSES, Thanos IFix, RP/RV assetbundle)
-        // 2. VÀ xuất hiện ở ít nhất 2 gói mod khác nhau (distinctMods.count >= 2)
-        // File cấu hình chỉ có ở 1 mod duy nhất sẽ được giữ nguyên ở local để đóng gói trực tiếp!
+        // 2. Xuất hiện ở ít nhất 2 gói mod khác nhau (distinctMods.count >= 2)
+        // 3. Có ít nhất 2 biến thể nội dung khác nhau (khác CRC32 hoặc kích thước)
+        // Riêng KernelLua.pkg.bytes & StableSystems_3.pkg.bytes: chọn bản hợp lệ có header "J (0x22 0x4A)
+        // và chỉ gửi 1 bản chuẩn duy nhất để máy chủ cập nhật đúng MD5 vào HeroSkin_1/2 mà không làm hỏng cấu trúc ZIP nội bộ.
         var collidingRefs: [ModHeaderRef] = []
         var detectedConflicts = 0
 
-        for (_, refs) in pathGroups {
+        for (normalizedKey, refs) in pathGroups {
             guard let first = refs.first else { continue }
-            if Self.isServerConfigPath(first.remappedPath) {
-                let distinctMods = Set(refs.map(\.modIndex))
-                if distinctMods.count >= 2 {
-                    detectedConflicts += 1
-                    collidingRefs.append(contentsOf: refs)
+            guard Self.isServerConfigPath(first.remappedPath) else { continue }
+
+            if normalizedKey.hasSuffix("kernellua.pkg.bytes") || normalizedKey.hasSuffix("stablesystems_3.pkg.bytes") {
+                let bestLuaRef = Self.selectBestValidLuaPkgRef(
+                    refs,
+                    inputURLs: inputURLs,
+                    preferredModIndices: kianaModIndices.union(versionedModIndices)
+                )
+                pathGroups[normalizedKey] = [bestLuaRef]
+                if hasKianaMod {
+                    collidingRefs.append(bestLuaRef)
+                }
+                continue
+            }
+
+            let distinctMods = Set(refs.map(\.modIndex))
+            guard distinctMods.count >= 2 else { continue }
+
+            var effectiveRefs = refs
+            if normalizedKey.hasSuffix("resourcepackerinfosetall.assetbundle")
+                || normalizedKey.hasSuffix("resourceverificationinfosetall.assetbundle") {
+                let preferred = kianaModIndices.isEmpty ? versionedModIndices : kianaModIndices
+                let filtered = refs.filter { preferred.contains($0.modIndex) }
+                if !filtered.isEmpty {
+                    effectiveRefs = filtered
+                    pathGroups[normalizedKey] = filtered
                 }
             }
+
+            let uniqueVariants = Set(effectiveRefs.map { "\($0.header.crc32):\($0.header.uncompressedSize)" })
+            guard uniqueVariants.count >= 2 else {
+                // Tất cả các gói mod đều chứa cùng 1 file y hệt nhau (cùng CRC32 & size) -> không xung đột, giữ ở local!
+                continue
+            }
+
+            // Khử trùng lặp cho các file nặng không phụ thuộc heroID (như skillcombine.bytes 5.8 MB)
+            if normalizedKey.hasSuffix("/skillcombine.bytes") {
+                var seenVariants = Set<String>()
+                effectiveRefs = effectiveRefs.filter { ref in
+                    seenVariants.insert("\(ref.header.crc32):\(ref.header.uncompressedSize)").inserted
+                }
+            }
+
+            detectedConflicts += 1
+            collidingRefs.append(contentsOf: effectiveRefs)
         }
 
         // BƯỚC 4: Chuẩn bị config_bundle.zip gửi lên máy chủ
         var configBundleEntries: [(path: String, data: Data)] = []
         if !collidingRefs.isEmpty {
-            progress("Đang trích xuất \(detectedConflicts) tệp cấu hình xung đột...", 0.2)
+            progress("Đang trích xuất \(detectedConflicts) tệp cấu hình", 0.2)
             for ref in collidingRefs {
                 let modURL = inputURLs[ref.modIndex]
                 let fileData = try PatchZipConverter.shared.extractZipEntry(header: ref.header, from: modURL)
@@ -333,7 +390,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
             throw AovModMergerError.zipCreationFailed("Không dựng được cấu hình gửi máy chủ.")
         }
 
-        progress("Đang gửi config nhẹ lên máy chủ để gộp...", 0.35)
+        progress("Đang gửi lên máy chủ để gộp", 0.5)
 
         let planResult = await APIService.shared.mergePlan(
             fileURL: configBundleURL,
@@ -347,13 +404,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
         case .success(let response):
             plan = response
         case .failure(let error):
-            throw AovModMergerError.invalidArchive("Máy chủ merge-plan: \(error.localizedDescription)")
+            throw AovModMergerError.invalidArchive("Máy chủ gộp: \(error.localizedDescription)")
         }
         guard plan.ok else {
-            throw AovModMergerError.invalidArchive("Máy chủ trả về merge-plan không hợp lệ.")
+            throw AovModMergerError.invalidArchive("Máy chủ trả về không hợp lệ.")
         }
 
-        progress("Đang đóng gói tệp .zip kết quả...", 0.75)
+        progress("Đang đóng gói tệp .zip ", 0.75)
 
         // BƯỚC 5: Nhận và giải nén các file server đã merge (nếu có)
         var serverMergedEntries: [String: Data] = [:]
@@ -430,6 +487,16 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     throw AovModMergerError.invalidArchive("Không thể mở tệp mod nguồn: \(inputURLs[winner.modIndex].lastPathComponent)")
                 }
 
+                // Các gói .pkg.bytes phải luôn đóng gói ở chế độ STORE (method 0) để CFileManager của game đọc trực tiếp
+                if normalizedKey.hasSuffix(".pkg.bytes") && winner.header.compressionMethod != 0 {
+                    let rawPkgData = try PatchZipConverter.shared.extractZipEntry(
+                        header: winner.header,
+                        from: inputURLs[winner.modIndex]
+                    )
+                    try writer.add(path: winner.remappedPath, data: rawPkgData)
+                    continue
+                }
+
                 try writer.copyRawEntry(
                     destinationPath: winner.remappedPath,
                     from: sourceHandle,
@@ -467,6 +534,70 @@ public final class AovModMergerEngine: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    private struct ModHeaderRef: Sendable {
+        let modIndex: Int
+        let originalPath: String
+        let remappedPath: String
+        let header: PatchZipConverter.ZipArchiveEntryHeader
+    }
+
+    private struct ModMetadata: Sendable {
+        let summary: AovModSummary
+        let headers: [String: PatchZipConverter.ZipArchiveEntryHeader]
+    }
+
+    /// Chọn bản `KernelLua.pkg.bytes` / `StableSystems_3.pkg.bytes` hợp lệ nhất trong các gói mod:
+    /// Ưu tiên gói mà mọi entry Lua bên trong đều có magic header `0x22 0x4A` (`"J`) hợp lệ của AOV
+    /// (tránh các gói bị giải mã mất header `0x22 0x4A` gây đứng game ở 88%), sau đó ưu tiên gói có
+    /// nhiều script `"Jg\xef` nhất và dung lượng đầy đủ nhất.
+    private static func selectBestValidLuaPkgRef(
+        _ refs: [ModHeaderRef],
+        inputURLs: [URL],
+        preferredModIndices: Set<Int>
+    ) -> ModHeaderRef {
+        guard refs.count > 1 else { return refs[0] }
+
+        var bestRef = refs[0]
+        var bestScore: (Int, Int, Int, Int, Int) = (-1, -1, -1, -1, -1)
+
+        for ref in refs {
+            guard ref.modIndex < inputURLs.count,
+                  let pkgData = try? PatchZipConverter.shared.extractZipEntry(header: ref.header, from: inputURLs[ref.modIndex]),
+                  let innerEntries = try? PatchZipConverter.shared.parseZipArchive(pkgData),
+                  !innerEntries.isEmpty else {
+                continue
+            }
+
+            var validMagicCount = 0
+            var jgefCount = 0
+            for (_, data) in innerEntries {
+                let bytes = [UInt8](data.prefix(4))
+                if bytes.count >= 2 && bytes[0] == 0x22 && bytes[1] == 0x4A {
+                    validMagicCount += 1
+                    if bytes.count >= 4 && bytes[2] == 0x67 && bytes[3] == 0xEF {
+                        jgefCount += 1
+                    }
+                }
+            }
+
+            let allValidMagic = (validMagicCount == innerEntries.count) ? 1 : 0
+            let isPreferred = preferredModIndices.contains(ref.modIndex) ? 1 : 0
+            let score = (
+                allValidMagic,
+                validMagicCount,
+                jgefCount,
+                isPreferred,
+                Int(ref.header.uncompressedSize)
+            )
+            if score > bestScore {
+                bestScore = score
+                bestRef = ref
+            }
+        }
+
+        return bestRef
+    }
 
     /// Đường dẫn cấu hình mà server thật sự chạy pipeline merge:
     /// `CommonActions` (XML), `Databin` (MSES), `Thanos` (HeroSkin_1/2) và hai assetbundle
@@ -623,8 +754,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
         let patterns = [
             "hero[_\\-]?(\\d{3,4})",
             "actor_(\\d{3,4})",
-            "(?:^|/)(\\d{3,4})_assetref\\.bytes",
-            "/hero/(\\d{3,4})_"
+            "(?:^|/)(\\d{3,4})_assetref\\.bytes"
         ]
         var found: [Int] = []
         var seen = Set<Int>()

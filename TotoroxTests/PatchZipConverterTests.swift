@@ -476,8 +476,18 @@ final class PatchZipConverterTests: XCTestCase {
 
         // Envelope with this payload must successfully decode in openPayload
         // (Previously threw "Invalid project: Không giải mã được payload AES-GCM.")
-        let envelope = try converter.buildProjectZip(PatchProject(name: "Test", rules: []))
-        _ = envelope
+        let sampleRule = PatchRule(
+            bundleID: "com.garena.game.kgvn",
+            relativePath: "Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes",
+            replacementData: Data("test_pkg".utf8)
+        )
+        let projectZip = try converter.buildProjectZip(PatchProject(name: "Test", rules: [sampleRule]))
+        let parsedZip = try converter.parseZipArchive(projectZip)
+        XCTAssertNil(parsedZip["patch.json"], "Không được xuất hiện patch.json trong gói .zip")
+        XCTAssertNotNil(
+            parsedZip["com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"],
+            "Phải ánh xạ trực tiếp theo bundle ID của app mà không có tiền tố payload/"
+        )
     }
 
     func testAovModMerger_CollisionDetectionLogic() {
