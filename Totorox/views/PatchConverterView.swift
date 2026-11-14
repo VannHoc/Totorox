@@ -382,9 +382,9 @@ struct PatchConverterView: View {
             if currentDirection == .zipToPatch {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
                     summary = "Tệp ZIP vượt quá giới hạn 3.6 GB nên không thể xem trước."
-                } else if let headers = try? PatchZipConverter.shared.inspectZipCentralDirectory(url) {
-                    let detectedBundle = headers.lazy.compactMap { h -> String? in
-                        let parts = h.path.split(separator: "/").map(String.init)
+                } else if let headers = try? PatchZipConverter.shared.readZipArchiveHeaders(from: url) {
+                    let detectedBundle = headers.keys.lazy.compactMap { path -> String? in
+                        let parts = path.split(separator: "/").map(String.init)
                         guard parts.count > 1 else { return nil }
                         for seg in parts.dropLast() where seg.contains(".") && !seg.lowercased().hasSuffix(".bytes") && !seg.lowercased().hasSuffix(".assetbundle") {
                             if seg.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil {
