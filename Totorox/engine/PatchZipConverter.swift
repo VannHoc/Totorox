@@ -10,6 +10,7 @@ public enum PatchZipConverterError: Error, LocalizedError, Equatable {
     case insufficientSpace
     case sizeLimitExceeded
     case ioFailure(String)
+    case cryptoFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,7 @@ public enum PatchZipConverterError: Error, LocalizedError, Equatable {
         case .insufficientSpace: return "Insufficient disk space."
         case .sizeLimitExceeded: return "Archive exceeds the 3.6 GB limit."
         case .ioFailure(let msg): return "I/O error: \(msg)"
+        case .cryptoFailed(let msg): return "Lỗi mật mã: \(msg)"
         }
     }
 }
@@ -435,11 +437,11 @@ public final class PatchZipConverter {
         let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
         let schemaVersion = 3
         let isProtected = password != nil
-        let sealedPayload = try sealPayload(project: project, contentKey: contentKey, packageID: packageID, schemaVersion: 3)
+        let sealedPayload = try sealPayload(project: project, contentKey: contentKey, packageID: packageID, schemaVersion: schemaVersion)
         let envelopeData = try buildEnvelope(
             project: project,
             packageID: packageID,
-            schemaVersion: 3,
+            schemaVersion: schemaVersion,
             contentKey: contentKey,
             isProtected: isProtected,
             password: password,
@@ -1777,12 +1779,12 @@ public final class PatchZipConverter {
 private extension Data {
     mutating func appendUInt16(_ value: UInt16) {
         var v = value.littleEndian
-        append(UnsafeBufferPointer(start: &v, count: 1))
+        Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 
     mutating func appendUInt32(_ value: UInt32) {
         var v = value.littleEndian
-        append(UnsafeBufferPointer(start: &v, count: 1))
+        Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 
     func readUInt16(at offset: Int) -> UInt16 {
