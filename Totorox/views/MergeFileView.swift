@@ -81,7 +81,8 @@ struct MergeFileView: View {
                     HStack(spacing: 5) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .bold))
-                        Text("Tính năng độc quyền phát triển bởi VannHoc")
+                        Text("Tính năng triển bởi VannHoc")
+                        Text("Tự nghĩ, tự làm không lấy của ai")
                             .font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -92,7 +93,7 @@ struct MergeFileView: View {
 
             Divider()
 
-            Text("Hợp nhất thông minh từ 2 gói mod (.zip) Liên Quân Mobile trở lên thành 1 tệp .zip duy nhất theo ánh xạ chuẩn Resources/..., giữ trọn vẹn hiệu ứng biến về, tế đàn, âm thanh và thông báo hạ của tất cả các tướng.")
+            Text("Hợp nhất thông minh giữ trọn vẹn tất cả hiệu ứng mà bản mod có")
                 .font(.system(size: 12.5))
                 .foregroundStyle(TotoroxTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -319,7 +320,7 @@ struct MergeFileView: View {
             VStack(alignment: .leading, spacing: 6) {
                 resultInfoRow(label: "Đường dẫn ánh xạ trong .zip:", value: "Resources/\(result.resourceVersion)/...")
                 resultInfoRow(label: "Tổng số tệp đã đóng gói:", value: "\(result.totalFilesWritten) tệp")
-                resultInfoRow(label: "Xung đột nhị phân đã gộp:", value: "\(result.smartMergedConflicts) tệp (XML/Databin/IFix/UnityFS)")
+                resultInfoRow(label: "File trùng đã gộp:", value: "\(result.smartMergedConflicts) tệp (XML/Databin/IFix/UnityFS)")
             }
 
             if !result.logs.isEmpty {
@@ -369,7 +370,7 @@ struct MergeFileView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.and.arrow.up")
-                        Text("Lưu / Chia sẻ tệp .zip")
+                        Text("Lưu / Chia sẻ tệp")
                     }
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
