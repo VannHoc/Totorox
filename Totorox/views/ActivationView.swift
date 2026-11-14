@@ -219,8 +219,7 @@ struct ActivationView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(TotoroxTheme.textPrimary)
                     .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .totoroxCard(padding: 12)

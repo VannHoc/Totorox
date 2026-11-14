@@ -236,8 +236,24 @@
 "server.config_saved" = "服务器已保存。";
 "server.config_invalid" = "URL 无效。例如：https://your-server.com";
 
-/* --- Activation --- */
+/* --- Activation & License Settings --- */
 "activation.device_udid" = "设备 UDID";
 "activation.copied_udid" = "已复制 UDID";
 "activation.buy_telegram_title" = "Telegram 购买与售后频道";
 "activation.buy_telegram_subtitle" = "联系 @milototoro 获取密钥与售后支持";
+"settings.section_license" = "授权与设备信息";
+"settings.license_key_label" = "License Key";
+"settings.license_copied_key" = "已复制密钥";
+"settings.license_status_active" = "已激活";
+"settings.license_status_unlicensed" = "未激活";
+"settings.license_expires_label" = "到期时间";
+"settings.license_lifetime" = "无期限限制";
+"settings.license_remaining_label" = "剩余次数";
+"settings.license_unlimited" = "无限制";
+"settings.license_refresh_btn" = "重新验证密钥";
+"settings.license_switch_btn" = "更换 / 输入 License Key";
+"settings.license_switch_confirm_title" = "更换 License Key？";
+"settings.license_switch_confirm_msg" = "当前密钥将从本机注销，并跳转回密钥输入界面。";
+"settings.license_switch_confirm_action" = "进入输入密钥页面";
+"settings.udid_hardware" = "硬件 UDID (MobileGestalt)";
+"settings.udid_fallback" = "备用设备标识符";

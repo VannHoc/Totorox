@@ -166,7 +166,7 @@ final class APIServiceLicenseTests: XCTestCase {
         await relaunched.refresh()
         XCTAssertTrue(relaunched.status.isActive, "Lỗi tạm thời 5xx/mất mạng không được đá người dùng ra màn hình nhập key")
 
-        // Server 403 rejection must deactivate and show rejected
+        // Server 403 rejection must deactivate, clear snapshot/key, and show rejected
         let rejectedSession = StubURLProtocol.makeSession(statusCode: 403, body: #"{"detail":"Sai thiết bị"}"#)
         let rejectedAPI = APIService(baseURL: URL(string: "https://example.test")!, session: rejectedSession)
         let revokedManager = LicenseManager(
@@ -180,6 +180,61 @@ final class APIServiceLicenseTests: XCTestCase {
         )
         await revokedManager.refresh()
         XCTAssertFalse(revokedManager.status.isActive)
+        XCTAssertNil(storedKey, "Key bị từ chối 403 phải bị xóa khỏi Keychain để không vượt cổng lần sau")
+        XCTAssertEqual(revokedManager.licenseKey, "")
+    }
+
+    @MainActor
+    func testLicenseManagerRequiresValidSnapshotAndPurgesOrphanKeychainOnFreshInstall() async throws {
+        let suiteName = "LicenseManagerFreshTest.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var storedKey: String? = "TOTOROX-ORPHAN-1234"
+        let session = StubURLProtocol.makeSession(statusCode: 503, body: #"{"error":"offline"}"#)
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+
+        // Simulates fresh install (UserDefaults wiped) while Keychain still retained old key
+        let freshInstall = LicenseManager(
+            api: api,
+            defaults: defaults,
+            keyReader: { storedKey },
+            keyWriter: { storedKey = $0 },
+            keyRemover: { storedKey = nil },
+            deviceIdentifierProvider: { "NEW-UDID-999" },
+            autoRefresh: false,
+            clearOrphanedKeyOnFreshDefaults: true
+        )
+        XCTAssertFalse(freshInstall.status.isActive, "Cài mới khi UserDefaults trống phải hiện ActivationView")
+        XCTAssertNil(storedKey, "Phải xóa key mồ côi còn sót trong Keychain khi cài mới")
+
+        // Also ensure changing UDID invalidates an old cached snapshot for immediate entry
+        let activateSession = StubURLProtocol.makeSession(
+            statusCode: 200,
+            body: #"{"status":"activated","expires_at":4102444800,"remaining":5,"daily_quota":5}"#
+        )
+        let activeManager = LicenseManager(
+            api: APIService(baseURL: URL(string: "https://example.test")!, session: activateSession),
+            defaults: defaults,
+            keyReader: { storedKey },
+            keyWriter: { storedKey = $0 },
+            keyRemover: { storedKey = nil },
+            deviceIdentifierProvider: { "OLD-UUID-111" },
+            autoRefresh: false
+        )
+        await activeManager.activate("TOTOROX-VALID-0001")
+        XCTAssertTrue(activeManager.status.isActive)
+
+        let changedDeviceManager = LicenseManager(
+            api: api,
+            defaults: defaults,
+            keyReader: { storedKey },
+            keyWriter: { storedKey = $0 },
+            keyRemover: { storedKey = nil },
+            deviceIdentifierProvider: { "NEW-UDID-222" },
+            autoRefresh: false
+        )
+        XCTAssertFalse(changedDeviceManager.status.isActive, "Đổi từ UUID cũ sang UDID mới không được vào thẳng không cần xác minh")
     }
 }
 
