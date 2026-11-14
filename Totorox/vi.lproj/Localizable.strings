@@ -240,7 +240,7 @@
 "activation.device_udid" = "Mã thiết bị (UDID)";
 "activation.copied_udid" = "Đã sao chép UDID";
 "activation.buy_telegram_title" = "Kênh Telegram mua & bảo hành Key";
-"activation.buy_telegram_subtitle" = "Liên hệ @milototoro để nhận key và hỗ trợ";
+"activation.buy_telegram_subtitle" = "Liên hệ để nhận key và hỗ trợ";
 "settings.section_license" = "BẢN QUYỀN & THIẾT BỊ";
 "settings.license_key_label" = "License Key";
 "settings.license_copied_key" = "Đã sao chép Key";

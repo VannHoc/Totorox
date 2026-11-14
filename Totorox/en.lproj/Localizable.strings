@@ -240,7 +240,7 @@
 "activation.device_udid" = "Device UDID";
 "activation.copied_udid" = "UDID Copied";
 "activation.buy_telegram_title" = "Telegram Channel for Key & Support";
-"activation.buy_telegram_subtitle" = "Contact @milototoro for key purchase & warranty";
+"activation.buy_telegram_subtitle" = "Contact for key purchase & warranty";
 "settings.section_license" = "LICENSE & DEVICE";
 "settings.license_key_label" = "License Key";
 "settings.license_copied_key" = "Key Copied";

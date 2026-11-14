@@ -240,7 +240,7 @@
 "activation.device_udid" = "设备 UDID";
 "activation.copied_udid" = "已复制 UDID";
 "activation.buy_telegram_title" = "Telegram 购买与售后频道";
-"activation.buy_telegram_subtitle" = "联系 @milototoro 获取密钥与售后支持";
+"activation.buy_telegram_subtitle" = "联系获取密钥与售后支持";
 "settings.section_license" = "授权与设备信息";
 "settings.license_key_label" = "License Key";
 "settings.license_copied_key" = "已复制密钥";
