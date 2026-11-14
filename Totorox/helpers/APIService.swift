@@ -59,12 +59,12 @@ final class APIService {
     /// Khoá `UserDefaults` lưu base URL động do người dùng cấu hình.
     static let baseURLDefaultsKey = "totorox.api.baseURL"
 
-    /// Giới hạn tổng kích thước upload cho `convert-header` (server chỉ nhận metadata nhẹ).
-    static let maximumUploadBytes: Int64 = 15 * 1024 * 1024
+    /// Giới hạn tổng kích thước upload cho `convert-header` (khớp mặc định 100 MB của server).
+    static let maximumUploadBytes: Int64 = 100 * 1024 * 1024
 
-    /// Giới hạn cho `merge-plan`: `config_bundle.zip` chỉ chứa file cấu hình nhẹ
-    /// (`CommonActions` / `Databin` / `Thanos`), không bao giờ là gói mod đầy đủ.
-    static let maximumMergeBundleBytes: Int64 = 15 * 1024 * 1024
+    /// Giới hạn cho `merge-plan`: `config_bundle.zip` chứa file cấu hình
+    /// (`CommonActions` / `Databin` / `Thanos`); metadata RP/RV lớn nên khớp server 100 MB.
+    static let maximumMergeBundleBytes: Int64 = 100 * 1024 * 1024
 
     /// Timeout cho request metadata thông thường.
     static let requestTimeout: TimeInterval = 60

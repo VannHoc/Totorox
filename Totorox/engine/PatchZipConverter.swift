@@ -123,7 +123,7 @@ public final class PatchZipConverter {
     /// Đọc metadata gói `.3105`.
     ///
     /// Gói có magic `3105PATCH` được parse ngay tại máy (chỉ đọc header plist, không
-    /// upload) nên không bao giờ vướng giới hạn 15 MB của `/api/v1/convert-header`.
+    /// upload) nên không bao giờ vướng giới hạn 100 MB của `/api/v1/convert-header`.
     /// Chỉ khi magic không khớp mới nhờ server nhận diện.
     func inspect(patchData: Data) async throws -> PatchPackageSummary {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
