@@ -18,6 +18,12 @@ struct OverwriteFileView: View {
     // Custom folder dialog
     @State private var showCustomFolderSheet: Bool = false
     @State private var customFolderInput: String = ""
+    @State private var pendingTargetFolder: String = "Documents"
+    @State private var currentBrowsingSubpath: String = ""
+    @State private var folderSearchQuery: String = ""
+    @State private var browsingFolders: [DestinationFolderOption] = []
+    @State private var isLoadingFolders: Bool = false
+    @State private var folderBrowseError: String? = nil
     
     // Modal Sheets
     @State private var showInstalledAppsSheet: Bool = false
@@ -326,8 +332,7 @@ struct OverwriteFileView: View {
                 
                 // Button 3: Đổi (Tuỳ chọn thư mục khác)
                 Button {
-                    customFolderInput = selectedTargetFolder
-                    showCustomFolderSheet = true
+                    openCustomFolderPicker()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "slider.horizontal.3")
@@ -354,7 +359,7 @@ struct OverwriteFileView: View {
                     .foregroundStyle(TotoroxTheme.textSecondary)
                 
                 if let app = selectedApp {
-                    Text("\(app.shortUDID)/\(selectedTargetFolder)/")
+                    Text("\(app.bundleID)/\(selectedTargetFolder)/")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(TotoroxTheme.textSecondary)
                         .lineLimit(1)
@@ -731,77 +736,275 @@ struct OverwriteFileView: View {
     }
     
     // MARK: - Modal Sheet: Tùy chọn thư mục đích
+    private struct DestinationFolderOption: Identifiable, Hashable {
+        var id: String { relativePath }
+        let title: String
+        let relativePath: String
+        let childCount: Int?
+        let isVirtualSuggestion: Bool
+    }
+
+    private var filteredBrowsingFolders: [DestinationFolderOption] {
+        let query = folderSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return browsingFolders }
+        return browsingFolders.filter {
+            $0.title.lowercased().contains(query) || $0.relativePath.lowercased().contains(query)
+        }
+    }
+
     private var customFolderPickerSheet: some View {
         NavigationView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Chọn thư mục có sẵn hoặc nhập đường dẫn con:")
+            VStack(spacing: 0) {
+                // Thanh tìm kiếm trên cùng (đồng bộ với Bước 1 chọn App)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(TotoroxTheme.textSecondary)
+                    TextField(
+                        selectedApp.map { "Tìm thư mục trong \($0.bundleID)..." } ?? "Tìm thư mục đích...",
+                        text: $folderSearchQuery
+                    )
                     .font(.system(size: 14))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                
-                // Gợi ý nhanh
-                VStack(spacing: 8) {
-                    ForEach(["Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"], id: \.self) { folder in
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+
+                    if !folderSearchQuery.isEmpty {
                         Button {
-                            selectedTargetFolder = folder
-                            showCustomFolderSheet = false
-                            log("overwrite: target folder -> \(folder)")
+                            folderSearchQuery = ""
                         } label: {
-                            HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                Text(folder)
-                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textPrimary)
-                                Spacer()
-                                if selectedTargetFolder == folder {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(TotoroxTheme.textSecondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 42)
+                .background(TotoroxTheme.searchBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+
+                // Thanh ánh xạ đường dẫn container của app đang chọn
+                if let app = selectedApp {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            if !currentBrowsingSubpath.isEmpty {
+                                Button {
+                                    navigateUpContainerFolder()
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(TotoroxTheme.mintAccent)
+                                        .frame(width: 28, height: 28)
+                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                        .clipShape(Circle())
                                 }
                             }
-                            .padding(.horizontal, 14)
-                            .frame(height: 44)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                            Button {
+                                browseContainerSubpath("")
+                            } label: {
+                                Text(app.bundleID)
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(currentBrowsingSubpath.isEmpty ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
+                            }
+
+                            let segments = currentBrowsingSubpath.split(separator: "/").map(String.init)
+                            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(TotoroxTheme.textSecondary)
+
+                                let partialPath = segments.prefix(index + 1).joined(separator: "/")
+                                Button {
+                                    browseContainerSubpath(partialPath)
+                                } label: {
+                                    Text(segment)
+                                        .font(.system(size: 12, weight: index == segments.count - 1 ? .bold : .medium, design: .monospaced))
+                                        .foregroundColor(index == segments.count - 1 ? TotoroxTheme.mintAccent : TotoroxTheme.textPrimary)
+                                }
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                        Text("Chưa chọn ứng dụng ở Bước 1 — đang hiển thị thư mục gợi ý.")
+                            .font(.system(size: 12))
+                            .foregroundColor(TotoroxTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text(currentBrowsingSubpath.isEmpty
+                                 ? "Thư mục bên trong \(selectedApp?.bundleID ?? "Container"):"
+                                 : "Thư mục con trong \(currentBrowsingSubpath)/:")
+                                .font(.system(size: 13))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+
+                            Spacer()
+
+                            if isLoadingFolders {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(TotoroxTheme.mintAccent)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+
+                        if let err = folderBrowseError, !err.isEmpty {
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 16)
+                        }
+
+                        if !isLoadingFolders && filteredBrowsingFolders.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "folder.badge.questionmark")
+                                    .font(.system(size: 28))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                                Text(folderSearchQuery.isEmpty
+                                     ? "Thư mục này chưa có thư mục con. Bạn có thể chọn chính thư mục hiện tại hoặc nhập đường dẫn bên dưới."
+                                     : "Không tìm thấy thư mục khớp \"\(folderSearchQuery)\".")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                            .padding(.horizontal, 20)
+                        } else {
+                            VStack(spacing: 8) {
+                                ForEach(filteredBrowsingFolders) { folder in
+                                    let isSelected = (pendingTargetFolder == folder.relativePath)
+                                    HStack(spacing: 8) {
+                                        Button {
+                                            pendingTargetFolder = folder.relativePath
+                                            customFolderInput = folder.relativePath
+                                            if !folder.isVirtualSuggestion {
+                                                browseContainerSubpath(folder.relativePath)
+                                            }
+                                        } label: {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: "folder.fill")
+                                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(folder.title)
+                                                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                                        .lineLimit(1)
+                                                    if let count = folder.childCount {
+                                                        Text("\(count) mục")
+                                                            .font(.system(size: 11))
+                                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                                    }
+                                                }
+                                                Spacer()
+                                                if isSelected {
+                                                    Image(systemName: "checkmark")
+                                                        .font(.system(size: 13, weight: .bold))
+                                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                                }
+                                            }
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        if !folder.isVirtualSuggestion {
+                                            Button {
+                                                pendingTargetFolder = folder.relativePath
+                                                customFolderInput = folder.relativePath
+                                            } label: {
+                                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                                    .font(.system(size: 18))
+                                                    .foregroundStyle(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary.opacity(0.45))
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .frame(minHeight: 46)
+                                    .background(isSelected ? TotoroxTheme.mintAccent.opacity(0.10) : TotoroxTheme.searchBackground)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(isSelected ? TotoroxTheme.mintAccent.opacity(0.65) : Color.clear, lineWidth: 1.2)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+
+                        // Nhập đường dẫn tùy chỉnh
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Hoặc nhập đường dẫn tùy chỉnh:")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+
+                            TextField("Ví dụ: Documents/Resources/1.64.1", text: $customFolderInput)
+                                .font(.system(size: 13, design: .monospaced))
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
+                                .padding(.horizontal, 12)
+                                .frame(height: 42)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .onChange(of: customFolderInput) { newVal in
+                                    let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !trimmed.isEmpty {
+                                        pendingTargetFolder = trimmed
+                                    }
+                                }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                     }
                 }
-                .padding(.horizontal, 16)
-                
-                // Nhập tùy chỉnh
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Hoặc nhập đường dẫn tùy chỉnh:")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                    
-                    HStack(spacing: 8) {
-                        TextField("Ví dụ: Documents/Assets", text: $customFolderInput)
-                            .font(.system(size: 13, design: .monospaced))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                            .padding(.horizontal, 12)
-                            .frame(height: 40)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        
-                        Button("Áp dụng") {
-                            guard let clean = validatedTargetSubfolder(customFolderInput) else { return }
-                            selectedTargetFolder = clean
-                            showCustomFolderSheet = false
-                            log("overwrite: target folder -> \(clean)")
+
+                // Nút Xác nhận màu xanh ghim dưới cùng
+                VStack(spacing: 8) {
+                    Divider()
+                    let candidatePath = validatedTargetSubfolder(customFolderInput.isEmpty ? pendingTargetFolder : customFolderInput)
+                    Button {
+                        guard let clean = candidatePath else {
+                            folderBrowseError = "Đường dẫn không hợp lệ. Vui lòng nhập đường dẫn con bên trong container."
+                            return
                         }
-                        .font(.system(size: 13, weight: .bold))
+                        selectedTargetFolder = clean
+                        showCustomFolderSheet = false
+                        log("overwrite: target folder -> \(clean)")
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 16, weight: .bold))
+                            Text(candidatePath.map { "Xác nhận (\($0))" } ?? "Xác nhận")
+                                .font(.system(size: 15, weight: .bold))
+                                .lineLimit(1)
+                        }
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .frame(height: 40)
-                        .background(TotoroxTheme.mintAccent)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(candidatePath != nil ? TotoroxTheme.mintAccent : TotoroxTheme.mintAccent.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .disabled(candidatePath == nil)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal, 16)
-                
-                Spacer()
+                .background(TotoroxTheme.pageBackground)
             }
             .navigationTitle("Tùy chọn thư mục đích")
             .navigationBarTitleDisplayMode(.inline)
@@ -811,6 +1014,87 @@ struct OverwriteFileView: View {
                         showCustomFolderSheet = false
                     }
                     .foregroundColor(TotoroxTheme.mintAccent)
+                }
+            }
+            .onAppear {
+                browseContainerSubpath(currentBrowsingSubpath)
+            }
+        }
+    }
+
+    private func openCustomFolderPicker() {
+        pendingTargetFolder = selectedTargetFolder
+        customFolderInput = selectedTargetFolder
+        currentBrowsingSubpath = ""
+        folderSearchQuery = ""
+        folderBrowseError = nil
+        showCustomFolderSheet = true
+    }
+
+    private func navigateUpContainerFolder() {
+        let components = currentBrowsingSubpath.split(separator: "/").dropLast().map(String.init)
+        let parent = components.joined(separator: "/")
+        if !parent.isEmpty {
+            pendingTargetFolder = parent
+            customFolderInput = parent
+        }
+        browseContainerSubpath(parent)
+    }
+
+    private func browseContainerSubpath(_ subpath: String) {
+        currentBrowsingSubpath = subpath
+        folderSearchQuery = ""
+        folderBrowseError = nil
+
+        let defaultSuggestions: [DestinationFolderOption] = [
+            "Documents", "Library", "Library/Caches", "Library/Preferences", "tmp"
+        ].map {
+            DestinationFolderOption(title: $0, relativePath: $0, childCount: nil, isVirtualSuggestion: true)
+        }
+
+        guard let app = selectedApp else {
+            browsingFolders = defaultSuggestions
+            isLoadingFolders = false
+            return
+        }
+
+        isLoadingFolders = true
+        Task.detached(priority: .userInitiated) {
+            var actError: NSString? = nil
+            let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
+            let baseRoot = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
+            let securedRoot = ContainerStore.ensureContainerAccess(for: baseRoot)
+
+            let targetDir = subpath.isEmpty
+                ? securedRoot
+                : (securedRoot as NSString).appendingPathComponent(subpath)
+            _ = ContainerStore.ensureContainerAccess(for: targetDir)
+
+            let entries = ContainerStore.sortedEntries(ContainerStore.listFiles(at: targetDir))
+            let dirEntries = entries.filter { $0.isDirectory && $0.name != "." && $0.name != ".." }
+
+            var mapped: [DestinationFolderOption] = dirEntries.map { entry in
+                let rel = subpath.isEmpty ? entry.name : "\(subpath)/\(entry.name)"
+                return DestinationFolderOption(
+                    title: subpath.isEmpty ? entry.name : rel,
+                    relativePath: rel,
+                    childCount: entry.childCount,
+                    isVirtualSuggestion: false
+                )
+            }
+
+            if subpath.isEmpty {
+                let existing = Set(mapped.map { $0.relativePath.lowercased() })
+                for suggestion in defaultSuggestions where !existing.contains(suggestion.relativePath.lowercased()) {
+                    mapped.append(suggestion)
+                }
+            }
+
+            await MainActor.run {
+                self.browsingFolders = mapped
+                self.isLoadingFolders = false
+                if let err = actError as String?, mapped.isEmpty && !err.isEmpty {
+                    self.folderBrowseError = "Không mở được đầy đủ container (\(err))."
                 }
             }
         }

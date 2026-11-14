@@ -487,5 +487,63 @@ final class PatchZipConverterTests: XCTestCase {
 
         let nonConfigPath = "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Hero_112.assetbundle"
         XCTAssertFalse(AovModMergerEngine.isServerConfigPath(nonConfigPath))
+
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/KernelLua.pkg.bytes"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/StableSystems_3.pkg.bytes"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/version.txt"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Languages/VN_Garena_VN/languageMap.txt"))
+    }
+
+    func testAovModMerger_NormalizePathAndHeroExtraction() {
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath("Murad Thiên Luân Kiếm Thánh/com.garena.game.kgvn/Documents/Resources/1.64.1/Databin/Client/HeroSkin.bytes"),
+            "Resources/1.64.1/Databin/Client/HeroSkin.bytes"
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath("payload/com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/190_AssetRef.bytes"),
+            "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/190_AssetRef.bytes"
+        )
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("__MACOSX/Resources/1.64.1/._HeroSkin.bytes"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("Resources/1.64.1/._version.txt"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("patch.json"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("merge_plan.json"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("config.json"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("result.zip"))
+
+        let summary = AovModMergerEngine.summary(
+            url: URL(fileURLWithPath: "/tmp/Edras_Tulen.zip"),
+            fileSize: 1024,
+            entryNames: [
+                "__MACOSX/Resources/1.64.1/._Hero_999.assetbundle",
+                "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_595_Actions.pkg.bytes",
+                "payload/com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/190_AssetRef.bytes"
+            ]
+        )
+        XCTAssertEqual(summary.resourceVersion, "1.64.1")
+        XCTAssertEqual(Set(summary.heroIDs), Set([595, 190]))
+    }
+
+    func testInspectProtectedPatchPackageDetectsPasswordFlag() async throws {
+        let packageID = UUID()
+        let fakeSealed = try XCTUnwrap(AES.GCM.seal(Data("test".utf8), using: SymmetricKey(size: .bits256)).combined)
+        let envelope: [String: Any] = [
+            "schemaVersion": 9,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": true,
+            "keyAADVersion": 9,
+            "kdfSalt": Data(repeating: 0xAA, count: 16),
+            "kdfIterations": 250000,
+            "wrappedContentKey": fakeSealed,
+            "keyFingerprint": Data(SHA256.hash(data: Data(repeating: 0x11, count: 32))),
+            "encryptedPayload": fakeSealed
+        ]
+        let plist = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+        let patchURL = tempDirectory.appendingPathComponent("protected.3105")
+        try (Data("3105PATCH\0".utf8) + plist).write(to: patchURL)
+
+        let summary = try await converter.inspect(patchURL: patchURL)
+        XCTAssertEqual(summary.packageID, packageID)
+        XCTAssertEqual(summary.schemaVersion, 9)
+        XCTAssertTrue(summary.isPasswordProtected)
     }
 }
