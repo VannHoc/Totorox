@@ -645,6 +645,7 @@ struct MergePlanResponseBody: Decodable {
 struct MergePlanBody: Decodable {
     let outputFilename: String?
     let fileCount: Int?
+    let conflicts: Int?
     let files: [MergePlanFile]?
     let loadedMods: [LoadedModBody]?
     let bundleVersions: [BundleVersionBody]?
@@ -654,6 +655,7 @@ struct MergePlanBody: Decodable {
     private enum CodingKeys: String, CodingKey {
         case outputFilename = "output_filename"
         case fileCount = "file_count"
+        case conflicts
         case files
         case loadedMods = "loaded_mods"
         case bundleVersions = "bundle_versions"

@@ -69,6 +69,30 @@ final class APIServiceLicenseTests: XCTestCase {
             XCTFail("Verify phải giải mã được payload có null: \(error.localizedDescription)")
         }
     }
+
+    func testMergePlanBodyDecodesConflicts() throws {
+        let json = """
+        {
+          "output_filename": "AOV_Mod_2Heroes_c611.zip",
+          "file_count": 3,
+          "conflicts": 2,
+          "files": [{"path": "Resources/1.64.1/Databin/Client/HeroSkin.bytes", "size": 100}],
+          "loaded_mods": [],
+          "bundle_versions": [],
+          "note": "ok"
+        }
+        """
+        let body = try JSONDecoder().decode(MergePlanBody.self, from: Data(json.utf8))
+        XCTAssertEqual(body.conflicts, 2)
+        XCTAssertEqual(body.fileCount, 3)
+    }
+
+    func testLicenseKeyTotoroxFormat() {
+        let key = "totorox-abcd-1234-ef56"
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        XCTAssertTrue(normalized.hasPrefix("TOTOROX-"))
+        XCTAssertEqual(normalized, "TOTOROX-ABCD-1234-EF56")
+    }
 }
 
 // MARK: - URLProtocol stub
