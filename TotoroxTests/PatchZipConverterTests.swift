@@ -517,21 +517,54 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("__MACOSX/Resources/1.64.1/._HeroSkin.bytes"))
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("Resources/1.64.1/._version.txt"))
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("patch.json"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("patch.json", fallbackVersion: "1.64.1"))
+        XCTAssertNil(AovModMergerEngine.normalizeAovPath("ModPack/README.txt", fallbackVersion: "1.64.1"))
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("merge_plan.json"))
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("config.json"))
         XCTAssertNil(AovModMergerEngine.normalizeAovPath("result.zip"))
+
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath("ModPack/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_595_Actions.pkg.bytes", fallbackVersion: "1.64.1"),
+            "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_595_Actions.pkg.bytes"
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath("Databin/Client/HeroSkin.bytes", fallbackVersion: "1.64.1"),
+            "Resources/1.64.1/Databin/Client/HeroSkin.bytes"
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath("version.txt", fallbackVersion: "1.64.1"),
+            "Resources/1.64.1/version.txt"
+        )
+
+        XCTAssertEqual(
+            AovModMergerEngine.heroIDs(inPath: "Resources/1.64.1/AssetBundle/battle/hero/595_lixin_t1.assetbundle"),
+            [595]
+        )
 
         let summary = AovModMergerEngine.summary(
             url: URL(fileURLWithPath: "/tmp/Edras_Tulen.zip"),
             fileSize: 1024,
             entryNames: [
                 "__MACOSX/Resources/1.64.1/._Hero_999.assetbundle",
+                "patch.json",
                 "Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_595_Actions.pkg.bytes",
+                "Resources/1.64.1/AssetBundle/battle/hero/999_extra.assetbundle",
                 "payload/com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/190_AssetRef.bytes"
             ]
         )
         XCTAssertEqual(summary.resourceVersion, "1.64.1")
         XCTAssertEqual(Set(summary.heroIDs), Set([595, 190]))
+
+        let fallbackOnlySummary = AovModMergerEngine.summary(
+            url: URL(fileURLWithPath: "/tmp/Edras_Sinon.zip"),
+            fileSize: 1024,
+            entryNames: [
+                "1.64.1/AssetBundle/battle/hero/595_lixin_t1.assetbundle",
+                "1.64.1/version.txt"
+            ]
+        )
+        XCTAssertEqual(fallbackOnlySummary.resourceVersion, "1.64.1")
+        XCTAssertEqual(fallbackOnlySummary.heroIDs, [595])
     }
 
     func testInspectProtectedPatchPackageDetectsPasswordFlag() async throws {
