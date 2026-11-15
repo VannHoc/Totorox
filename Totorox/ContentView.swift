@@ -32,10 +32,20 @@ struct ContentView: View {
                 showSettings = true
             }
 
-            AccountStatusBar(
-                onRedeemTapped: { showRedeemSheet = true },
-                onLogoutTapped: { showLogoutConfirm = true }
-            )
+            if !license.hasActivePackage {
+                AccountStatusBar(
+                    onRedeemTapped: { showRedeemSheet = true },
+                    onLogoutTapped: { showLogoutConfirm = true }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if !license.isDeviceVerified {
+                DeviceVerificationCard(compact: true)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             ZStack {
                 switch navCoordinator.selectedTab {
@@ -53,6 +63,8 @@ struct ContentView: View {
 
             TotoroxTabBar(selectedTab: $navCoordinator.selectedTab)
         }
+        .animation(.easeInOut(duration: 0.25), value: license.hasActivePackage)
+        .animation(.easeInOut(duration: 0.25), value: license.isDeviceVerified)
         .preferredColorScheme(.light)
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -74,8 +86,26 @@ struct ContentView: View {
         } message: {
             Text(language.text("account.logout_confirm_msg"))
         }
+        .alert(item: rootUDIDAlertBinding) { alertItem in
+            Alert(
+                title: Text(alertItem.title),
+                message: Text(alertItem.message),
+                dismissButton: .default(Text(language.text("common.ok")))
+            )
+        }
         .onAppear {
             AppContainerScanner.shared.prewarmOnLaunch()
         }
+    }
+
+    private var rootUDIDAlertBinding: Binding<LicenseManager.UDIDVerificationAlert?> {
+        Binding(
+            get: { (!showSettings && !showRedeemSheet) ? license.udidVerificationAlert : nil },
+            set: { newValue in
+                if newValue == nil {
+                    license.udidVerificationAlert = nil
+                }
+            }
+        )
     }
 }

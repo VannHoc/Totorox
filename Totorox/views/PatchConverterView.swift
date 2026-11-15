@@ -71,6 +71,7 @@ struct PatchConverterView: View {
                     Text(language.text("converter.header.title"))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
+                        .multilineTextAlignment(.center)
 
                     Text(language.text("converter.header.subtitle"))
                         .font(.system(size: 13))
@@ -180,6 +181,7 @@ struct PatchConverterView: View {
                                 Text(language.text(direction == .zipToPatch ? "converter.dropzone.pick_zip" : "converter.dropzone.pick_3105"))
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.textPrimary)
+                                    .multilineTextAlignment(.center)
 
                                 Text(language.text("converter.dropzone.subtitle"))
                                     .font(.system(size: 12))
@@ -187,6 +189,7 @@ struct PatchConverterView: View {
                                     .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 16)
                             .padding(.vertical, 28)
                             .background(TotoroxTheme.cardBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))

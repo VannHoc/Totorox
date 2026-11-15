@@ -85,7 +85,16 @@ struct TotoroxApp: App {
                 }
             }
             .onOpenURL { url in
-                // Chưa đăng nhập tài khoản thì không xử lý deep link.
+                let isUDIDCallback = url.scheme?.lowercased() == "totorox"
+                    && url.host?.lowercased() == "udid-verified"
+                let hasSession = !LicenseManager.shared.authToken.isEmpty
+                    || LicenseManager.shared.status.isAuthenticated
+                if isUDIDCallback {
+                    guard hasSession else { return }
+                    AppNavigationCoordinator.shared.handleIncomingURL(url)
+                    return
+                }
+                // Chưa đăng nhập tài khoản thì không xử lý deep link điều hướng / import file.
                 guard LicenseManager.shared.status.isAuthenticated else { return }
                 AppNavigationCoordinator.shared.handleIncomingURL(url)
             }

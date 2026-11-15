@@ -1,0 +1,47 @@
+# Quy Tắc & Kiến Trúc Dự Án Totorox (Synced from AGENTS.md)
+
+Tài liệu này cung cấp bản đồ kiến trúc hệ thống, cấu trúc thư mục, schema database thực tế và các quy tắc bắt buộc cho mọi AI Agent khi làm việc trên repository **Totorox**.
+
+---
+
+## 1. Tổng quan Kiến trúc & Hạ tầng Mạng
+
+- **Tên miền chính:** `totorox.io.vn` (chạy qua Cloudflare Tunnel cố định).
+- **`https://api.totorox.io.vn`**: Endpoint API chính phục vụ ứng dụng iOS (`Totorox/`).
+- **`https://admin.totorox.io.vn`**: Giao diện Web Admin Dashboard (được bảo vệ bởi **Subdomain Guard Middleware** trong `admin.py`; mọi truy cập vào `/` hoặc `/admin/*` từ host không nằm trong `ALLOWED_ADMIN_HOSTS` như `api.totorox.io.vn` sẽ tự động trả về `404 Not Found`).
+
+---
+
+## 2. Cấu trúc Thư mục Dự án
+
+- `AGENTS.md` / `.cursorrules`: Quy tắc & bản đồ dự án cho AI Agent.
+- `HANDOFF_TO_NEW_AGENT.md`: Tài liệu bàn giao kỹ thuật iOS/Backend.
+- `project.yml`: Cấu hình XcodeGen cho app iOS.
+- `Totorox/`: Source code App iOS (Swift / Objective-C / C) gồm `engine/`, `helpers/`, `exploit/`, `kexploit/`, `views/`.
+- `TotoroxTests/`: Unit test cho iOS Client.
+- `Totorox-Backend/`: Backend Python (FastAPI + SQLite WAL):
+  - `main.py`: Core FastAPI server & API cho app iOS (`/health`, `/api/v1/auth/register`, `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/redeem`, `/api/v1/auth/me`, `/api/v1/device/profile`, `/api/v1/device/callback`, `/api/v1/device/complete`, `/api/v1/overwrite-plan`, `/api/v1/convert-header`, `/api/v1/merge-plan`).
+  - `admin.py` & `admin.html`: Hệ thống Web Admin Dashboard hoàn chỉnh (Tailwind + Alpine.js + FastAPI), gồm: Thống kê tổng quan (`/admin/api/overview`), Tạo key hàng loạt (`/admin/api/keys/generate`), Thu hồi/Khôi phục/Xóa vĩnh viễn key (`/admin/api/keys/{license_key}/action`), Tìm kiếm/Khóa/Mở khóa User (`/admin/api/users`, `/admin/api/users/{user_id}/ban`), Gia hạn gói (`/admin/api/users/{user_id}/extend`), Reset UDID (`/admin/api/users/{user_id}/reset-udid`).
+  - `admin_keys.py`: Công cụ CLI quản trị dự phòng trên terminal (`create`, `list`, `users`, `ban`, `ban-user`, `reset-hwid`, `reset-usage`, `extend`), dùng chung `licenses.db` với `admin.py` và `main.py`.
+  - `database.py`: Quản lý SQLite WAL (`licenses.db`), khởi tạo bảng, migration, xác thực token, gắn/kiểm tra `udid` phần cứng thật (`bind_device_udid`), trừ lượt dùng, nạp key.
+  - `core_processor.py`, `aov_zstd_dict.py`, `test_backend.py`: Logic xử lý mod/header/merge và tests.
+
+---
+
+## 3. Schema SQLite Hiện Tại (`licenses.db`)
+
+- **Bảng `users`**: `id` (INTEGER PK AUTOINCREMENT), `username` (TEXT NOT NULL UNIQUE COLLATE NOCASE), `password_hash` (TEXT NOT NULL), `expires_at` (INTEGER DEFAULT NULL), `max_uses` (INTEGER NOT NULL DEFAULT 0), `used_count` (INTEGER NOT NULL DEFAULT 0), `daily_used` (INTEGER NOT NULL DEFAULT 0), `daily_reset_date` (TEXT DEFAULT NULL), `active_token` (TEXT DEFAULT NULL, index `idx_users_active_token`), `hwid` (TEXT DEFAULT NULL), `udid` (TEXT DEFAULT NULL, index `idx_users_udid`), `is_banned` (INTEGER NOT NULL DEFAULT 0), `created_at` (INTEGER NOT NULL).
+- **Bảng `licenses`**: `license_key` (TEXT PK), `hwid` (TEXT DEFAULT NULL), `expires_at` (INTEGER DEFAULT NULL), `is_banned` (INTEGER DEFAULT 0), `max_uses` (INTEGER DEFAULT -1), `used_count` (INTEGER DEFAULT 0), `daily_used` (INTEGER DEFAULT 0), `daily_reset_date` (TEXT DEFAULT NULL), `duration_days` (INTEGER DEFAULT NULL), `redeemed_by` (INTEGER DEFAULT NULL), `redeemed_at` (INTEGER DEFAULT NULL, index `idx_licenses_redeemed_at`), `created_at` (INTEGER DEFAULT NULL, index `idx_licenses_created_at`), `note` (TEXT DEFAULT '', thêm bởi `ensure_admin_schema()` trong `admin.py`).
+- **Bảng `schema_meta`**: `key` (TEXT PK), `value` (TEXT NOT NULL).
+
+---
+
+## 4. Quy tắc Bắt Buộc Dành Cho AI Agent
+
+1. **Đọc đủ ngữ cảnh trước khi trả lời hoặc viết code:**
+   - Bất cứ khi nào được hỏi về tính năng quản trị, key/redeem code, user hoặc database, **BẮT BUỘC** phải đọc đồng thời cả `main.py`, `admin.py`, `database.py` và `admin_keys.py`.
+   - Tuyệt đối không chỉ đọc mỗi `admin_keys.py` rồi kết luận hệ thống thiếu tính năng.
+2. **Đồng bộ Database & Chức năng:**
+   - Mọi thay đổi về cấu trúc bảng SQLite (thêm cột, đổi kiểu dữ liệu, thêm index) phải được kiểm tra và cập nhật đồng bộ trên cả `database.py`, `main.py`, `admin.py` và `admin_keys.py` để tránh xung đột dữ liệu.
+3. **Bảo toàn Subdomain Isolation:**
+   - Không được vô hiệu hóa hoặc làm hỏng `admin_subdomain_middleware` và `require_admin` chặn truy cập trang admin (`/`, `/admin/*`) từ domain `api.totorox.io.vn` (phải trả về `404 Not Found`).

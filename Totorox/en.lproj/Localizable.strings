@@ -255,8 +255,20 @@
 "settings.license_switch_confirm_title" = "Change License Key?";
 "settings.license_switch_confirm_msg" = "This will sign out the current key and return to the license key entry screen.";
 "settings.license_switch_confirm_action" = "Open Key Entry";
-"settings.udid_hardware" = "Hardware UDID (MobileGestalt)";
-"settings.udid_fallback" = "Fallback Device ID";
+"settings.udid_verified_profile" = "Real Hardware UDID (Verified via Apple OTA)";
+"udid.verify.title" = "Device UDID Not Verified";
+"udid.verify.subtitle" = "Verify your iPhone's real hardware UDID via Safari to redeem codes and protect your account.";
+"udid.verify.step1" = "Tap the button below to open Safari and tap Allow to download the profile.";
+"udid.verify.step2" = "Open Settings → Profile Downloaded → Install so iOS verifies your hardware UDID.";
+"udid.verify.step3" = "Tap \"Open Totorox App\" in Safari to finish automatically.";
+"udid.verify.button" = "Verify Device (Get Real UDID)";
+"udid.verify.not_verified_short" = "Real hardware UDID not verified";
+"udid.verify.alert.success_title" = "Device Verified";
+"udid.verify.alert.success_fmt" = "Linked real hardware UDID:\n%@";
+"udid.verify.alert.error_title" = "UDID Verification Failed";
+"udid.verify.alert.conflict" = "This device's UDID is already linked to another account.";
+"udid.verify.alert.mismatch" = "This account is locked to another device. Please contact Admin to reset UDID.";
+"udid.verify.alert.invalid" = "Could not read a valid UDID from the Apple OTA profile. Please try again.";
 
 /* --- Account, Auth & Redeem --- */
 "account.section_title" = "ACCOUNT & SUBSCRIPTION";
@@ -270,6 +282,7 @@
 "account.uses_unlimited" = "Unlimited";
 "account.daily_usage_label" = "Daily Usage";
 "account.redeem_button" = "Enter Activation Code (Redeem)";
+"account.redeem_more_button" = "Redeem Additional Code";
 "account.status_redeem" = "Redeem";
 "account.logout_button" = "Sign Out";
 "account.logout_confirm_title" = "Sign Out of Account?";
@@ -406,8 +419,8 @@
 /* --- Tab 4: AoV Mod Merger UI & Engine --- */
 "merge.header.title" = "Arena of Valor Mod Merger";
 "merge.header.credit" = "Smart Mod Merging Engine";
-"merge.header.subcredit" = "Developed by VannHoc • High-Speed Streaming";
-"merge.header.subtitle" = "Smartly merge multiple .zip mod packs into one archive while preserving recalls, haste, audio, and kill broadcast effects.";
+"merge.header.subcredit" = "Exclusively developed by VannHoc";
+"merge.header.subtitle" = "Merge multiple .zip mod archives while preserving original effects.";
 "merge.list.title" = "Mod Archives (.zip)";
 "merge.list.file_count" = "%lld files";
 "merge.list.empty_hint" = "Select 2 or more hero .zip mod packs to merge into one complete archive.";

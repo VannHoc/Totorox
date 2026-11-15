@@ -16,6 +16,12 @@ final class LicenseManager: ObservableObject {
         }
     }
 
+    struct UDIDVerificationAlert: Identifiable, Equatable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
+
     private struct CachedSessionSnapshot: Codable, Equatable {
         let token: String
         let deviceIdentifier: String?
@@ -38,12 +44,15 @@ final class LicenseManager: ObservableObject {
     @Published private(set) var currentUser: UserProfile?
     @Published private(set) var deviceIdentifier: String
     @Published private(set) var isRefreshing: Bool = false
+    @Published var udidVerificationAlert: UDIDVerificationAlert?
 
     private let api: APIService
     private let defaults: UserDefaults
     private let tokenReader: () -> String?
     private let tokenWriter: (String) -> Void
     private let tokenRemover: () -> Void
+    private let deviceIdentifierSaver: (String) -> Void
+    private let deviceIdentifierClearer: () -> Void
     private var inFlightRefreshTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
 
@@ -54,6 +63,8 @@ final class LicenseManager: ObservableObject {
         keyWriter: @escaping (String) -> Void = { KeychainHelper.set($0, for: Keys.authToken) },
         keyRemover: @escaping () -> Void = { KeychainHelper.remove(Keys.authToken) },
         deviceIdentifierProvider: () -> String = { DeviceIDManager.shared.identifier },
+        deviceIdentifierSaver: @escaping (String) -> Void = { DeviceIDManager.shared.saveVerifiedUDID($0) },
+        deviceIdentifierClearer: @escaping () -> Void = { DeviceIDManager.shared.clearVerifiedUDID() },
         autoRefresh: Bool = true,
         clearOrphanedKeyOnFreshDefaults: Bool? = nil,
         observeAPINotifications: Bool = true
@@ -63,6 +74,8 @@ final class LicenseManager: ObservableObject {
         self.tokenReader = keyReader
         self.tokenWriter = keyWriter
         self.tokenRemover = keyRemover
+        self.deviceIdentifierSaver = deviceIdentifierSaver
+        self.deviceIdentifierClearer = deviceIdentifierClearer
         self.deviceIdentifier = deviceIdentifierProvider()
 
         defaults.removeObject(forKey: Keys.legacySnapshot)
@@ -163,15 +176,39 @@ final class LicenseManager: ObservableObject {
     }
 
     var isUnlimited: Bool {
-        hasActivePlan && (currentUser?.isUnlimited ?? false)
+        hasActivePackage && (currentUser?.isUnlimited ?? false)
+    }
+
+    /// Trạng thái kích hoạt gói: chỉ `true` khi tài khoản không bị khóa, gói chưa hết hạn
+    /// (`expires_at`) và vẫn còn lượt dùng (`remaining_uses > 0`) hoặc gói vô hạn.
+    var hasActivePackage: Bool {
+        guard let user = currentUser else { return false }
+        if user.isBanned == true { return false }
+        guard user.hasActivePlan else { return false }
+        guard let exp = user.expiresDate, exp > Date() else { return false }
+        if user.maxUses == -1 || user.remainingUses == -1 {
+            return true
+        }
+        return user.remainingUses > 0
     }
 
     var hasActivePlan: Bool {
-        guard let user = currentUser, user.hasActivePlan else { return false }
-        if let exp = user.expiresDate, exp <= Date() {
-            return false
+        hasActivePackage
+    }
+
+    /// `true` khi thiết bị đang giữ UDID phần cứng thật khớp với tài khoản đã xác minh OTA.
+    var isDeviceVerified: Bool {
+        guard !deviceIdentifier.isEmpty, let user = currentUser else { return false }
+        if user.isUdidVerified == false { return false }
+        if let serverUDID = user.udid?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !serverUDID.isEmpty {
+            return serverUDID == deviceIdentifier
         }
-        return true
+        return user.isUdidVerified != true
+    }
+
+    func deviceProfileURL() -> URL? {
+        api.deviceProfileURL(username: username)
     }
 
     func formattedExpiry(language: AppLanguage, short: Bool = false) -> String {
@@ -181,6 +218,9 @@ final class LicenseManager: ObservableObject {
         }
         if exp <= Date() {
             return language.text("account.plan_expired")
+        }
+        if !hasActivePackage {
+            return language.text("account.no_plan")
         }
         let formatter = DateFormatter()
         formatter.locale = language.locale
@@ -286,6 +326,10 @@ final class LicenseManager: ObservableObject {
 
     func applyUserProfile(_ user: UserProfile) {
         guard !authToken.isEmpty else { return }
+        if user.isUdidVerified == false && !deviceIdentifier.isEmpty {
+            deviceIdentifierClearer()
+            deviceIdentifier = ""
+        }
         currentUser = user
         saveSnapshot(
             CachedSessionSnapshot(
@@ -295,6 +339,58 @@ final class LicenseManager: ObservableObject {
             )
         )
         status = .authenticated(user: user)
+    }
+
+    /// Xử lý deep link trả về từ Safari sau khi cài `.mobileconfig`:
+    /// `totorox://udid-verified?udid=...&status=...`
+    func handleUDIDVerificationCallback(udid: String?, status rawStatus: String?) async {
+        let lang = AppLanguage.current
+        let cleanStatus = (rawStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanUDID = (udid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch cleanStatus {
+        case "ok":
+            guard !cleanUDID.isEmpty else {
+                udidVerificationAlert = UDIDVerificationAlert(
+                    title: lang.text("udid.verify.alert.error_title"),
+                    message: lang.text("udid.verify.alert.invalid")
+                )
+                return
+            }
+
+            // Hủy refresh nền (ví dụ từ scenePhase == .active) để tránh gửi request cũ thiếu X-HWID.
+            cancelRefresh()
+            deviceIdentifierSaver(cleanUDID)
+            deviceIdentifier = cleanUDID
+
+            if let currentUser {
+                applyUserProfile(currentUser.withVerifiedUDID(cleanUDID))
+            }
+
+            if !authToken.isEmpty {
+                await refresh()
+            }
+
+            udidVerificationAlert = UDIDVerificationAlert(
+                title: lang.text("udid.verify.alert.success_title"),
+                message: lang.text("udid.verify.alert.success_fmt", cleanUDID)
+            )
+        case "conflict":
+            udidVerificationAlert = UDIDVerificationAlert(
+                title: lang.text("udid.verify.alert.error_title"),
+                message: lang.text("udid.verify.alert.conflict")
+            )
+        case "mismatch":
+            udidVerificationAlert = UDIDVerificationAlert(
+                title: lang.text("udid.verify.alert.error_title"),
+                message: lang.text("udid.verify.alert.mismatch")
+            )
+        default:
+            udidVerificationAlert = UDIDVerificationAlert(
+                title: lang.text("udid.verify.alert.error_title"),
+                message: lang.text("udid.verify.alert.invalid")
+            )
+        }
     }
 
     // MARK: - Internal Helpers

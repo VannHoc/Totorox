@@ -61,7 +61,7 @@ final class APIService {
     static let shared = APIService()
 
     /// Base URL mặc định của Totorox backend. Ghi đè khi machine có server riêng.
-    static let defaultBaseURL = URL(string: "https://two-eos-galleries-excellence.trycloudflare.com")!
+    static let defaultBaseURL = URL(string: "https://api.totorox.io.vn")!
 
     /// Khoá `UserDefaults` lưu base URL động do người dùng cấu hình.
     static let baseURLDefaultsKey = "totorox.api.baseURL"
@@ -96,13 +96,16 @@ final class APIService {
         return d
     }()
 
-    /// - Parameter baseURL: `nil` để ưu tiên URL đã lưu trong `UserDefaults`, sau đó tới `defaultBaseURL`.
+    /// - Parameter baseURL: `nil` luôn trỏ cố định về `https://api.totorox.io.vn`.
     init(baseURL: URL? = nil, session: URLSession = APIService.defaultSession) {
-        self.baseURL = baseURL ?? APIService.storedBaseURL ?? APIService.defaultBaseURL
+        if baseURL == nil {
+            UserDefaults.standard.removeObject(forKey: APIService.baseURLDefaultsKey)
+        }
+        self.baseURL = baseURL ?? APIService.defaultBaseURL
         self.session = session
     }
 
-    /// Chuẩn hoá chuỗi URL người dùng nhập: bỏ khoảng trắng, thêm `https://` nếu thiếu scheme
+    /// Chuẩn hoá chuỗi URL: bỏ khoảng trắng, thêm `https://` nếu thiếu scheme
     /// và tự động cắt bỏ mọi dấu `/` thừa ở cuối.
     static func normalizedBaseURL(from raw: String) -> URL? {
         var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,28 +126,26 @@ final class APIService {
         return url
     }
 
-    /// Base URL đang được lưu trong `UserDefaults` (nếu có và hợp lệ).
+    /// Endpoint cố định luôn dùng `defaultBaseURL` (`https://api.totorox.io.vn`).
     static var storedBaseURL: URL? {
-        guard let raw = UserDefaults.standard.string(forKey: baseURLDefaultsKey) else { return nil }
-        return normalizedBaseURL(from: raw)
+        nil
     }
 
-    /// Lưu base URL mới vào `UserDefaults` và dùng ngay cho các request tiếp theo.
-    func setBaseURL(_ url: URL) {
-        let normalized = APIService.normalizedBaseURL(from: url.absoluteString) ?? url
-        baseURL = normalized
-        UserDefaults.standard.set(normalized.absoluteString, forKey: APIService.baseURLDefaultsKey)
+    /// URL Safari `.mobileconfig` để xác minh UDID phần cứng thật qua Apple OTA.
+    func deviceProfileURL(username: String) -> URL? {
+        let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanUser.isEmpty,
+              var components = URLComponents(
+                  url: baseURL.appendingPathComponent("api/v1/device/profile"),
+                  resolvingAgainstBaseURL: false
+              ) else {
+            return nil
+        }
+        components.queryItems = [URLQueryItem(name: "username", value: cleanUser)]
+        return components.url
     }
 
-    /// Áp dụng URL người dùng nhập. Trả `false` nếu chuỗi không phải URL http(s) hợp lệ.
-    @discardableResult
-    func updateBaseURL(_ raw: String) -> Bool {
-        guard let url = APIService.normalizedBaseURL(from: raw) else { return false }
-        setBaseURL(url)
-        return true
-    }
-
-    /// Xoá cấu hình động và quay lại `defaultBaseURL`.
+    /// Giữ API tương thích nội bộ nhưng luôn cố định về `defaultBaseURL`.
     func resetBaseURL() {
         UserDefaults.standard.removeObject(forKey: APIService.baseURLDefaultsKey)
         baseURL = APIService.defaultBaseURL
@@ -188,7 +189,7 @@ final class APIService {
         token: String,
         hwid: String
     ) async -> Result<RedeemCodeResponse, APIServiceError> {
-        let body = RedeemCodeRequest(code: code)
+        let body = RedeemCodeRequest(code: code, udid: hwid.isEmpty ? nil : hwid)
         let result: Result<RedeemCodeResponse, APIServiceError> = await postJSON(
             "api/v1/auth/redeem",
             body: body,
@@ -236,9 +237,19 @@ final class APIService {
         token: String,
         hwid: String
     ) async -> Result<OverwritePlanResponse, APIServiceError> {
+        let effectivePayload = (payload.udid == nil && !hwid.isEmpty)
+            ? OverwritePlanRequest(
+                sourcePaths: payload.sourcePaths,
+                targetPaths: payload.targetPaths,
+                targetBundleId: payload.targetBundleId,
+                targetSubfolder: payload.targetSubfolder,
+                sourceSizes: payload.sourceSizes,
+                udid: hwid
+            )
+            : payload
         let result: Result<OverwritePlanResponse, APIServiceError> = await postJSON(
             "api/v1/overwrite-plan",
-            body: payload,
+            body: effectivePayload,
             token: token,
             hwid: hwid
         )
@@ -259,11 +270,15 @@ final class APIService {
     ) async -> Result<ConvertHeaderResponse, APIServiceError> {
         let path = "api/v1/convert-header"
         do {
+            var fields = [
+                "mode": mode,
+                "password": password ?? "",
+            ]
+            if !hwid.isEmpty {
+                fields["udid"] = hwid
+            }
             let body = try buildMultipartBody(
-                fields: [
-                    "mode": mode,
-                    "password": password ?? "",
-                ],
+                fields: fields,
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
@@ -334,10 +349,14 @@ final class APIService {
                 return .failure(.payloadTooLarge)
             }
 
+            var fields = [
+                "config_json": configJSON ?? "{}",
+            ]
+            if !hwid.isEmpty {
+                fields["udid"] = hwid
+            }
             let body = try buildMultipartBody(
-                fields: [
-                    "config_json": configJSON ?? "{}",
-                ],
+                fields: fields,
                 fileURLs: fileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
@@ -659,6 +678,12 @@ struct AuthCredentialsRequest: Encodable, Equatable, Sendable {
 
 struct RedeemCodeRequest: Encodable, Equatable, Sendable {
     let code: String
+    let udid: String?
+
+    init(code: String, udid: String? = nil) {
+        self.code = code
+        self.udid = udid
+    }
 }
 
 struct UserProfile: Codable, Equatable, Sendable {
@@ -672,10 +697,12 @@ struct UserProfile: Codable, Equatable, Sendable {
     let dailyUsed: Int?
     let dailyCap: Int?
     let hwid: String?
+    let udid: String?
+    let isUdidVerified: Bool?
     let isBanned: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, username, hwid
+        case id, username, hwid, udid
         case expiresAt = "expires_at"
         case maxUses = "max_uses"
         case usedCount = "used_count"
@@ -683,6 +710,7 @@ struct UserProfile: Codable, Equatable, Sendable {
         case hasActivePlan = "has_active_plan"
         case dailyUsed = "daily_used"
         case dailyCap = "daily_cap"
+        case isUdidVerified = "is_udid_verified"
         case isBanned = "is_banned"
     }
 
@@ -693,6 +721,24 @@ struct UserProfile: Codable, Equatable, Sendable {
 
     var isUnlimited: Bool {
         hasActivePlan && (maxUses == -1 || remainingUses == -1)
+    }
+
+    func withVerifiedUDID(_ verifiedUDID: String) -> UserProfile {
+        UserProfile(
+            id: id,
+            username: username,
+            expiresAt: expiresAt,
+            maxUses: maxUses,
+            usedCount: usedCount,
+            remainingUses: remainingUses,
+            hasActivePlan: hasActivePlan,
+            dailyUsed: dailyUsed,
+            dailyCap: dailyCap,
+            hwid: verifiedUDID,
+            udid: verifiedUDID,
+            isUdidVerified: true,
+            isBanned: isBanned
+        )
     }
 }
 
@@ -729,6 +775,23 @@ struct OverwritePlanRequest: Encodable, Equatable, Sendable {
     let targetBundleId: String?
     let targetSubfolder: String?
     let sourceSizes: [String: Int]?
+    let udid: String?
+
+    init(
+        sourcePaths: [String],
+        targetPaths: [String],
+        targetBundleId: String?,
+        targetSubfolder: String?,
+        sourceSizes: [String: Int]?,
+        udid: String? = nil
+    ) {
+        self.sourcePaths = sourcePaths
+        self.targetPaths = targetPaths
+        self.targetBundleId = targetBundleId
+        self.targetSubfolder = targetSubfolder
+        self.sourceSizes = sourceSizes
+        self.udid = udid
+    }
 
     private enum CodingKeys: String, CodingKey {
         case sourcePaths = "source_paths"
@@ -736,6 +799,7 @@ struct OverwritePlanRequest: Encodable, Equatable, Sendable {
         case targetBundleId = "target_bundle_id"
         case targetSubfolder = "target_subfolder"
         case sourceSizes = "source_sizes"
+        case udid
     }
 }
 
