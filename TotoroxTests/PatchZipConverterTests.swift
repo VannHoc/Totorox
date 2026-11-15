@@ -768,4 +768,30 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertNil(converter.inspectProjectMetadataLocally(patchURL: patchURL, password: nil))
         XCTAssertNil(converter.inspectProjectMetadataLocally(patchURL: patchURL, password: "wrong"))
     }
+
+    func testBuildZipArchiveAndWriter_WritesValidDosDate19800101() throws {
+        let built = try converter.buildZipArchive(entries: [("a.txt", Data("ok".utf8))])
+        XCTAssertEqual(try converter.parseZipArchive(built)["a.txt"], Data("ok".utf8))
+
+        // Local header modDate at offset 12..13 must be 0x0021 (1980-01-01), never 0x0000 (invalid month/day)
+        let localModDate = UInt16(built[12]) | (UInt16(built[13]) << 8)
+        XCTAssertEqual(localModDate, 0x0021)
+
+        let outURL = tempDirectory.appendingPathComponent("writer_dos_date.zip")
+        let writer = try PatchZipConverter.ZipArchiveWriter(destinationURL: outURL)
+        try writer.add(path: "b.txt", data: Data("stream".utf8))
+        try writer.addRaw(
+            path: "c.txt",
+            rawPayload: Data("raw".utf8),
+            compressionMethod: 0,
+            crc32: PatchZipConverter.crc32Checksum(Data("raw".utf8)),
+            uncompressedSize: 3
+        )
+        try writer.finish()
+
+        let written = try Data(contentsOf: outURL)
+        let writerModDate = UInt16(written[12]) | (UInt16(written[13]) << 8)
+        XCTAssertEqual(writerModDate, 0x0021)
+        XCTAssertEqual(try converter.parseZipArchive(written)["c.txt"], Data("raw".utf8))
+    }
 }
