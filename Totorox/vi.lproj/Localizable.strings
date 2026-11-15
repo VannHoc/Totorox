@@ -614,3 +614,4 @@
 "error.filemanager.cannot_import" = "Không thể nhập tệp đã chọn.";
 "error.filemanager.cannot_archive" = "Không thể tạo tệp nén ZIP.";
 "error.filemanager.cannot_extract" = "Không thể giải nén tệp ZIP.";
+"error.fileio.invalid_destination" = "Đường dẫn đích không hợp lệ hoặc vượt ra ngoài thư mục mục tiêu.";
