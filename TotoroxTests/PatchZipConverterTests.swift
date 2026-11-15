@@ -794,4 +794,128 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(writerModDate, 0x0021)
         XCTAssertEqual(try converter.parseZipArchive(written)["c.txt"], Data("raw".utf8))
     }
+
+    // MARK: - Strict ZIP & Mod structure validation
+
+    func testInspectZipMetadata_RejectsNonZipAndCorruptedArchives() throws {
+        let nonZipURL = tempDirectory.appendingPathComponent("not_a_zip.zip")
+        try Data("Rar!\u{001A}\u{0007}\u{0000}FAKE_RAR_ARCHIVE".utf8).write(to: nonZipURL)
+        XCTAssertThrowsError(try converter.inspectZipMetadata(at: nonZipURL))
+
+        let patchMasqueradingURL = tempDirectory.appendingPathComponent("fake.zip")
+        try Data("3105PATCH\0fake_plist".utf8).write(to: patchMasqueradingURL)
+        XCTAssertThrowsError(try converter.inspectZipMetadata(at: patchMasqueradingURL))
+
+        let validZip = try converter.buildZipArchive(entries: [
+            ("Resources/1.64.1/Config.bytes", Data(repeating: 0xAA, count: 128))
+        ])
+        let truncatedURL = tempDirectory.appendingPathComponent("truncated.zip")
+        try validZip.prefix(max(10, validZip.count / 2)).write(to: truncatedURL)
+        XCTAssertThrowsError(try converter.inspectZipMetadata(at: truncatedURL))
+    }
+
+    func testInspectZipMetadata_FlagsEmptyAndUnrecognizedJunkZips() throws {
+        let emptyZipData = try converter.buildZipArchive(entries: [])
+        let emptyURL = tempDirectory.appendingPathComponent("empty.zip")
+        try emptyZipData.write(to: emptyURL)
+
+        let emptyInfo = try converter.inspectZipMetadata(at: emptyURL)
+        XCTAssertEqual(emptyInfo.entryCount, 0)
+        XCTAssertFalse(emptyInfo.isValidPatchOrModArchive)
+
+        let junkZipData = try converter.buildZipArchive(entries: [
+            ("DCIM/IMG_001.jpg", Data("jpeg_bytes".utf8)),
+            ("notes/homework.pdf", Data("pdf_bytes".utf8)),
+            ("Payload/SomeRandomApp.app/Info.plist", Data("plist".utf8))
+        ])
+        let junkURL = tempDirectory.appendingPathComponent("junk_photos.zip")
+        try junkZipData.write(to: junkURL)
+
+        let junkInfo = try converter.inspectZipMetadata(at: junkURL)
+        XCTAssertEqual(junkInfo.entryCount, 3)
+        XCTAssertFalse(junkInfo.isValidPatchOrModArchive)
+        XCTAssertNil(junkInfo.detectedTarget)
+        XCTAssertThrowsError(try converter.buildPatchProject(fromZipData: junkZipData)) { error in
+            guard let converterError = error as? PatchZipConverterError,
+                  case .invalidProject = converterError else {
+                XCTFail("Expected invalidProject error, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testInspectZipMetadata_AcceptsAovModAnd3105ContainerZips() throws {
+        let aovZipData = try converter.buildZipArchive(entries: [
+            ("1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_116_Actions.pkg.bytes", Data("pkg".utf8))
+        ])
+        let aovURL = tempDirectory.appendingPathComponent("butterfly_mod.zip")
+        try aovZipData.write(to: aovURL)
+
+        let aovInfo = try converter.inspectZipMetadata(at: aovURL)
+        XCTAssertTrue(aovInfo.isValidPatchOrModArchive)
+        XCTAssertEqual(aovInfo.detectedTarget, "com.garena.game.kgvn")
+
+        let containerZipData = try converter.buildZipArchive(entries: [
+            ("MyPatch/Application/com.example.target/Documents/config.json", Data("{}".utf8))
+        ])
+        let containerURL = tempDirectory.appendingPathComponent("container_patch.zip")
+        try containerZipData.write(to: containerURL)
+
+        let containerInfo = try converter.inspectZipMetadata(at: containerURL)
+        XCTAssertTrue(containerInfo.isValidPatchOrModArchive)
+        XCTAssertEqual(containerInfo.detectedTarget, "com.example.target")
+    }
+
+    func testAovModMerger_InspectRejectsJunkEncryptedAndEmptyZips() throws {
+        let engine = AovModMergerEngine.shared
+
+        let corruptURL = tempDirectory.appendingPathComponent("corrupt_mod.zip")
+        try Data("NOT_A_ZIP".utf8).write(to: corruptURL)
+        XCTAssertThrowsError(try engine.inspectModArchive(at: corruptURL))
+
+        let emptyURL = tempDirectory.appendingPathComponent("empty_mod.zip")
+        try converter.buildZipArchive(entries: []).write(to: emptyURL)
+        XCTAssertThrowsError(try engine.inspectModArchive(at: emptyURL))
+
+        let junkURL = tempDirectory.appendingPathComponent("photos_not_mod.zip")
+        try converter.buildZipArchive(entries: [
+            ("Photos/cat.jpg", Data("meow".utf8)),
+            ("Payload/SomeApp.app/Info.plist", Data("plist".utf8))
+        ]).write(to: junkURL)
+        XCTAssertThrowsError(try engine.inspectModArchive(at: junkURL)) { error in
+            guard let mergerError = error as? AovModMergerError,
+                  case .missingResourceStructure = mergerError else {
+                XCTFail("Expected missingResourceStructure error, got \(error)")
+                return
+            }
+        }
+
+        let encryptedModURL = tempDirectory.appendingPathComponent("locked_mod.zip")
+        try converter.buildZipArchive(
+            entries: [("Resources/1.64.1/version.txt", Data("1.64.1.1|1".utf8))],
+            password: "secret"
+        ).write(to: encryptedModURL)
+        XCTAssertThrowsError(try engine.inspectModArchive(at: encryptedModURL))
+
+        let validModURL = tempDirectory.appendingPathComponent("valid_aov_mod.zip")
+        try converter.buildZipArchive(entries: [
+            ("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/Actor_131_Actions.pkg.bytes", Data("ok".utf8))
+        ]).write(to: validModURL)
+        let summary = try engine.inspectModArchive(at: validModURL)
+        XCTAssertEqual(summary.heroID, 131)
+        XCTAssertEqual(summary.resourceVersion, "1.64.1")
+    }
+
+    func testAovModMerger_UniqueOutputURLPreservesExistingHistoryFiles() throws {
+        let first = AovModMergerEngine.uniqueOutputURL(in: tempDirectory, preferredName: "AOV_Mod_2Heroes_abcd.zip")
+        XCTAssertEqual(first.lastPathComponent, "AOV_Mod_2Heroes_abcd.zip")
+        try Data("one".utf8).write(to: first)
+
+        let second = AovModMergerEngine.uniqueOutputURL(in: tempDirectory, preferredName: "AOV_Mod_2Heroes_abcd.zip")
+        XCTAssertEqual(second.lastPathComponent, "AOV_Mod_2Heroes_abcd_2.zip")
+        try Data("two".utf8).write(to: second)
+
+        let third = AovModMergerEngine.uniqueOutputURL(in: tempDirectory, preferredName: "AOV_Mod_2Heroes_abcd.zip")
+        XCTAssertEqual(third.lastPathComponent, "AOV_Mod_2Heroes_abcd_3.zip")
+    }
 }

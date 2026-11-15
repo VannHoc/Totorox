@@ -351,12 +351,9 @@
 "converter.section.output_config" = "Output Customization";
 "converter.label.output_filename" = "Output File Name";
 "converter.placeholder.output_filename" = "e.g. Skin_Mod_Pro";
-"converter.hint.project_name" = "Used for both the output filename and internal .3105 package metadata name.";
 "converter.label.output_password" = "Output File Password (Optional)";
 "converter.placeholder.output_password_3105" = "Set password to lock .3105 (leave blank for none)";
 "converter.placeholder.output_password_zip" = "Set password to protect .zip (leave blank for none)";
-"converter.hint.output_password_3105" = "Protects the exported .3105 package with AES-256-GCM + PBKDF2.";
-"converter.hint.output_password_zip" = "Encrypts entries inside the exported .zip archive (standard ZipCrypto compatibility).";
 "converter.button.start" = "Start Conversion";
 "converter.result.success" = "Conversion Succeeded!";
 "converter.button.share_output" = "Save / Share Output File";
@@ -366,6 +363,10 @@
 "converter.summary.zip_too_large" = "ZIP archive is too large to preview (exceeds 3.6 GB limit)";
 "converter.summary.zip_valid" = "Valid ZIP (%lld files) • Detected target: %@";
 "converter.summary.zip_standard" = "Valid ZIP archive";
+"converter.summary.zip_empty" = "Empty ZIP archive (contains no files)";
+"converter.summary.zip_invalid" = "Invalid or corrupted ZIP file (%@)";
+"converter.summary.zip_unsupported_compression" = "ZIP archive uses an unsupported compression or encryption method (e.g. WinZip AES)";
+"converter.summary.zip_unrecognized_structure" = "This ZIP archive does not contain a valid AoV mod or .3105 patch structure";
 "converter.summary.3105_too_large" = ".3105 package exceeds the 3.6 GB size limit";
 "converter.summary.3105_protected" = "Protected .3105 v%lld package • Enter password to unlock";
 "converter.summary.3105_project" = "Package: %@ • Author: %@ • %lld rules • Target: %@";
@@ -374,6 +375,7 @@
 "converter.summary.3105_invalid_header" = "Could not read .3105 header (file may be corrupted or invalid format)";
 "converter.error.source_password_required_3105" = "This .3105 package is password-protected. Please enter the source password.";
 "converter.error.source_password_required_zip" = "This .zip archive is password-protected. Please enter the source password.";
+"converter.error.invalid_source_file" = "Invalid source file. Please select a valid file to convert.";
 "error.patch_converter.corrupted_archive" = "Corrupted or invalid package: %@";
 "error.patch_converter.unsupported_format" = "Unsupported format: %@";
 "error.patch_converter.invalid_manifest" = "Invalid package manifest: %@";
@@ -387,6 +389,7 @@
 "error.patch_converter.zip_password_required" = "This .zip archive is encrypted. Please enter the password.";
 "error.patch_converter.zip_aes_unsupported" = "WinZip AES encrypted .zip archives are not supported. Use standard ZipCrypto encryption.";
 "error.patch_converter.zip_no_rules" = "The .zip archive contains no valid files to package.";
+"error.patch_converter.zip_unrecognized_structure" = "The .zip archive does not contain a valid AoV mod (Resources/...) or .3105 package structure.";
 "error.patch_converter.invalid_zip_magic" = "The selected file is not a valid .zip archive.";
 "error.patch_converter.invalid_envelope_plist" = "Could not read the envelope plist inside .3105 package.";
 "error.patch_converter.invalid_payload_plist" = "Could not read the payload plist inside .3105 package.";
@@ -443,7 +446,14 @@
 "merge.result.logs_toggle" = "View process log (%lld entries)";
 "merge.result.send_to_overwrite" = "Send to Overwrite Tab";
 "merge.result.share_output" = "Save / Share .zip File";
+"merge.history.title" = "Mod Merge History";
+"merge.history.clear" = "Clear";
+"merge.history.meta" = "%@ • %lld files • %lld conflicts";
+"merge.history.send_action" = "Overwrite";
+"merge.history.share_action" = "Save / Share .zip File";
+"merge.history.sources_more" = "%@ (+%lld more)";
 "merge.alert.unsupported_zip" = "Only .zip mod archives are supported. Skipped: %@";
+"merge.alert.invalid_mods_skipped" = "Could not add %lld invalid file(s):\n%@";
 "merge.badge.generic" = "AoV Mod";
 "merge.badge.hero" = "Hero #%lld";
 "merge.badge.hero_skin" = "Hero #%lld • Skin #%lld";
@@ -460,6 +470,8 @@
 "merge.error.zip_creation" = "Could not build output ZIP archive: %@";
 "merge.error.only_zip_entry" = "'%@' is not a supported .zip mod archive.";
 "merge.error.not_valid_zip_entry" = "Could not read ZIP file '%@' (corrupted or invalid ZIP header).";
+"merge.error.empty_zip" = "ZIP archive '%@' is empty and contains no files.";
+"merge.error.encrypted_zip" = "ZIP archive '%@' is password-protected; Mod Merger does not support encrypted ZIPs.";
 "merge.error.invalid_server_response" = "Invalid merge plan response from server.";
 "merge.error.server_prefix" = "Server merge error: %@";
 "merge.error.size_limit" = "Merged archive exceeds the 3.6 GB size limit.";

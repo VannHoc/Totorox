@@ -313,6 +313,8 @@ struct TotoroxBadge: View {
         Text(title)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(isAccent ? .white : TotoroxTheme.badgeText)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(isAccent ? TotoroxTheme.mintAccent : TotoroxTheme.badgeBackground)
