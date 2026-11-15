@@ -332,6 +332,7 @@ struct TotoroxPrimaryButton: View {
     let action: () -> Void
 
     var body: some View {
+        let activeAppearance = isEnabled || isLoading
         Button(action: action) {
             HStack(spacing: 8) {
                 if isLoading {
@@ -347,10 +348,10 @@ struct TotoroxPrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .background(isEnabled ? TotoroxTheme.mintAccent : Color.gray.opacity(0.3))
-            .foregroundColor(.white)
+            .background(activeAppearance ? TotoroxTheme.mintAccent : Color(red: 0.91, green: 0.92, blue: 0.95))
+            .foregroundColor(activeAppearance ? .white : TotoroxTheme.textSecondary)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: isEnabled ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, x: 0, y: 4)
+            .shadow(color: activeAppearance ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, x: 0, y: 4)
         }
         .disabled(!isEnabled || isLoading)
         .buttonStyle(.plain)

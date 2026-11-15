@@ -39,30 +39,34 @@ struct MergeFileView: View {
     private static let historyStorageKey = "totorox.merge.history.v1"
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 16) {
-                // MARK: - Card 1: Banner Giới thiệu & Bản quyền tính năng
-                headerBannerCard
+        GeometryReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 16) {
+                    // MARK: - Card 1: Banner Giới thiệu & Bản quyền tính năng
+                    headerBannerCard
 
-                // MARK: - Card 2: Danh sách gói Mod (.zip) cần gộp
-                modSelectionListCard
+                    // MARK: - Card 2: Danh sách gói Mod (.zip) cần gộp
+                    modSelectionListCard
 
-                // MARK: - Card 3: Nút thực thi & Tiến trình
-                mergeActionCard
+                    // MARK: - Card 3: Nút thực thi & Tiến trình
+                    mergeActionCard
 
-                // MARK: - Card 4: Kết quả sau khi gộp
-                if let result = mergeResult {
-                    mergeResultCard(result)
+                    // MARK: - Card 4: Kết quả sau khi gộp
+                    if let result = mergeResult {
+                        mergeResultCard(result)
+                    }
+
+                    // MARK: - Lịch sử gộp file mod
+                    if !mergeHistory.isEmpty {
+                        mergeHistorySection
+                    }
                 }
-
-                // MARK: - Lịch sử gộp file mod
-                if !mergeHistory.isEmpty {
-                    mergeHistorySection
-                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
+                .frame(width: proxy.size.width > 0 ? proxy.size.width : nil)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(TotoroxTheme.pageBackground)
         .onAppear {
@@ -355,10 +359,10 @@ struct MergeFileView: View {
                             .font(.system(size: 15, weight: .bold))
                     }
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle((canMerge || isMerging) ? .white : TotoroxTheme.textSecondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(canMerge ? TotoroxTheme.mintAccent : Color.gray.opacity(0.35))
+                .background((canMerge || isMerging) ? TotoroxTheme.mintAccent : Color(red: 0.91, green: 0.92, blue: 0.95))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: canMerge ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, y: 4)
             }
@@ -490,11 +494,13 @@ struct MergeFileView: View {
                                 .font(.system(size: 13.5, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .lineLimit(1)
+                                .truncationMode(.middle)
 
                             Text(item.sourceSummary)
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
 
                             Text(
                                 language.text(
@@ -508,8 +514,7 @@ struct MergeFileView: View {
                             .foregroundStyle(TotoroxTheme.textSecondary)
                             .lineLimit(1)
                         }
-
-                        Spacer(minLength: 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         HStack(spacing: 8) {
                             Button {
