@@ -202,7 +202,7 @@ struct ActivationView: View {
                 .padding(.vertical, 4)
             }
 
-            PrimaryActionButton(
+            TotoroxPrimaryButton(
                 title: authMode == .login ? language.text("auth.login_button") : language.text("auth.register_button"),
                 icon: authMode == .login ? "arrow.right.circle.fill" : "person.badge.plus",
                 isLoading: isBusy,
@@ -267,7 +267,7 @@ struct ActivationView: View {
                     .foregroundStyle(TotoroxTheme.mintAccent)
             }
 
-            PrimaryActionButton(
+            TotoroxPrimaryButton(
                 title: language.text("server.config_save"),
                 icon: "checkmark.circle",
                 isLoading: false,
@@ -467,7 +467,7 @@ struct RedeemCodeSheet: View {
                             }
                         }
 
-                        PrimaryActionButton(
+                        TotoroxPrimaryButton(
                             title: language.text("redeem.submit_button"),
                             icon: "bolt.shield.fill",
                             isLoading: isRedeeming,

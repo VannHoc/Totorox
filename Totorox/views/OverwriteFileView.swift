@@ -1455,7 +1455,7 @@ struct OverwriteFileView: View {
                     await MainActor.run {
                         if let converterError = error as? PatchZipConverterError {
                             switch converterError {
-                            case .invalidPasswordOrCorrupted, .passwordRequired:
+                            case .cryptoFailed:
                                 self.alertMessage = activeLanguage.text("overwrite.error.decrypt_wrong_password")
                             default:
                                 self.alertMessage = activeLanguage.text("overwrite.error.decrypt_failed", error.localizedDescription)
@@ -1523,7 +1523,7 @@ struct OverwriteFileView: View {
                             switch converterError {
                             case .sizeLimitExceeded:
                                 message = activeLanguage.text("overwrite.error.size_limit")
-                            case .invalidPasswordOrCorrupted, .passwordRequired:
+                            case .cryptoFailed:
                                 message = activeLanguage.text("overwrite.error_wrong_password")
                             default:
                                 message = activeLanguage.text("overwrite.error.unzip_failed", error.localizedDescription)
