@@ -85,8 +85,8 @@ struct TotoroxApp: App {
                 }
             }
             .onOpenURL { url in
-                // Chưa kích hoạt license thì không xử lý deep link.
-                guard LicenseManager.shared.status.isActive else { return }
+                // Chưa đăng nhập tài khoản thì không xử lý deep link.
+                guard LicenseManager.shared.status.isAuthenticated else { return }
                 AppNavigationCoordinator.shared.handleIncomingURL(url)
             }
         }

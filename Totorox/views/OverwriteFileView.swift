@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 // MARK: - OverwriteFileView (Giao diện chuẩn UI Dự án Totorox)
 
 struct OverwriteFileView: View {
+    @Environment(\.appLanguage) private var language
+
     // Selection State
     @State private var selectedApp: AppContainerInfo? = nil
     @State private var targetBundleIDInput: String = ""
@@ -104,22 +106,22 @@ struct OverwriteFileView: View {
                 outcomeResult = nil
             }
         }
-        .alert("Thông báo", isPresented: Binding(
+        .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
             set: { if !$0 { alertMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { alertMessage = nil }
+            Button(language.text("common.ok"), role: .cancel) { alertMessage = nil }
         } message: {
             Text(alertMessage ?? "")
         }
-        .alert("Nhập mật khẩu gói .3105", isPresented: $showPasswordPromptDialog) {
-            SecureField("Mật khẩu giải mã", text: $patchPassword)
-            Button("Xác nhận & Đè file") {
+        .alert(language.text("overwrite.alert.password_title"), isPresented: $showPasswordPromptDialog) {
+            SecureField(language.text("overwrite.alert.password_placeholder"), text: $patchPassword)
+            Button(language.text("overwrite.alert.password_confirm")) {
                 executePatch()
             }
-            Button("Hủy", role: .cancel) { }
+            Button(language.text("common.cancel"), role: .cancel) { }
         } message: {
-            Text("Gói bản vá này yêu cầu mật khẩu để giải mã nội dung. Vui lòng nhập mật khẩu để tiếp tục đè file vào container.")
+            Text(language.text("overwrite.alert.password_message"))
         }
         .task {
             if scanner.apps.isEmpty {
@@ -140,14 +142,14 @@ struct OverwriteFileView: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
                 
-                Text("Ứng dụng mục tiêu")
+                Text(language.text("overwrite.target_app.title"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)
                 
                 Spacer()
                 
                 if selectedApp != nil {
-                    Text("Đã chọn")
+                    Text(language.text("overwrite.target_app.selected"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                         .padding(.horizontal, 8)
@@ -194,7 +196,7 @@ struct OverwriteFileView: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.triangle.2.circlepath")
-                            Text("Đổi ứng dụng")
+                            Text(language.text("overwrite.target_app.change"))
                         }
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
@@ -228,7 +230,7 @@ struct OverwriteFileView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "list.bullet")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Chọn ứng dụng đã cài đặt")
+                            Text(language.text("overwrite.target_app.choose_installed"))
                                 .font(.system(size: 14, weight: .bold))
                         }
                         .foregroundStyle(.white)
@@ -245,13 +247,13 @@ struct OverwriteFileView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(TotoroxTheme.textSecondary)
                         
-                        TextField("Hoặc nhập Bundle ID (ví dụ: com.garena.game.kgvn)", text: $targetBundleIDInput)
+                        TextField(language.text("overwrite.target_app.bundle_placeholder"), text: $targetBundleIDInput)
                             .font(.system(size: 13))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
                         
                         if !targetBundleIDInput.isEmpty {
-                            Button("Tìm") {
+                            Button(language.text("overwrite.target_app.find")) {
                                 resolveManualBundleID()
                             }
                             .font(.system(size: 12, weight: .bold))
@@ -276,7 +278,7 @@ struct OverwriteFileView: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
                 
-                Text("Thư mục đích")
+                Text(language.text("overwrite.dest_folder.title"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)
                 
@@ -338,7 +340,7 @@ struct OverwriteFileView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 11, weight: .bold))
-                        Text("Đổi")
+                        Text(language.text("overwrite.dest_folder.change"))
                             .font(.system(size: 13, weight: .bold))
                     }
                     .foregroundStyle(selectedTargetFolder != "Documents" && selectedTargetFolder != "Library" ? .white : TotoroxTheme.mintAccent)
@@ -365,7 +367,7 @@ struct OverwriteFileView: View {
                         .foregroundStyle(TotoroxTheme.textSecondary)
                         .lineLimit(1)
                 } else {
-                    Text("<Container Ứng dụng>/\(selectedTargetFolder)/")
+                    Text(language.text("overwrite.dest_folder.app_container_placeholder", selectedTargetFolder))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(TotoroxTheme.textSecondary)
                         .lineLimit(1)
@@ -383,7 +385,7 @@ struct OverwriteFileView: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
                 
-                Text("Gói tệp bản vá")
+                Text(language.text("overwrite.patch.title"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)
                 
@@ -394,7 +396,7 @@ struct OverwriteFileView: View {
                         if isPatchPasswordProtected {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 9))
-                            Text("Có mật khẩu")
+                            Text(language.text("overwrite.patch.has_password"))
                                 .font(.system(size: 11, weight: .bold))
                         } else {
                             Text(patch.pathExtension.uppercased())
@@ -433,7 +435,7 @@ struct OverwriteFileView: View {
                                 HStack(spacing: 3) {
                                     Image(systemName: "lock.fill")
                                         .font(.system(size: 9))
-                                    Text("Khóa")
+                                    Text(language.text("overwrite.patch.locked_badge"))
                                         .font(.system(size: 10, weight: .bold))
                                 }
                                 .padding(.horizontal, 6)
@@ -444,7 +446,7 @@ struct OverwriteFileView: View {
                             }
                         }
                         
-                        Text(patchFileSizeText.isEmpty ? "Định dạng hợp lệ" : patchFileSizeText)
+                        Text(patchFileSizeText.isEmpty ? language.text("overwrite.patch.valid_format") : patchFileSizeText)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(TotoroxTheme.textSecondary)
                     }
@@ -462,11 +464,13 @@ struct OverwriteFileView: View {
                             .font(.system(size: 14))
                             .foregroundStyle(isPatchPasswordProtected ? Color.orange : TotoroxTheme.textSecondary)
                         
+                        let pwdPlaceholder = language.text(
+                            isPatchPasswordProtected
+                                ? "overwrite.patch.password_required_placeholder"
+                                : "overwrite.patch.password_optional_placeholder"
+                        )
                         if isShowPassword {
-                            TextField(
-                                isPatchPasswordProtected ? "Nhập mật khẩu gói .3105 (bắt buộc)..." : "Mật khẩu gói (nếu có mã hóa)...",
-                                text: $patchPassword
-                            )
+                            TextField(pwdPlaceholder, text: $patchPassword)
                             .font(.system(size: 13))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
@@ -474,10 +478,7 @@ struct OverwriteFileView: View {
                                 tryAutoDetectBundleID(password: newPass)
                             }
                         } else {
-                            SecureField(
-                                isPatchPasswordProtected ? "Nhập mật khẩu gói .3105 (bắt buộc)..." : "Mật khẩu gói (nếu có mã hóa)...",
-                                text: $patchPassword
-                            )
+                            SecureField(pwdPlaceholder, text: $patchPassword)
                             .font(.system(size: 13))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
@@ -522,7 +523,7 @@ struct OverwriteFileView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.circle.fill")
                                 .font(.system(size: 11))
-                            Text("Gói bản vá có đặt mật khẩu bảo vệ, vui lòng nhập mật khẩu để giải mã.")
+                            Text(language.text("overwrite.patch.password_hint"))
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .foregroundStyle(Color.orange)
@@ -536,7 +537,7 @@ struct OverwriteFileView: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.triangle.2.circlepath")
-                            Text("Chọn tệp khác")
+                            Text(language.text("overwrite.patch.change_file"))
                         }
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
@@ -569,7 +570,7 @@ struct OverwriteFileView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 15, weight: .bold))
-                        Text("Chọn tệp bản vá (.zip hoặc .3105)")
+                        Text(language.text("overwrite.patch.choose_file"))
                             .font(.system(size: 14, weight: .bold))
                     }
                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -592,12 +593,12 @@ struct OverwriteFileView: View {
                 if isExecuting {
                     ProgressView()
                         .tint(.white)
-                    Text("Đang thực thi đè file...")
+                    Text(language.text("overwrite.execute.running"))
                         .font(.system(size: 15, weight: .bold))
                 } else {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 15, weight: .bold))
-                    Text("Thực thi Đè File vào Container")
+                    Text(language.text("overwrite.execute.button"))
                         .font(.system(size: 15, weight: .bold))
                 }
             }
@@ -619,7 +620,7 @@ struct OverwriteFileView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(TotoroxTheme.textSecondary)
-                    TextField("Tìm theo tên app hoặc Bundle ID...", text: $appSearchQuery)
+                    TextField(language.text("overwrite.apps_sheet.search_placeholder"), text: $appSearchQuery)
                         .font(.system(size: 14))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
@@ -650,14 +651,14 @@ struct OverwriteFileView: View {
                         if scanner.isLoading {
                             ProgressView()
                                 .tint(TotoroxTheme.mintAccent)
-                            Text("Đang quét danh sách ứng dụng...")
+                            Text(language.text("overwrite.apps_sheet.scanning"))
                                 .font(.system(size: 14))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                         } else {
                             Image(systemName: "app.badge.questionmark")
                                 .font(.system(size: 40))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
-                            Text("Không tìm thấy ứng dụng phù hợp")
+                            Text(language.text("overwrite.apps_sheet.empty"))
                                 .font(.system(size: 14))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                         }
@@ -705,11 +706,11 @@ struct OverwriteFileView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Ứng dụng đã cài đặt")
+            .navigationTitle(language.text("overwrite.apps_sheet.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Đóng") {
+                    Button(language.text("common.close")) {
                         showInstalledAppsSheet = false
                     }
                     .foregroundColor(TotoroxTheme.mintAccent)
@@ -776,7 +777,7 @@ struct OverwriteFileView: View {
                                 HStack(spacing: 4) {
                                     Image(systemName: "chevron.left")
                                         .font(.system(size: 13, weight: .bold))
-                                    Text("Lùi")
+                                    Text(language.text("folders.nav_back"))
                                         .font(.system(size: 13, weight: .semibold))
                                         .lineLimit(1)
                                 }
@@ -866,7 +867,7 @@ struct OverwriteFileView: View {
                             Image(systemName: "info.circle")
                                 .font(.system(size: 12))
                                 .foregroundColor(.orange)
-                            Text("Chưa chọn ứng dụng ở Bước 1 — đang hiển thị thư mục gợi ý.")
+                            Text(language.text("overwrite.folder.no_app_hint"))
                                 .font(.system(size: 12))
                                 .foregroundColor(TotoroxTheme.textSecondary)
                         }
@@ -883,7 +884,8 @@ struct OverwriteFileView: View {
                                 .foregroundStyle(TotoroxTheme.textSecondary)
 
                             TextField(
-                                selectedApp.map { "Tìm kiếm trong \($0.bundleID)..." } ?? "Tìm thư mục đích...",
+                                selectedApp.map { language.text("overwrite.folder.search_in_app", $0.bundleID) }
+                                    ?? language.text("overwrite.folder.search_placeholder"),
                                 text: $folderSearchQuery
                             )
                             .font(.system(size: 15))
@@ -919,7 +921,7 @@ struct OverwriteFileView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Nhập đường dẫn tùy chỉnh")
+                        .accessibilityLabel(language.text("overwrite.folder.custom_input_a11y"))
                     }
                     .padding(.horizontal, 14)
 
@@ -930,7 +932,7 @@ struct OverwriteFileView: View {
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(TotoroxTheme.mintAccent)
 
-                            TextField("Ví dụ: Documents/Resources/1.64.1", text: $customFolderInput)
+                            TextField(language.text("overwrite.folder.custom_example"), text: $customFolderInput)
                                 .font(.system(size: 13.5, design: .monospaced))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .textInputAutocapitalization(.never)
@@ -985,8 +987,8 @@ struct OverwriteFileView: View {
                                     .font(.system(size: 42))
                                     .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
                                 Text(folderSearchQuery.isEmpty
-                                     ? "Thư mục này chưa có thư mục con"
-                                     : "Không tìm thấy thư mục phù hợp")
+                                     ? language.text("overwrite.folder.empty_subfolders")
+                                     : language.text("overwrite.folder.no_match"))
                                     .font(.system(size: 14))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                     .multilineTextAlignment(.center)
@@ -1024,11 +1026,11 @@ struct OverwriteFileView: View {
                                                     .truncationMode(.tail)
 
                                                 HStack(spacing: 4) {
-                                                    Text("Thư mục")
+                                                    Text(language.text("folders.folder_type"))
                                                         .font(.system(size: 11, weight: .medium))
                                                         .foregroundStyle(TotoroxTheme.mintAccent)
                                                     if let count = folder.childCount {
-                                                        Text("(\(count) mục)")
+                                                        Text(language.text("common.items_paren_count", count))
                                                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                                                             .foregroundStyle(TotoroxTheme.mintAccent)
                                                     }
@@ -1076,14 +1078,14 @@ struct OverwriteFileView: View {
                     Divider()
                     let candidatePath = validatedTargetSubfolder(customFolderInput.isEmpty ? pendingTargetFolder : customFolderInput)
                     let shortFolderTitle: String = {
-                        guard let clean = candidatePath else { return "Xác nhận" }
+                        guard let clean = candidatePath else { return language.text("overwrite.folder.confirm_btn") }
                         let last = (clean as NSString).lastPathComponent
-                        return "Xác nhận (\(last.isEmpty ? clean : last))"
+                        return language.text("overwrite.folder.confirm_with_name", last.isEmpty ? clean : last)
                     }()
                     Button {
                         dismissPickerKeyboard()
                         guard let clean = candidatePath else {
-                            folderBrowseError = "Đường dẫn không hợp lệ. Vui lòng nhập đường dẫn con bên trong container."
+                            folderBrowseError = language.text("overwrite.folder.invalid_subpath")
                             return
                         }
                         selectedTargetFolder = clean
@@ -1110,11 +1112,11 @@ struct OverwriteFileView: View {
                 .background(TotoroxTheme.cardBackground)
             }
             .background(TotoroxTheme.pageBackground)
-            .navigationTitle("Tùy chọn thư mục đích")
+            .navigationTitle(language.text("overwrite.custom_folder_sheet_title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Hủy") {
+                    Button(language.text("common.cancel")) {
                         dismissPickerKeyboard()
                         showCustomFolderSheet = false
                     }
@@ -1205,7 +1207,7 @@ struct OverwriteFileView: View {
                 self.browsingFolders = mapped
                 self.isLoadingFolders = false
                 if let err = actError as String?, mapped.isEmpty && !err.isEmpty {
-                    self.folderBrowseError = "Không mở được đầy đủ container (\(err))."
+                    self.folderBrowseError = AppLanguage.current.text("overwrite.folder.container_open_error", err)
                 }
             }
         }
@@ -1270,18 +1272,21 @@ struct OverwriteFileView: View {
             let sizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
             var autoBundleID: String? = nil
             var isProtected = false
-            if url.pathExtension.lowercased() == "3105",
+            let ext = url.pathExtension.lowercased()
+            if ext == "3105",
                !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) {
                 let converter = PatchZipConverter.shared
                 if let summary = try? await converter.inspect(patchURL: url) {
                     isProtected = summary.isPasswordProtected
                 }
-                if let data = try? Data(contentsOf: url),
-                   let project = try? await converter.decodeProject(patchData: data),
+                if let project = converter.inspectProjectMetadataLocally(patchURL: url),
                    let bid = project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !bid.isEmpty {
                     autoBundleID = bid
                 }
+            } else if ext == "zip",
+                      !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) {
+                isProtected = PatchZipConverter.shared.isZipPasswordProtected(url: url)
             }
             await MainActor.run {
                 self.patchFileSizeText = sizeText
@@ -1311,8 +1316,7 @@ struct OverwriteFileView: View {
             }
             guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
                   !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) else { return }
-            guard let data = try? Data(contentsOf: url),
-                  let project = try? await PatchZipConverter.shared.decodeProject(patchData: data, password: password),
+            guard let project = PatchZipConverter.shared.inspectProjectMetadataLocally(patchURL: url, password: password),
                   let bid = project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !bid.isEmpty else {
                 return
@@ -1338,7 +1342,7 @@ struct OverwriteFileView: View {
                 }
             } else {
                 await MainActor.run {
-                    self.alertMessage = "Không tìm thấy ứng dụng có Bundle ID '\(clean)'."
+                    self.alertMessage = AppLanguage.current.text("overwrite.not_found_bundle", clean)
                 }
             }
         }
@@ -1356,7 +1360,7 @@ struct OverwriteFileView: View {
         do {
             return try PatchPathValidator.canonicalRelativePath(candidate)
         } catch {
-            alertMessage = "Thư mục đích không hợp lệ. Chỉ nhập đường dẫn tương đối bên trong container (ví dụ: Documents/Assets); không dùng '..', đường dẫn tuyệt đối hoặc ký tự điều khiển."
+            alertMessage = language.text("overwrite.error.invalid_target_subfolder")
             return nil
         }
     }
@@ -1367,7 +1371,7 @@ struct OverwriteFileView: View {
         guard let targetSubfolder = validatedTargetSubfolder(selectedTargetFolder) else { return }
         let is3105 = patchURL.pathExtension.lowercased() == "3105"
 
-        if is3105 && isPatchPasswordProtected && patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if isPatchPasswordProtected && patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showPasswordPromptDialog = true
             return
         }
@@ -1375,6 +1379,7 @@ struct OverwriteFileView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let hasSecurityAccess = patchURL.startAccessingSecurityScopedResource()
         let currentPassword = patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : patchPassword
+        let activeLanguage = language
 
         isExecuting = true
         log("overwrite: starting patch into \(app.bundleID) target=\(targetSubfolder) file=\(patchURL.lastPathComponent)")
@@ -1397,7 +1402,7 @@ struct OverwriteFileView: View {
             let containerPrefix = containerBase.path.hasSuffix("/") ? containerBase.path : containerBase.path + "/"
             guard destinationDir.path == containerBase.path || destinationDir.path.hasPrefix(containerPrefix) else {
                 await MainActor.run {
-                    self.alertMessage = "Thư mục đích nằm ngoài container của ứng dụng. Vui lòng chọn đường dẫn con hợp lệ."
+                    self.alertMessage = activeLanguage.text("overwrite.error.outside_container")
                     self.isExecuting = false
                 }
                 return
@@ -1409,7 +1414,7 @@ struct OverwriteFileView: View {
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
             } catch {
                 await MainActor.run {
-                    self.alertMessage = "Không thể tạo thư mục đích: \(error.localizedDescription)"
+                    self.alertMessage = activeLanguage.text("overwrite.error.create_dest_failed", error.localizedDescription)
                     self.isExecuting = false
                 }
                 return
@@ -1448,112 +1453,148 @@ struct OverwriteFileView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        let errText = error.localizedDescription
-                        if errText.contains("Mật khẩu") || errText.contains("Password") || errText.contains("password") {
-                            self.alertMessage = "Giải mã gói .3105 thất bại: Mật khẩu không chính xác hoặc gói đã bị chỉnh sửa."
+                        if let converterError = error as? PatchZipConverterError {
+                            switch converterError {
+                            case .invalidPasswordOrCorrupted, .passwordRequired:
+                                self.alertMessage = activeLanguage.text("overwrite.error.decrypt_wrong_password")
+                            default:
+                                self.alertMessage = activeLanguage.text("overwrite.error.decrypt_failed", error.localizedDescription)
+                            }
                         } else {
-                            self.alertMessage = "Giải mã gói .3105 thất bại: \(errText)"
+                            let errText = error.localizedDescription
+                            if errText.contains("Mật khẩu") || errText.contains("Password") || errText.contains("password") || errText.contains("密码") {
+                                self.alertMessage = activeLanguage.text("overwrite.error.decrypt_wrong_password")
+                            } else {
+                                self.alertMessage = activeLanguage.text("overwrite.error.decrypt_failed", errText)
+                            }
                         }
                         self.isExecuting = false
                     }
                     return
                 }
             } else {
-                do {
-                    let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
-                    try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
+                var patchIsDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: patchURL.path, isDirectory: &patchIsDir), patchIsDir.boolValue {
+                    rawExtractedRoot = patchURL
+                } else if patchURL.pathExtension.lowercased() == "zip" {
                     do {
-                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: patchURL, into: extractedDir)
-                    } catch ZIPArchiveExtractorError.expandedTooLarge {
-                        throw ZIPArchiveExtractorError.expandedTooLarge
+                        let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
+                        try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
+                        let parseZipManually = {
+                            let archiveSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                            guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
+                                throw ZIPArchiveExtractorError.expandedTooLarge
+                            }
+                            let zipData = try Data(contentsOf: patchURL)
+                            let entries = try PatchZipConverter.shared.parseZipArchive(zipData, password: currentPassword)
+                            for (relPath, fileData) in entries {
+                                let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
+                                let parts = normalized
+                                    .split(separator: "/", omittingEmptySubsequences: true)
+                                    .map(String.init)
+                                    .filter { $0 != "." }
+                                guard !parts.isEmpty, !parts.contains("..") else { continue }
+                                var targetFile = extractedDir
+                                for (idx, part) in parts.enumerated() {
+                                    targetFile.appendPathComponent(part, isDirectory: idx < parts.count - 1)
+                                }
+                                try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                                try fileData.write(to: targetFile, options: .atomic)
+                            }
+                        }
+                        if isPatchPasswordProtected || currentPassword != nil {
+                            try parseZipManually()
+                        } else {
+                            do {
+                                _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: patchURL, into: extractedDir)
+                            } catch ZIPArchiveExtractorError.expandedTooLarge {
+                                throw ZIPArchiveExtractorError.expandedTooLarge
+                            } catch {
+                                try parseZipManually()
+                            }
+                        }
+                        rawExtractedRoot = extractedDir
                     } catch {
-                        let archiveSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
-                            throw ZIPArchiveExtractorError.expandedTooLarge
-                        }
-                        let zipData = try Data(contentsOf: patchURL)
-                        let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
-                        for (relPath, fileData) in entries {
-                            let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
-                            let parts = normalized
-                                .split(separator: "/", omittingEmptySubsequences: true)
-                                .map(String.init)
-                                .filter { $0 != "." }
-                            guard !parts.isEmpty,
-                                  !parts.contains(".."),
-                                  parts.first != "__MACOSX",
-                                  parts.last != ".DS_Store" else {
-                                continue
+                        let message: String
+                        if let extractorError = error as? ZIPArchiveExtractorError,
+                           extractorError == .expandedTooLarge {
+                            message = activeLanguage.text("overwrite.error.size_limit")
+                        } else if let converterError = error as? PatchZipConverterError {
+                            switch converterError {
+                            case .sizeLimitExceeded:
+                                message = activeLanguage.text("overwrite.error.size_limit")
+                            case .invalidPasswordOrCorrupted, .passwordRequired:
+                                message = activeLanguage.text("overwrite.error_wrong_password")
+                            default:
+                                message = activeLanguage.text("overwrite.error.unzip_failed", error.localizedDescription)
                             }
-                            var targetFile = extractedDir
-                            for (idx, part) in parts.enumerated() {
-                                targetFile.appendPathComponent(part, isDirectory: idx < parts.count - 1)
-                            }
-                            try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-                            try fileData.write(to: targetFile, options: .atomic)
+                        } else {
+                            message = activeLanguage.text("overwrite.error.unzip_failed", error.localizedDescription)
                         }
+                        await MainActor.run {
+                            self.alertMessage = message
+                            self.isExecuting = false
+                        }
+                        return
                     }
-                    rawExtractedRoot = extractedDir
-                } catch {
-                    let message: String
-                    if let extractorError = error as? ZIPArchiveExtractorError,
-                       extractorError == .expandedTooLarge {
-                        message = "Gói patch vượt quá giới hạn giải nén 3.6 GB."
-                    } else if let converterError = error as? PatchZipConverterError,
-                              converterError == .sizeLimitExceeded {
-                        message = "Gói patch vượt quá giới hạn 3.6 GB."
-                    } else {
-                        message = "Giải nén tệp ZIP thất bại: \(error.localizedDescription)"
+                } else {
+                    do {
+                        let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
+                        try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
+                        let stagedFile = extractedDir.appendingPathComponent(patchURL.lastPathComponent)
+                        try FileManager.default.copyItem(at: patchURL, to: stagedFile)
+                        rawExtractedRoot = extractedDir
+                    } catch {
+                        let lang = AppLanguage.current
+                        await MainActor.run {
+                            self.alertMessage = lang.text("overwrite.error.unzip_failed", error.localizedDescription)
+                            self.isExecuting = false
+                        }
+                        return
                     }
-                    await MainActor.run {
-                        self.alertMessage = message
-                        self.isExecuting = false
-                    }
-                    return
                 }
             }
 
-            // Unwrap payload/<bundleID>/ if the archive is a structured patch package
-            let engine = FileIOEngine.shared
-            let unwrapped = engine.unwrapExtractedPayloadRoot(
-                at: rawExtractedRoot,
-                preferredBundleID: app.bundleID
+            // 2. Quét danh sách đường dẫn tương đối nguồn & cấu trúc thư mục đích gửi lên Server
+            let (sourcePaths, sourceSizes) = Self.collectRelativeSourcePaths(at: rawExtractedRoot)
+            let targetPaths = Self.collectTargetStructurePaths(at: destinationDir)
+
+            let planRequest = OverwritePlanRequest(
+                sourcePaths: sourcePaths,
+                targetPaths: targetPaths,
+                targetBundleId: app.bundleID,
+                targetSubfolder: targetSubfolder,
+                sourceSizes: sourceSizes
             )
-            let sourceToCopy = unwrapped.rootURL
 
-            // Determine whether the payload root already starts with the target subfolder (e.g. Documents/...)
-            var effectiveDestination = destinationDir
-            let matchingSubfolderInSource = sourceToCopy.appendingPathComponent(targetSubfolder)
-            var isSubDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: matchingSubfolderInSource.path, isDirectory: &isSubDir),
-               isSubDir.boolValue {
-                effectiveDestination = containerBase
-            } else if unwrapped.usesContainerRootRelativePaths {
-                let topContainerDirs = ["Documents", "Library", "tmp", "SystemData"]
-                let hasTopLevelContainerStructure = topContainerDirs.contains { dirName in
-                    var d: ObjCBool = false
-                    let p = sourceToCopy.appendingPathComponent(dirName).path
-                    return FileManager.default.fileExists(atPath: p, isDirectory: &d) && d.boolValue
+            let planResponse: OverwritePlanResponse
+            switch await APIService.shared.overwritePlan(
+                planRequest,
+                token: LicenseManager.shared.authToken,
+                hwid: LicenseManager.shared.deviceIdentifier
+            ) {
+            case .success(let resp):
+                planResponse = resp
+            case .failure(let error):
+                await MainActor.run {
+                    self.alertMessage = error.localizedDescription
+                    self.isExecuting = false
                 }
-                if hasTopLevelContainerStructure {
-                    effectiveDestination = containerBase
-                }
+                return
             }
 
-            // 1.5. Bộ lọc bảo vệ Liên Quân Mobile (AOV SafeGuard)
-            // Tự động loại bỏ các tệp Databin rỗng/chữ ký rác (< 32 bytes, ví dụ 9 bytes watermark)
-            // gây lỗi parser Databin làm kẹt game ở 78%, giữ nguyên toàn bộ hiệu ứng skin & hạ địch.
-            let targetBundleLower = app.bundleID.lowercased()
-            let isAovGame = targetBundleLower.contains("kgvn") ||
-                            targetBundleLower.contains("kgth") ||
-                            targetBundleLower.contains("kgtw") ||
-                            targetBundleLower.contains("sgame")
-            if isAovGame {
-                Self.sanitizeAovModPayload(at: sourceToCopy)
+            if let note = planResponse.note, !note.isEmpty {
+                log("overwrite: server plan note=\(note) mapped=\(planResponse.mappings.count) skipped=\(planResponse.skipped?.count ?? 0)")
             }
 
-            // 2. Ghi đè và hợp nhất tệp qua FileIOEngine trên Background Thread
-            let result = await engine.copyAndMerge(from: sourceToCopy, to: effectiveDestination) { s, d, k in
+            // 3. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
+            let engine = FileIOEngine.shared
+            let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
+            let result = await engine.applyMappedFiles(
+                mappings,
+                from: rawExtractedRoot,
+                to: destinationDir
+            ) { s, d, k in
                 await promptCoordinator.resolveConflict(
                     source: s,
                     destination: d,
@@ -1566,7 +1607,7 @@ struct OverwriteFileView: View {
                     }
                 )
             }
-            
+
             await MainActor.run {
                 self.isExecuting = false
                 ContainerMetadataCache.shared.invalidate(path: app.dataPath)
@@ -1576,31 +1617,66 @@ struct OverwriteFileView: View {
         }
     }
 
-    private static func sanitizeAovModPayload(at sourceRoot: URL) {
+    private static func collectRelativeSourcePaths(at rootURL: URL) -> (paths: [String], sizes: [String: Int]) {
         let fm = FileManager.default
+        let base = rootURL.standardizedFileURL
+        let baseComponents = base.pathComponents
         guard let enumerator = fm.enumerator(
-            at: sourceRoot,
-            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: []
+        ) else {
+            return ([], [:])
+        }
 
-        var toRemove: [URL] = []
-        for case let fileURL as URL in enumerator {
-            let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
-            if res?.isDirectory == true { continue }
-            let size = res?.fileSize ?? 0
-            let pathLower = fileURL.path.replacingOccurrences(of: "\\", with: "/").lowercased()
-
-            // Chỉ loại bỏ các tệp Databin bị hỏng/chứa watermark rác (< 32 bytes, ví dụ 9 bytes UTF-8)
-            // Không bao giờ xoá HeroSkin_*.bytes, KernelLua.pkg.bytes, StableSystems_3.pkg.bytes hay resourcepackerinfosetall.assetbundle
-            if pathLower.contains("/databin/") && pathLower.hasSuffix(".bytes") && size < 32 {
-                toRemove.append(fileURL)
-                log("[AOV SafeGuard] Đã loại bỏ tệp Databin lỗi/watermark rác: \(fileURL.lastPathComponent) (\(size) bytes < 32 bytes).")
+        var paths: [String] = []
+        var sizes: [String: Int] = [:]
+        for case let itemURL as URL in enumerator {
+            let values = try? itemURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory == true { continue }
+            let itemComponents = itemURL.standardizedFileURL.pathComponents
+            guard itemComponents.count > baseComponents.count else { continue }
+            let rel = itemComponents.dropFirst(baseComponents.count).joined(separator: "/")
+            paths.append(rel)
+            if let fileSize = values?.fileSize {
+                sizes[rel] = fileSize
             }
         }
+        return (paths, sizes)
+    }
 
-        for u in toRemove {
-            try? fm.removeItem(at: u)
+    private static func collectTargetStructurePaths(
+        at destinationRoot: URL,
+        maxDepth: Int = 4,
+        limit: Int = 500
+    ) -> [String] {
+        let fm = FileManager.default
+        let base = destinationRoot.standardizedFileURL
+        let baseComponents = base.pathComponents
+        guard let enumerator = fm.enumerator(
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
         }
+
+        var paths: [String] = []
+        for case let itemURL as URL in enumerator {
+            let level = enumerator.level
+            let values = try? itemURL.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                let comps = itemURL.standardizedFileURL.pathComponents
+                if comps.count > baseComponents.count {
+                    let rel = comps.dropFirst(baseComponents.count).joined(separator: "/")
+                    paths.append(rel)
+                    if paths.count >= limit { break }
+                }
+                if level >= maxDepth {
+                    enumerator.skipDescendants()
+                }
+            }
+        }
+        return paths
     }
 }

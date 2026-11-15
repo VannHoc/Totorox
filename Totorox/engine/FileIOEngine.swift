@@ -54,7 +54,7 @@ public enum FileIOEngineError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .symbolicLinkUnsupported: return "Symbolic links are not supported."
+        case .symbolicLinkUnsupported: return AppLanguage.current.text("error.filemanager.symlink_unsupported")
         }
     }
 }
@@ -905,62 +905,94 @@ public final class FileIOEngine: @unchecked Sendable {
         }.value
     }
 
-    /// Unwraps a patch zip directory if it contains `<bundleID>/...` or legacy `payload/<bundleID>/...`,
-    /// and removes any stray `patch.json` metadata file so only clean container files remain.
-    public func unwrapExtractedPayloadRoot(at extractedDir: URL, preferredBundleID: String? = nil) -> (rootURL: URL, usesContainerRootRelativePaths: Bool) {
-        let patchJSON = extractedDir.appendingPathComponent("patch.json")
-        if fileManager.fileExists(atPath: patchJSON.path) {
-            try? fileManager.removeItem(at: patchJSON)
+    /// Thực hiện copy/ghi đè từng tệp theo danh sách ánh xạ `(source, destination)` từ `/api/v1/overwrite-plan`.
+    public func applyMappedFiles(
+        _ mappings: [(source: String, destination: String)],
+        from sourceRoot: URL,
+        to destinationRoot: URL,
+        conflictResolver: @escaping FileIOConflictResolver
+    ) async -> FileIOResult {
+        let cancelState = FileIOCancellationState()
+        let conflictSession = FileIOConflictSession()
+        self.shouldReplaceAllConflicts = false
+
+        if Task.isCancelled {
+            cancelState.cancel()
         }
 
-        let payloadDir = extractedDir.appendingPathComponent("payload")
-        var isDir: ObjCBool = false
-        if fileManager.fileExists(atPath: payloadDir.path, isDirectory: &isDir),
-           isDir.boolValue {
-            if let bid = preferredBundleID, !bid.isEmpty {
-                let candidate = payloadDir.appendingPathComponent(bid)
-                if fileManager.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
-                    return (candidate, true)
+        let workerTask = Task.detached(priority: .userInitiated) { [self] () -> FileIOResult in
+            var result = FileIOResult()
+            let srcBase = sourceRoot.standardizedFileURL
+            let dstBase = destinationRoot.standardizedFileURL
+            let srcPrefix = srcBase.path.hasSuffix("/") ? srcBase.path : srcBase.path + "/"
+            let dstPrefix = dstBase.path.hasSuffix("/") ? dstBase.path : dstBase.path + "/"
+
+            _ = ContainerStore.ensureContainerAccess(for: srcBase.path)
+            _ = ContainerStore.ensureContainerAccess(for: dstBase.path)
+
+            for mapping in mappings {
+                if cancelState.isCancelled || result.isCancelled || Task.isCancelled {
+                    result.isCancelled = true
+                    break
                 }
-            }
-            if let children = try? fileManager.contentsOfDirectory(at: payloadDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]),
-               let firstDir = children.first(where: {
-                   var childIsDir: ObjCBool = false
-                   return fileManager.fileExists(atPath: $0.path, isDirectory: &childIsDir) && childIsDir.boolValue
-               }) {
-                return (firstDir, true)
-            }
-            return (payloadDir, true)
-        }
 
-        if let bid = preferredBundleID, !bid.isEmpty {
-            let directBundleCandidate = extractedDir.appendingPathComponent(bid)
-            if fileManager.fileExists(atPath: directBundleCandidate.path, isDirectory: &isDir), isDir.boolValue {
-                return (directBundleCandidate, true)
-            }
-        }
-
-        if let children = try? fileManager.contentsOfDirectory(at: extractedDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
-            let dirChildren = children.filter {
-                var childIsDir: ObjCBool = false
-                return fileManager.fileExists(atPath: $0.path, isDirectory: &childIsDir) && childIsDir.boolValue
-            }
-            if dirChildren.count == 1, let singleDir = dirChildren.first {
-                let name = singleDir.lastPathComponent
-                let lower = name.lowercased()
-                if name.contains(".") && !lower.hasSuffix(".app") && !lower.hasSuffix(".bundle") && !lower.hasSuffix(".assetbundle") {
-                    let containerSubdirs = ["Documents", "Library", "tmp", "SystemData", "Resources"]
-                    let hasKnownSubdir = containerSubdirs.contains { sub in
-                        var subIsDir: ObjCBool = false
-                        return fileManager.fileExists(atPath: singleDir.appendingPathComponent(sub).path, isDirectory: &subIsDir) && subIsDir.boolValue
-                    }
-                    if hasKnownSubdir {
-                        return (singleDir, true)
-                    }
+                let relSrc = mapping.source.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let relDst = mapping.destination.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let srcParts = relSrc.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+                let dstParts = relDst.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+                guard !srcParts.isEmpty, !dstParts.isEmpty,
+                      !srcParts.contains(".."), !dstParts.contains(".."),
+                      !srcParts.contains("."), !dstParts.contains(".") else {
+                    continue
                 }
+
+                let sourceFile = srcParts.reduce(srcBase) { $0.appendingPathComponent($1, isDirectory: false) }.standardizedFileURL
+                let destFile = dstParts.reduce(dstBase) { $0.appendingPathComponent($1, isDirectory: false) }.standardizedFileURL
+                guard sourceFile.path.hasPrefix(srcPrefix),
+                      destFile.path.hasPrefix(dstPrefix) else {
+                    result.failed.append(FileIOFailureRecord(
+                        url: destFile,
+                        reason: FileIOEngineError.invalidDestination.localizedDescription
+                    ))
+                    continue
+                }
+
+                var isSrcDir: ObjCBool = false
+                guard self.fileManager.fileExists(atPath: sourceFile.path, isDirectory: &isSrcDir),
+                      !isSrcDir.boolValue else {
+                    continue
+                }
+
+                do {
+                    try Self.createDirectoryIfNeeded(at: destFile.deletingLastPathComponent())
+                } catch {
+                    result.failed.append(FileIOFailureRecord(
+                        url: destFile,
+                        reason: error.localizedDescription
+                    ))
+                    continue
+                }
+
+                await self.processItem(
+                    source: sourceFile,
+                    sourceIsDir: false,
+                    destination: destFile,
+                    conflictSession: conflictSession,
+                    result: &result,
+                    cancelState: cancelState,
+                    progressHandler: nil,
+                    conflictResolver: conflictResolver
+                )
             }
+
+            return result
         }
 
-        return (extractedDir, false)
+        return await withTaskCancellationHandler {
+            await workerTask.value
+        } onCancel: {
+            cancelState.cancel()
+            workerTask.cancel()
+        }
     }
 }

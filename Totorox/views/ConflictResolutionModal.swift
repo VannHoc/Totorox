@@ -245,6 +245,7 @@ struct WindowsConflictDialog: View {
 // MARK: - Overwrite Outcome Report Sheet
 
 struct OverwriteOutcomeView: View {
+    @Environment(\.appLanguage) private var language
     let result: FileIOResult
     var onDismiss: () -> Void
 
@@ -264,11 +265,17 @@ struct OverwriteOutcomeView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(result.isCancelled ? "Đã hủy thao tác" : (result.failed.isEmpty ? "Hoàn tất đè file thành công" : "Hoàn tất với một số lỗi"))
+                            Text(
+                                result.isCancelled
+                                    ? language.text("overwrite.outcome.cancelled")
+                                    : (result.failed.isEmpty
+                                        ? language.text("overwrite.outcome.success")
+                                        : language.text("overwrite.outcome.partial"))
+                            )
                                 .font(.system(size: 17, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
 
-                            Text("Thành công: \(result.succeeded.count) • Lỗi: \(result.failed.count) • Bỏ qua: \(result.skipped.count)")
+                            Text(language.text("overwrite.outcome.summary", result.succeeded.count, result.failed.count, result.skipped.count))
                                 .font(.system(size: 13))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                         }
@@ -279,7 +286,7 @@ struct OverwriteOutcomeView: View {
                     // Succeeded items
                     if !result.succeeded.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Đã hoàn tất thành công (\(result.succeeded.count))")
+                            Text(language.text("overwrite.outcome.succeeded_section", result.succeeded.count))
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
 
@@ -300,7 +307,7 @@ struct OverwriteOutcomeView: View {
                     // Failed items
                     if !result.failed.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Thất bại (\(result.failed.count))")
+                            Text(language.text("overwrite.outcome.failed_section", result.failed.count))
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(Color.red)
 
@@ -325,7 +332,7 @@ struct OverwriteOutcomeView: View {
                     // Skipped items
                     if !result.skipped.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Đã bỏ qua (\(result.skipped.count))")
+                            Text(language.text("overwrite.outcome.skipped_section", result.skipped.count))
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
 
@@ -346,11 +353,11 @@ struct OverwriteOutcomeView: View {
                 .padding(16)
             }
             .background(TotoroxTheme.pageBackground)
-            .navigationTitle("Kết quả thao tác")
+            .navigationTitle(language.text("overwrite.outcome.nav_title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Xong", action: onDismiss)
+                    Button(language.text("overwrite.outcome.done"), action: onDismiss)
                         .fontWeight(.semibold)
                         .foregroundColor(TotoroxTheme.mintAccent)
                 }

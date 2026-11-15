@@ -670,4 +670,69 @@ final class PatchZipConverterTests: XCTestCase {
         let repackedParsed = try converter.parseZipArchive(repacked)
         XCTAssertEqual(repackedParsed["Kernel/hello.lua"], Data("hello".utf8))
     }
+
+    func testBuildAndParseEncryptedZipArchiveRoundTrip() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("Resources/1.64.1/Config.bytes", Data("ENCRYPTED_PAYLOAD_ABC".utf8)),
+            ("Resources/1.64.1/Large.bin", Data(repeating: 0x5A, count: 4096)),
+            ("Resources/1.64.1/empty.txt", Data()),
+        ]
+        let encrypted = try converter.buildZipArchive(entries: entries, password: "modpass")
+        XCTAssertTrue(converter.isZipPasswordProtected(data: encrypted))
+
+        let zipURL = tempDirectory.appendingPathComponent("secret.zip")
+        try encrypted.write(to: zipURL)
+        XCTAssertTrue(converter.isZipPasswordProtected(url: zipURL))
+
+        let info = try converter.inspectZipMetadata(at: zipURL, password: nil)
+        XCTAssertTrue(info.isPasswordProtected)
+        XCTAssertEqual(info.entryCount, entries.count)
+
+        XCTAssertThrowsError(try converter.parseZipArchive(encrypted, password: nil))
+        XCTAssertThrowsError(try converter.parseZipArchive(encrypted, password: "wrong"))
+
+        let decrypted = try converter.parseZipArchive(encrypted, password: "modpass")
+        XCTAssertEqual(decrypted.count, entries.count)
+        for entry in entries {
+            XCTAssertEqual(decrypted[entry.path], entry.data)
+        }
+    }
+
+    func testBuildPatchProject_WithEncryptedZipAndCustomProjectName() throws {
+        let entries: [(path: String, data: Data)] = [
+            ("1.64.1/Ages/Prefab_Characters/Hero.pkg.bytes", Data("hero".utf8)),
+            ("Resources/1.64.1/Databin/Client/HeroSkin.bytes", Data("skin".utf8)),
+        ]
+        let encryptedZip = try converter.buildZipArchive(entries: entries, password: "zipPass")
+        let project = try converter.buildPatchProject(
+            fromZipData: encryptedZip,
+            sourcePassword: "zipPass",
+            customProjectName: "Nakroth_Custom_Mod"
+        )
+
+        XCTAssertEqual(project.name, "Nakroth_Custom_Mod")
+        XCTAssertEqual(project.rules.count, 2)
+    }
+
+    func testInspectProjectMetadataLocally_LockedPackageReturnsNilWithoutValidPassword() throws {
+        let packageID = UUID()
+        let fakeSealed = try XCTUnwrap(AES.GCM.seal(Data("test".utf8), using: SymmetricKey(size: .bits256)).combined)
+        let envelope: [String: Any] = [
+            "schemaVersion": 9,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": true,
+            "keyAADVersion": 9,
+            "kdfSalt": Data(repeating: 0xAA, count: 16),
+            "kdfIterations": 250000,
+            "wrappedContentKey": fakeSealed,
+            "keyFingerprint": Data(SHA256.hash(data: Data(repeating: 0x11, count: 32))),
+            "encryptedPayload": fakeSealed,
+        ]
+        let plist = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+        let patchURL = tempDirectory.appendingPathComponent("locked_preview.3105")
+        try (Data("3105PATCH\0".utf8) + plist).write(to: patchURL)
+
+        XCTAssertNil(converter.inspectProjectMetadataLocally(patchURL: patchURL, password: nil))
+        XCTAssertNil(converter.inspectProjectMetadataLocally(patchURL: patchURL, password: "wrong"))
+    }
 }

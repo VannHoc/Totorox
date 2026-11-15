@@ -39,16 +39,17 @@ public struct AovModSummary: Identifiable, Equatable, Sendable {
     }
 
     public var heroBadgeText: String {
+        let lang = AppLanguage.current
         if heroIDs.count > 1 {
             let preview = heroIDs.prefix(4).map { "#\($0)" }.joined(separator: ", ")
             let suffix = heroIDs.count > 4 ? "…" : ""
-            return "\(heroIDs.count) Tướng (\(preview)\(suffix))"
+            return lang.text("merge.badge.heroes", heroIDs.count, "\(preview)\(suffix)")
         } else if let h = heroID, let s = skinID {
-            return "Hero #\(h) • Skin #\(s)"
+            return lang.text("merge.badge.hero_skin", h, s)
         } else if let h = heroID {
-            return "Hero #\(h)"
+            return lang.text("merge.badge.hero", h)
         } else {
-            return "Gói Mod AOV"
+            return lang.text("merge.badge.generic")
         }
     }
 }
@@ -75,25 +76,26 @@ public enum AovModMergerError: LocalizedError {
     case sizeLimitExceeded
 
     public var errorDescription: String? {
+        let lang = AppLanguage.current
         switch self {
         case .insufficientInputMods:
-            return "Cần chọn ít nhất 2 tệp .zip mod Liên Quân để thực hiện gộp."
+            return lang.text("merge.error.insufficient_mods")
         case .invalidArchive(let name):
-            return "Không thể đọc cấu trúc tệp nén: \(name)"
+            return lang.text("merge.error.invalid_archive", name)
         case .missingResourceStructure(let name):
-            return "Không tìm thấy cấu trúc Resources/<phiên_bản> hợp lệ trong tệp: \(name)"
+            return lang.text("merge.error.missing_resources", name)
         case .cryptoFailed(let detail):
-            return "Lỗi máy chủ khi giải mã gói mod: \(detail)"
+            return lang.text("merge.error.crypto", detail)
         case .assetBundleMergeFailed(let detail):
-            return "Lỗi máy chủ khi hợp nhất AssetBundle: \(detail)"
+            return lang.text("merge.error.asset_bundle", detail)
         case .msesParseFailed(let detail):
-            return "Lỗi máy chủ khi hợp nhất bảng dữ liệu Databin MSES: \(detail)"
+            return lang.text("merge.error.mses", detail)
         case .ifixPatchFailed(let detail):
-            return "Lỗi máy chủ khi hợp nhất Thanos IFix Bytecode: \(detail)"
+            return lang.text("merge.error.ifix", detail)
         case .zipCreationFailed(let detail):
-            return "Lỗi đóng gói tệp .zip đầu ra: \(detail)"
+            return lang.text("merge.error.zip_creation", detail)
         case .sizeLimitExceeded:
-            return "Tệp vượt quá giới hạn 3.6 GB."
+            return lang.text("merge.error.size_limit")
         }
     }
 }
@@ -112,7 +114,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
     public func inspectModArchive(at url: URL) throws -> AovModSummary {
         guard url.pathExtension.lowercased() != "3105" else {
             throw AovModMergerError.invalidArchive(
-                "\(url.lastPathComponent) (Chức năng gộp chỉ hỗ trợ tệp .zip)"
+                AppLanguage.current.text("merge.error.only_zip_entry", url.lastPathComponent)
             )
         }
 
@@ -128,7 +130,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
         guard let handle = try? FileHandle(forReadingFrom: url),
               let magic = try? handle.read(upToCount: 2),
               magic.count == 2, magic[0] == 0x50, magic[1] == 0x4B else {
-            throw AovModMergerError.invalidArchive("\(url.lastPathComponent) (Không phải tệp .zip hợp lệ)")
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
+            )
         }
         try? handle.close()
 
@@ -203,14 +207,14 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
 
         // BƯỚC 1: Đọc nhanh danh mục Central Directory của tất cả các gói mod (< 5ms mỗi gói)
-        progress("Đang đọc danh mục các gói mod...", 0.05)
+        progress(AppLanguage.current.text("merge.progress.reading_catalog"), 0.05)
 
         let modMetas: [ModMetadata] = try await Task.detached(priority: .userInitiated) { () -> [ModMetadata] in
             var items: [ModMetadata] = []
             for (idx, url) in inputURLs.enumerated() {
                 guard url.pathExtension.lowercased() != "3105" else {
                     throw AovModMergerError.invalidArchive(
-                        "\(url.lastPathComponent) (Chức năng gộp chỉ hỗ trợ tệp .zip)"
+                        AppLanguage.current.text("merge.error.only_zip_entry", url.lastPathComponent)
                     )
                 }
 
@@ -231,7 +235,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }.value
 
         let summaries = modMetas.map(\.summary)
-        let logs = summaries.map { "Đã đọc \($0.fileName) (\($0.fileSize) byte)." }
+        let logs = summaries.map { AppLanguage.current.text("merge.log.read_archive", $0.fileName, $0.fileSize) }
 
         let targetVersion = Self.resolveTargetVersion(summaries)
 
@@ -329,7 +333,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
         var blobAliases: [[String: Any]] = []
         var firstBlobSourceBySignature: [String: (modIndex: Int, path: String)] = [:]
         if !collidingRefs.isEmpty {
-            progress("Đang trích xuất \(detectedConflicts) tệp cấu hình", 0.2)
+            progress(AppLanguage.current.text("merge.progress.extracting_configs", detectedConflicts), 0.2)
             for ref in collidingRefs {
                 let sourceVer = modMetas[ref.modIndex].summary.resourceVersion
                 let canonical = Self.normalizeAovPath(ref.originalPath, fallbackVersion: targetVersion) ?? ref.originalPath
@@ -382,15 +386,15 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
         guard let configData = try? JSONSerialization.data(withJSONObject: configObject, options: [.sortedKeys]),
               let configJSON = String(data: configData, encoding: .utf8) else {
-            throw AovModMergerError.zipCreationFailed("Không dựng được cấu hình gửi máy chủ.")
+            throw AovModMergerError.zipCreationFailed(AppLanguage.current.text("merge.error.build_config"))
         }
 
-        progress("Đang gửi lên máy chủ để gộp", 0.5)
+        progress(AppLanguage.current.text("merge.progress.uploading_server"), 0.5)
 
         let planResult = await APIService.shared.mergePlan(
             fileURL: configBundleURL,
             configJSON: configJSON,
-            licenseKey: LicenseManager.shared.licenseKey,
+            token: LicenseManager.shared.authToken,
             hwid: LicenseManager.shared.deviceIdentifier
         )
 
@@ -399,13 +403,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
         case .success(let response):
             plan = response
         case .failure(let error):
-            throw AovModMergerError.invalidArchive("Máy chủ gộp: \(error.localizedDescription)")
+            throw AovModMergerError.invalidArchive(AppLanguage.current.text("merge.error.server_prefix", error.localizedDescription))
         }
         guard plan.ok else {
-            throw AovModMergerError.invalidArchive("Máy chủ trả về không hợp lệ.")
+            throw AovModMergerError.invalidArchive(AppLanguage.current.text("merge.error.invalid_server_response"))
         }
 
-        progress("Đang đóng gói tệp .zip ", 0.75)
+        progress(AppLanguage.current.text("merge.progress.packing_zip"), 0.75)
 
         // BƯỚC 5: Nhận và giải nén các file server đã merge (nếu có)
         var serverMergedEntries: [String: Data] = [:]
@@ -479,7 +483,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 guard !serverMergedKeys.contains(normalizedKey) else { continue }
                 guard let refs = pathGroups[normalizedKey], let winner = refs.last else { continue }
                 guard let sourceHandle = modHandles[winner.modIndex] else {
-                    throw AovModMergerError.invalidArchive("Không thể mở tệp mod nguồn: \(inputURLs[winner.modIndex].lastPathComponent)")
+                    throw AovModMergerError.invalidArchive(
+                        AppLanguage.current.text("merge.error.open_source_mod", inputURLs[winner.modIndex].lastPathComponent)
+                    )
                 }
 
                 // Các gói .pkg.bytes phải luôn đóng gói ở chế độ STORE (method 0) cả lớp ngoài lẫn entry bên trong
@@ -514,8 +520,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
             let mergedConflicts = plan.mergePlan?.conflicts ?? detectedConflicts
             let serverFilesCount = serverMergedEntries.count
 
-            let finalLogs = logs + ["Máy chủ trả \(serverFilesCount) file đã gộp (xung đột: \(mergedConflicts))."]
-            progress("Hoàn tất", 1.0)
+            let finalLogs = logs + [AppLanguage.current.text("merge.log.server_merged", serverFilesCount, mergedConflicts)]
+            progress(AppLanguage.current.text("merge.progress.done"), 1.0)
 
             return AovMergeResult(
                 outputZipURL: outURL,

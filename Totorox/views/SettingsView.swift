@@ -11,8 +11,8 @@ struct SettingsView: View {
     @State private var showClearCacheAlert = false
     @State private var cacheClearedMessage = false
     @State private var didCopyUDID = false
-    @State private var didCopyLicenseKey = false
-    @State private var showSwitchKeyConfirm = false
+    @State private var showRedeemSheet = false
+    @State private var showLogoutConfirm = false
 
     private var appVersionDisplay: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1"
@@ -172,7 +172,7 @@ struct SettingsView: View {
                         TotoroxLinkRow(
                             urlString: "https://github.com/VannHoc",
                             title: "VannHoc",
-                            subtitle: "Founder & Lead Developer"
+                            subtitle: language.text("settings.founder_subtitle")
                         )
 
                         Divider()
@@ -192,6 +192,11 @@ struct SettingsView: View {
                             .foregroundStyle(TotoroxTheme.textSecondary)
                     }
                     .totoroxCard()
+
+                    // Prominent red Logout CTA at the bottom (centered, non-full-width)
+                    logoutBottomButton
+                        .padding(.top, 6)
+                        .padding(.bottom, 12)
                 }
                 .padding(16)
             }
@@ -208,6 +213,10 @@ struct SettingsView: View {
             .sheet(isPresented: $showLogs) {
                 LogView()
             }
+            .sheet(isPresented: $showRedeemSheet) {
+                RedeemCodeSheet()
+                    .preferredColorScheme(.light)
+            }
             .alert(language.text("settings.clear_cache_confirm_title"), isPresented: $showClearCacheAlert) {
                 Button(language.text("common.delete"), role: .destructive) {
                     clearTemporaryCache()
@@ -219,17 +228,17 @@ struct SettingsView: View {
             .alert(language.text("settings.clear_cache_success"), isPresented: $cacheClearedMessage) {
                 Button(language.text("common.ok"), role: .cancel) {}
             }
-            .alert(language.text("settings.license_switch_confirm_title"), isPresented: $showSwitchKeyConfirm) {
-                Button(language.text("settings.license_switch_confirm_action"), role: .destructive) {
+            .alert(language.text("account.logout_confirm_title"), isPresented: $showLogoutConfirm) {
+                Button(language.text("account.logout_button"), role: .destructive) {
                     dismiss()
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 180_000_000)
-                        license.deactivate()
+                        await license.logout()
                     }
                 }
                 Button(language.text("common.cancel"), role: .cancel) {}
             } message: {
-                Text(language.text("settings.license_switch_confirm_msg"))
+                Text(language.text("account.logout_confirm_msg"))
             }
         }
     }
@@ -237,7 +246,7 @@ struct SettingsView: View {
     private var licenseAndDeviceCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Text(language.text("settings.section_license"))
+                Text(language.text("account.section_title"))
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textSecondary)
 
@@ -245,64 +254,70 @@ struct SettingsView: View {
 
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(license.status.isActive ? TotoroxTheme.mintAccent : Color.orange)
+                        .fill(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
                         .frame(width: 7, height: 7)
-                    Text(license.status.isActive ? language.text("settings.license_status_active") : language.text("settings.license_status_unlicensed"))
+                    Text(license.hasActivePlan ? language.text("account.status_active_plan") : language.text("account.status_no_plan"))
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(license.status.isActive ? TotoroxTheme.mintAccent : Color.orange)
+                        .foregroundStyle(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background((license.status.isActive ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
+                .background((license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
                 .clipShape(Capsule())
             }
 
-            // Active License Key
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Image(systemName: "key.fill")
-                        .font(.system(size: 16))
+            settingsRow(
+                label: language.text("account.username_label"),
+                value: license.username.isEmpty ? "—" : license.username,
+                icon: "person.crop.circle.fill",
+                isAccent: true
+            )
+
+            Divider()
+
+            settingsRow(
+                label: language.text("settings.license_expires_label"),
+                value: license.formattedExpiry(language: language, short: false),
+                icon: "calendar.badge.clock"
+            )
+
+            Divider()
+
+            settingsRow(
+                label: language.text("settings.license_remaining_label"),
+                value: license.formattedRemainingUses(language: language),
+                icon: "speedometer",
+                isAccent: license.hasActivePlan
+            )
+
+            if license.isUnlimited, let dailyUsed = license.currentUser?.dailyUsed, let dailyCap = license.currentUser?.dailyCap {
+                Divider()
+                settingsRow(
+                    label: language.text("account.daily_usage_label"),
+                    value: "\(dailyUsed) / \(dailyCap)",
+                    icon: "shield.checkered"
+                )
+            }
+
+            Divider()
+
+            // Redeem Code Button
+            Button {
+                showRedeemSheet = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "ticket.fill")
                         .foregroundStyle(TotoroxTheme.mintAccent)
                         .frame(width: 24)
-
-                    Text(language.text("settings.license_key_label"))
-                        .font(.system(size: 14))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-
+                    Text(language.text("account.redeem_button"))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
                     Spacer()
-
-                    if !license.licenseKey.isEmpty {
-                        copyBadgeButton(
-                            copied: didCopyLicenseKey,
-                            copiedLabel: language.text("settings.license_copied_key")
-                        ) {
-                            copyToClipboard(license.licenseKey, isUDID: false)
-                        }
-                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
                 }
-
-                Text(license.licenseKey.isEmpty ? "—" : license.licenseKey)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .padding(.leading, 34)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 2)
-
-            if case .active(let expiresAt, let remaining, let dailyQuota) = license.status {
-                Divider()
-                settingsRow(
-                    label: language.text("settings.license_expires_label"),
-                    value: formattedExpiry(expiresAt),
-                    icon: "calendar.badge.clock"
-                )
-                Divider()
-                settingsRow(
-                    label: language.text("settings.license_remaining_label"),
-                    value: formattedRemaining(remaining: remaining, dailyQuota: dailyQuota),
-                    icon: "speedometer"
-                )
+                .padding(.vertical, 4)
             }
 
             Divider()
@@ -325,7 +340,7 @@ struct SettingsView: View {
                         copied: didCopyUDID,
                         copiedLabel: language.text("activation.copied_udid")
                     ) {
-                        copyToClipboard(license.deviceIdentifier, isUDID: true)
+                        copyToClipboard(license.deviceIdentifier)
                     }
                 }
 
@@ -365,28 +380,52 @@ struct SettingsView: View {
                 .padding(.vertical, 4)
             }
             .disabled(license.isRefreshing)
-
-            Divider()
-
-            Button {
-                showSwitchKeyConfirm = true
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .foregroundStyle(Color.orange)
-                        .frame(width: 24)
-                    Text(language.text("settings.license_switch_btn"))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12))
-                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
-                }
-                .padding(.vertical, 4)
-            }
         }
         .totoroxCard()
+    }
+
+    private var logoutBottomButton: some View {
+        HStack {
+            Spacer(minLength: 0)
+
+            Button {
+                showLogoutConfirm = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 17, weight: .bold))
+                    Text(language.text("account.logout_button"))
+                        .font(.system(size: 16, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 40)
+                .frame(minWidth: 210, minHeight: 54)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.96, green: 0.27, blue: 0.30),
+                            Color(red: 0.82, green: 0.14, blue: 0.20),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+                )
+                .shadow(
+                    color: Color(red: 0.86, green: 0.16, blue: 0.22).opacity(0.32),
+                    radius: 12,
+                    x: 0,
+                    y: 6
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+        }
     }
 
     private func copyBadgeButton(copied: Bool, copiedLabel: String, action: @escaping () -> Void) -> some View {
@@ -406,45 +445,16 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
-    private func copyToClipboard(_ value: String, isUDID: Bool) {
+    private func copyToClipboard(_ value: String) {
         UIPasteboard.general.string = value
         withAnimation(.easeInOut(duration: 0.2)) {
-            if isUDID {
-                didCopyUDID = true
-            } else {
-                didCopyLicenseKey = true
-            }
+            didCopyUDID = true
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation(.easeInOut(duration: 0.2)) {
-                if isUDID {
-                    didCopyUDID = false
-                } else {
-                    didCopyLicenseKey = false
-                }
+                didCopyUDID = false
             }
         }
-    }
-
-    private func formattedExpiry(_ date: Date?) -> String {
-        guard let date else {
-            return language.text("settings.license_lifetime")
-        }
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
-    private func formattedRemaining(remaining: Int?, dailyQuota: Int?) -> String {
-        guard let remaining, remaining >= 0 else {
-            return language.text("settings.license_unlimited")
-        }
-        if let dailyQuota, dailyQuota > 0 {
-            return "\(remaining) / \(dailyQuota)"
-        }
-        return "\(remaining)"
     }
 
     private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false, isVertical: Bool = false) -> some View {

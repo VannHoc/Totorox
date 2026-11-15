@@ -53,14 +53,14 @@ enum FileReplacementError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .targetMissing: return "The target file no longer exists."
-        case .sourceMissing: return "The selected replacement file is unavailable."
-        case .targetIsDirectory: return "Folders cannot be replaced with this action."
-        case .sourceIsDirectory: return "Select a file, not a folder."
-        case .sameFile: return "A file cannot replace itself."
-        case .symbolicLinkUnsupported: return "Symbolic links are not supported."
-        case .sourceTooLarge: return "The selected file is too large."
-        case .replacementFailed: return "The file could not be replaced safely."
+        case .targetMissing: return AppLanguage.current.text("error.replace.target_missing")
+        case .sourceMissing: return AppLanguage.current.text("error.replace.source_missing")
+        case .targetIsDirectory: return AppLanguage.current.text("error.replace.target_is_directory")
+        case .sourceIsDirectory: return AppLanguage.current.text("error.replace.source_is_directory")
+        case .sameFile: return AppLanguage.current.text("error.replace.same_file")
+        case .symbolicLinkUnsupported: return AppLanguage.current.text("error.replace.symlink_unsupported")
+        case .sourceTooLarge: return AppLanguage.current.text("error.replace.source_too_large")
+        case .replacementFailed: return AppLanguage.current.text("error.replace.failed")
         }
     }
 }

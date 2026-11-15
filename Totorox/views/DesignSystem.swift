@@ -85,12 +85,96 @@ struct TotoroxTopHeader: View {
     }
 }
 
+// MARK: - Account Status Strip
+
+struct AccountStatusBar: View {
+    @ObservedObject private var license = LicenseManager.shared
+    @Environment(\.appLanguage) private var language
+
+    var onRedeemTapped: () -> Void
+    var onLogoutTapped: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Username + Expiry + Quota
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
+
+                Text(license.username.isEmpty ? "—" : license.username)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .lineLimit(1)
+
+                Text("•")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+
+                Text(license.formattedExpiry(language: language, short: true))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(license.hasActivePlan ? TotoroxTheme.textSecondary : Color.orange)
+                    .lineLimit(1)
+
+                Text(license.formattedRemainingUses(language: language))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background((license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
+                    .clipShape(Capsule())
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(action: onRedeemTapped) {
+                HStack(spacing: 3) {
+                    Image(systemName: "ticket.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(language.text("account.status_redeem"))
+                        .font(.system(size: 11, weight: .bold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(TotoroxTheme.mintAccent)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onLogoutTapped) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .padding(6)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(language.text("account.logout_button"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(TotoroxTheme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(TotoroxTheme.divider, lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+    }
+}
+
 // MARK: - Reusable Search Bar Component
 
 struct TotoroxSearchBar: View {
     @Binding var text: String
-    var placeholder: String = "Tìm container hoặc tệp..."
+    var placeholder: String? = nil
     var onFilterTapped: (() -> Void)? = nil
+    @Environment(\.appLanguage) private var language
 
     var body: some View {
         HStack(spacing: 10) {
@@ -98,7 +182,7 @@ struct TotoroxSearchBar: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(TotoroxTheme.textSecondary)
 
-            TextField(placeholder, text: $text)
+            TextField(placeholder ?? language.text("search.default_placeholder"), text: $text)
                 .font(.system(size: 15))
                 .foregroundStyle(TotoroxTheme.textPrimary)
 

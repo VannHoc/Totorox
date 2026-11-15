@@ -13,6 +13,15 @@ enum FolderSortOption: String, CaseIterable, Identifiable {
     case dateDesc = "Ngày sửa đổi (Mới nhất)"
 
     var id: String { rawValue }
+
+    func displayTitle(language: AppLanguage) -> String {
+        switch self {
+        case .nameAsc: return language.text("folders.sort.name_asc")
+        case .nameDesc: return language.text("folders.sort.name_desc")
+        case .userAppsFirst: return language.text("folders.sort.user_apps_first")
+        case .dateDesc: return language.text("folders.sort.date_desc")
+        }
+    }
 }
 
 // MARK: - DirectoryViewModel (Pure Read-Only Disk Directory Browser by Absolute Path)
@@ -141,6 +150,7 @@ final class AppListViewModel: ObservableObject {
 }
 
 struct FolderExplorerView: View {
+    @Environment(\.appLanguage) private var language
     @StateObject private var directoryVM = DirectoryViewModel()
     @StateObject private var appListVM = AppListViewModel()
     @State private var currentURL: URL
@@ -229,7 +239,7 @@ struct FolderExplorerView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 13, weight: .bold))
-                            Text("Lùi")
+                            Text(language.text("folders.nav_back"))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                         }
@@ -244,14 +254,14 @@ struct FolderExplorerView: View {
 
                     // Quick location shortcuts
                     Menu {
-                        Button("Thư mục Documents") {
+                        Button(language.text("folders.quick.documents")) {
                             navigateTo(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!)
                         }
-                        Button("Thư mục Containers (AppData)") {
+                        Button(language.text("folders.quick.containers")) {
                             let containers = URL(fileURLWithPath: ContainerStore.appDataRoot)
                             navigateTo(containers)
                         }
-                        Button("Thư mục Tạm (Tmp)") {
+                        Button(language.text("folders.quick.tmp")) {
                             navigateTo(FileManager.default.temporaryDirectory)
                         }
                     } label: {
@@ -259,7 +269,7 @@ struct FolderExplorerView: View {
                             Image(systemName: "folder.badge.gearshape")
                                 .font(.system(size: 13))
                                 .foregroundStyle(TotoroxTheme.mintAccent)
-                            Text("Vị trí nhanh")
+                            Text(language.text("folders.quick_locations"))
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .lineLimit(1)
@@ -278,9 +288,9 @@ struct FolderExplorerView: View {
 
                     // Sort Menu Button
                     Menu {
-                        Picker("Sắp xếp", selection: $sortOption) {
+                        Picker(language.text("folders.sort_by"), selection: $sortOption) {
                             ForEach(FolderSortOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
+                                Text(option.displayTitle(language: language)).tag(option)
                             }
                         }
                     } label: {
@@ -386,8 +396,8 @@ struct FolderExplorerView: View {
                 TotoroxSearchBar(
                     text: $searchText,
                     placeholder: ContainerMetadataCache.isApplicationContainersRoot(currentURL.path)
-                        ? "Tìm ứng dụng hoặc Bundle ID..."
-                        : "Tìm kiếm trong thư mục này..."
+                        ? language.text("overwrite.search_apps_placeholder")
+                        : language.text("folders.search_in_folder")
                 )
 
                 // Thanh hiển thị tiến trình tác vụ tệp (Copy/Paste, Giải nén, Nhập, Xóa...)
@@ -413,14 +423,14 @@ struct FolderExplorerView: View {
                                     ProgressView()
                                         .scaleEffect(1.2)
                                         .padding(.bottom, 4)
-                                    Text("Đang tải nội dung...")
+                                    Text(language.text("folders.loading_content"))
                                         .font(.system(size: 14))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                 } else {
                                     Image(systemName: "folder")
                                         .font(.system(size: 44))
                                         .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
-                                    Text(searchText.isEmpty ? "Thư mục trống hoặc không có quyền đọc" : "Không tìm thấy mục phù hợp")
+                                    Text(searchText.isEmpty ? language.text("folders.empty_or_unreadable") : language.text("overwrite.folder.no_match"))
                                         .font(.system(size: 14))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
@@ -435,7 +445,7 @@ struct FolderExplorerView: View {
 
                             let fileCount = visibleEntries.filter { !$0.isDirectory }.count
                             let dirCount = visibleEntries.filter { $0.isDirectory }.count
-                            Text("\(visibleEntries.count) mục (\(fileCount) tệp, \(dirCount) thư mục)")
+                            Text(language.text("folders.summary_status", visibleEntries.count, fileCount, dirCount))
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(TotoroxTheme.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -490,29 +500,29 @@ struct FolderExplorerView: View {
                 navigateTo(url)
             }
         }
-        .alert("Tạo thư mục mới", isPresented: $showNewFolderDialog) {
-            TextField("Tên thư mục", text: $newFolderName)
-            Button("Tạo") {
+        .alert(language.text("folders.new_folder.title"), isPresented: $showNewFolderDialog) {
+            TextField(language.text("folders.new_folder.placeholder"), text: $newFolderName)
+            Button(language.text("folders.new_folder.create_btn")) {
                 createNewFolder()
             }
-            Button("Hủy", role: .cancel) {}
+            Button(language.text("common.cancel"), role: .cancel) {}
         }
-        .alert("Đổi tên", isPresented: $showRenameDialog) {
-            TextField("Tên mới", text: $newRenameName)
-            Button("Lưu") {
+        .alert(language.text("folders.rename.title"), isPresented: $showRenameDialog) {
+            TextField(language.text("folders.rename.placeholder"), text: $newRenameName)
+            Button(language.text("folders.rename.save_btn")) {
                 applyRename()
             }
-            Button("Hủy", role: .cancel) {}
+            Button(language.text("common.cancel"), role: .cancel) {}
         }
-        .alert("Xác nhận xóa?", isPresented: $showDeleteConfirmation) {
-            Button("Xóa vĩnh viễn", role: .destructive) {
+        .alert(language.text("folders.delete_confirm_title"), isPresented: $showDeleteConfirmation) {
+            Button(language.text("folders.delete_forever_btn"), role: .destructive) {
                 applyDelete()
             }
-            Button("Hủy", role: .cancel) {}
+            Button(language.text("common.cancel"), role: .cancel) {}
         } message: {
-            Text("Thao tác này sẽ xóa '\(itemToDelete?.name ?? "")' và không thể hoàn tác.")
+            Text(language.text("folders.delete_confirm_message", itemToDelete?.name ?? ""))
         }
-        .alert("Không thể thực hiện", isPresented: $showOperationError) {
+        .alert(language.text("folders.error.cannot_perform"), isPresented: $showOperationError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(operationErrorMessage)
@@ -531,7 +541,7 @@ struct FolderExplorerView: View {
             FileInfoInspectorSheet(entry: entry)
         }
         .confirmationDialog(
-            "Giải nén tệp: \(selectedArchiveForExtraction?.name ?? "")",
+            language.text("folders.extract.title", selectedArchiveForExtraction?.name ?? ""),
             isPresented: Binding(
                 get: { selectedArchiveForExtraction != nil },
                 set: { if !$0 { selectedArchiveForExtraction = nil } }
@@ -539,13 +549,13 @@ struct FolderExplorerView: View {
             titleVisibility: .visible
         ) {
             if let entry = selectedArchiveForExtraction {
-                Button("Giải nén tại đây (Extract Here)") {
+                Button(language.text("folders.extract.here")) {
                     extractArchive(entry: entry, intoNewFolder: false)
                 }
-                Button("Giải nén vào thư mục mới") {
+                Button(language.text("folders.extract.into_new_folder")) {
                     extractArchive(entry: entry, intoNewFolder: true)
                 }
-                Button("Hủy", role: .cancel) {
+                Button(language.text("common.cancel"), role: .cancel) {
                     selectedArchiveForExtraction = nil
                 }
             }
@@ -628,11 +638,11 @@ struct FolderExplorerView: View {
                         HStack(spacing: 6) {
                             if entry.isDirectory {
                                 HStack(spacing: 4) {
-                                    Text("Thư mục")
+                                    Text(language.text("folders.folder_type"))
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundStyle(TotoroxTheme.mintAccent)
                                     if let count = entry.childCount {
-                                        Text("(\(count) tệp)")
+                                        Text(language.text("common.files_paren_count", count))
                                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                                             .foregroundStyle(TotoroxTheme.mintAccent)
                                     }
@@ -713,7 +723,7 @@ struct FolderExplorerView: View {
         Button {
             inspectingEntry = entry
         } label: {
-            Label("Thông tin chi tiết (Get Info)", systemImage: "info.circle")
+            Label(language.text("folders.menu.get_info"), systemImage: "info.circle")
         }
 
         let lower = entry.name.lowercased()
@@ -722,12 +732,12 @@ struct FolderExplorerView: View {
             Button {
                 extractArchive(entry: entry, intoNewFolder: false)
             } label: {
-                Label("Giải nén tại đây (Extract Here)", systemImage: "archivebox")
+                Label(language.text("folders.extract.here"), systemImage: "archivebox")
             }
             Button {
                 extractArchive(entry: entry, intoNewFolder: true)
             } label: {
-                Label("Giải nén vào thư mục mới", systemImage: "folder.badge.plus")
+                Label(language.text("folders.extract.into_new_folder"), systemImage: "folder.badge.plus")
             }
         }
 
@@ -737,14 +747,14 @@ struct FolderExplorerView: View {
             let itemURL = URL(fileURLWithPath: entry.path)
             clipboardItem = ClipboardItem(url: itemURL, isCut: false)
         } label: {
-            Label("Sao chép (Copy)", systemImage: "doc.on.doc")
+            Label(language.text("folders.menu.copy"), systemImage: "doc.on.doc")
         }
 
         Button {
             let itemURL = URL(fileURLWithPath: entry.path)
             clipboardItem = ClipboardItem(url: itemURL, isCut: true)
         } label: {
-            Label("Cắt (Cut)", systemImage: "scissors")
+            Label(language.text("folders.menu.cut"), systemImage: "scissors")
         }
 
         Button {
@@ -752,14 +762,14 @@ struct FolderExplorerView: View {
             newRenameName = entry.name
             showRenameDialog = true
         } label: {
-            Label("Đổi tên", systemImage: "pencil")
+            Label(language.text("folders.menu.rename"), systemImage: "pencil")
         }
 
         Button {
             shareURL = URL(fileURLWithPath: entry.path)
             showShareSheet = true
         } label: {
-            Label("Chia sẻ", systemImage: "square.and.arrow.up")
+            Label(language.text("folders.action_share"), systemImage: "square.and.arrow.up")
         }
 
         Divider()
@@ -768,7 +778,7 @@ struct FolderExplorerView: View {
             itemToDelete = entry
             showDeleteConfirmation = true
         } label: {
-            Label("Xóa", systemImage: "trash")
+            Label(language.text("folders.action_delete"), systemImage: "trash")
         }
     }
 
@@ -780,7 +790,7 @@ struct FolderExplorerView: View {
                 .foregroundStyle(TotoroxTheme.mintAccent)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(clip.isCut ? "Đang cắt:" : "Đang giữ bản sao:")
+                Text(clip.isCut ? language.text("folders.clipboard.cutting") : language.text("folders.clipboard.copying"))
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textSecondary)
                 Text(clip.url.lastPathComponent)
@@ -794,7 +804,7 @@ struct FolderExplorerView: View {
             Button {
                 executePasteAction(clip)
             } label: {
-                Text("Dán vào đây")
+                Text(language.text("folders.clipboard.paste_here"))
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
@@ -930,7 +940,7 @@ struct FolderExplorerView: View {
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                 } else if activeTaskCompletedCount > 0 {
-                    Text("\(activeTaskCompletedCount) mục")
+                    Text(language.text("common.items_count", activeTaskCompletedCount))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                 }
@@ -1043,22 +1053,23 @@ struct FolderExplorerView: View {
         do {
             folderName = try FileManagerService.validatedName(newFolderName)
         } catch {
-            presentOperationError("Tên thư mục không hợp lệ. Không dùng '/', '\\', '..' hoặc ký tự điều khiển.")
+            presentOperationError(language.text("folders.error.invalid_folder_name"))
             return
         }
 
         let target = baseDir.appendingPathComponent(folderName, isDirectory: true)
         if FileManager.default.fileExists(atPath: target.path) {
-            presentOperationError("Thư mục '\(folderName)' đã tồn tại.")
+            presentOperationError(language.text("folders.error.folder_exists", folderName))
             return
         }
 
+        let activeLanguage = language
         Task.detached(priority: .userInitiated) {
             do {
                 try await FileIOEngine.shared.createFolder(at: target)
             } catch {
                 await MainActor.run {
-                    self.presentOperationError("Không thể tạo thư mục: \(error.localizedDescription)")
+                    self.presentOperationError(activeLanguage.text("folders.error.create_folder_failed", error.localizedDescription))
                 }
                 return
             }
@@ -1077,7 +1088,7 @@ struct FolderExplorerView: View {
         do {
             newName = try FileManagerService.validatedName(newRenameName)
         } catch {
-            presentOperationError("Tên mới không hợp lệ. Không dùng '/', '\\', '..' hoặc ký tự điều khiển.")
+            presentOperationError(language.text("folders.error.invalid_new_name"))
             return
         }
 
@@ -1088,16 +1099,17 @@ struct FolderExplorerView: View {
             return
         }
         if FileManager.default.fileExists(atPath: dst.path) {
-            presentOperationError("Đã tồn tại mục tên '\(newName)'. Hãy chọn tên khác để tránh ghi đè.")
+            presentOperationError(language.text("folders.error.name_exists", newName))
             return
         }
 
+        let activeLanguage = language
         Task.detached(priority: .userInitiated) {
             do {
                 try await FileIOEngine.shared.renameItem(at: src, to: dst)
             } catch {
                 await MainActor.run {
-                    self.presentOperationError("Không thể đổi tên: \(error.localizedDescription)")
+                    self.presentOperationError(activeLanguage.text("folders.error.rename_failed", error.localizedDescription))
                 }
                 return
             }
@@ -1112,7 +1124,8 @@ struct FolderExplorerView: View {
         guard let item = itemToDelete else { return }
         let baseDir = currentURL
         let src = URL(fileURLWithPath: item.path)
-        activeTaskTitle = "Đang xóa '\(item.name)'..."
+        let activeLanguage = language
+        activeTaskTitle = activeLanguage.text("folders.task.deleting", item.name)
         activeTaskSubtitle = item.name
         activeTaskCompletedCount = 0
         activeTaskTotalCount = 0
@@ -1123,7 +1136,7 @@ struct FolderExplorerView: View {
             } catch {
                 await MainActor.run {
                     self.activeTaskTitle = nil
-                    self.presentOperationError("Không thể xoá: \(error.localizedDescription)")
+                    self.presentOperationError(activeLanguage.text("folders.error.delete_failed", error.localizedDescription))
                 }
                 return
             }
@@ -1162,7 +1175,8 @@ struct FolderExplorerView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
 
-        activeTaskTitle = "Đang nhập tệp '\(fileName)'..."
+        let activeLanguage = language
+        activeTaskTitle = activeLanguage.text("folders.task.importing", fileName)
         activeTaskSubtitle = fileName
         activeTaskCompletedCount = 0
         activeTaskTotalCount = 1
@@ -1183,7 +1197,7 @@ struct FolderExplorerView: View {
                     if completed == 1 || completed == totalItems || completed % 4 == 0 {
                         Task { @MainActor in
                             self.activeTaskCompletedCount = completed
-                            self.activeTaskSubtitle = "Đã xử lý \(completed)/\(totalItems) mục • \(currentName)"
+                            self.activeTaskSubtitle = activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
                         }
                     }
                 },
@@ -1211,21 +1225,24 @@ struct FolderExplorerView: View {
             let sourcePath = source.path
             let sourcePrefix = sourcePath.hasSuffix("/") ? sourcePath : sourcePath + "/"
             if dest.path == sourcePath || dest.path.hasPrefix(sourcePrefix) {
-                presentOperationError("Không thể dán thư mục vào chính nó hoặc vào thư mục con của nó.")
+                presentOperationError(language.text("folders.error.paste_into_self"))
                 return
             }
         }
 
         if clip.isCut && source == dest {
-            presentOperationError("Mục này đang ở cùng thư mục nên không cần dán. Nguồn được giữ nguyên.")
+            presentOperationError(language.text("folders.error.cut_same_folder"))
             return
         }
 
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
+        let activeLanguage = language
 
-        activeTaskTitle = clip.isCut ? "Đang di chuyển '\(destName)'..." : "Đang sao chép '\(destName)'..."
-        activeTaskSubtitle = "Đang chuẩn bị dữ liệu..."
+        activeTaskTitle = clip.isCut
+            ? activeLanguage.text("folders.task.moving", destName)
+            : activeLanguage.text("folders.task.copying", destName)
+        activeTaskSubtitle = activeLanguage.text("folders.task.preparing")
         activeTaskCompletedCount = 0
         activeTaskTotalCount = 0
 
@@ -1234,7 +1251,7 @@ struct FolderExplorerView: View {
             let totalItems = Self.countItemsRecursively(at: source)
             await MainActor.run {
                 self.activeTaskTotalCount = totalItems
-                self.activeTaskSubtitle = "0/\(totalItems) mục • \(destName)"
+                self.activeTaskSubtitle = activeLanguage.text("folders.task.item_progress_init", totalItems, destName)
             }
             let result = await FileIOEngine.shared.copyAndMerge(
                 from: source,
@@ -1243,7 +1260,7 @@ struct FolderExplorerView: View {
                     if completed == 1 || completed == totalItems || completed % 4 == 0 {
                         Task { @MainActor in
                             self.activeTaskCompletedCount = completed
-                            self.activeTaskSubtitle = "Đã xử lý \(completed)/\(totalItems) mục • \(currentName)"
+                            self.activeTaskSubtitle = activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
                         }
                     }
                 },
@@ -1257,7 +1274,7 @@ struct FolderExplorerView: View {
                     result: result
                 ) {
                     await MainActor.run {
-                        self.activeTaskSubtitle = "Đang dọn dẹp tệp nguồn sau khi cắt..."
+                        self.activeTaskSubtitle = activeLanguage.text("folders.task.cleaning_cut_source")
                     }
                     do {
                         try await FileIOEngine.shared.deleteItem(at: source)
@@ -1295,8 +1312,9 @@ struct FolderExplorerView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
 
-        activeTaskTitle = "Đang giải nén '\(entry.name)'..."
-        activeTaskSubtitle = "Đang bung tệp nén..."
+        let activeLanguage = language
+        activeTaskTitle = activeLanguage.text("folders.task.extracting", entry.name)
+        activeTaskSubtitle = activeLanguage.text("folders.task.unpacking_archive")
         activeTaskCompletedCount = 0
         activeTaskTotalCount = 0
 
@@ -1355,7 +1373,7 @@ struct FolderExplorerView: View {
                 let totalItems = Self.countItemsRecursively(at: tempStaging)
                 await MainActor.run {
                     self.activeTaskTotalCount = totalItems
-                    self.activeTaskSubtitle = "Đang sao chép \(totalItems) mục vào thư mục đích..."
+                    self.activeTaskSubtitle = activeLanguage.text("folders.task.copying_extracted", totalItems)
                 }
 
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
@@ -1366,7 +1384,7 @@ struct FolderExplorerView: View {
                         if completed == 1 || completed == totalItems || completed % 4 == 0 {
                             Task { @MainActor in
                                 self.activeTaskCompletedCount = completed
-                                self.activeTaskSubtitle = "Đã chép \(completed)/\(totalItems) mục • \(currentName)"
+                                self.activeTaskSubtitle = activeLanguage.text("folders.task.copied_progress", completed, totalItems, currentName)
                             }
                         }
                     },
@@ -1388,9 +1406,9 @@ struct FolderExplorerView: View {
                     self.selectedArchiveForExtraction = nil
                     if let extractorError = error as? ZIPArchiveExtractorError,
                        extractorError == .expandedTooLarge {
-                        self.presentOperationError("Tệp ZIP vượt quá giới hạn giải nén 3.6 GB.")
+                        self.presentOperationError(activeLanguage.text("folders.error.zip_size_limit"))
                     } else {
-                        self.presentOperationError("Giải nén thất bại: \(error.localizedDescription)")
+                        self.presentOperationError(activeLanguage.text("folders.error.extract_failed", error.localizedDescription))
                     }
                     log("extraction failed: \(error.localizedDescription)")
                 }
@@ -1439,6 +1457,7 @@ struct FolderExplorerView: View {
 
 struct FileInfoInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appLanguage) private var language
     let entry: FileEntry
     @State private var copiedPath = false
     @State private var directorySizeText: String? = nil
@@ -1497,14 +1516,14 @@ struct FileInfoInspectorSheet: View {
 
                     // Details Card
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("THÔNG TIN CHI TIẾT")
+                        Text(language.text("folders.info.section_title"))
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textSecondary)
 
                         // Full path with copy button
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text("Đường dẫn đầy đủ:")
+                                Text(language.text("folders.info.full_path"))
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                 Spacer()
@@ -1517,7 +1536,7 @@ struct FileInfoInspectorSheet: View {
                                 } label: {
                                     HStack(spacing: 4) {
                                         Image(systemName: copiedPath ? "checkmark" : "doc.on.doc")
-                                        Text(copiedPath ? "Đã sao chép" : "Sao chép")
+                                        Text(copiedPath ? language.text("folders.info.copied") : language.text("folders.info.copy"))
                                     }
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -1539,7 +1558,7 @@ struct FileInfoInspectorSheet: View {
                         // Size row: for directories calculate recursively, for files show exact bytes
                         if entry.isDirectory {
                             HStack(alignment: .top) {
-                                Text("Dung lượng thư mục")
+                                Text(language.text("folders.info.folder_size"))
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
                                 Spacer()
@@ -1547,7 +1566,7 @@ struct FileInfoInspectorSheet: View {
                                     HStack(spacing: 6) {
                                         ProgressView()
                                             .scaleEffect(0.8)
-                                        Text("Đang tính toán...")
+                                        Text(language.text("folders.info.calculating"))
                                             .font(.system(size: 12))
                                             .foregroundStyle(TotoroxTheme.textSecondary)
                                     }
@@ -1563,17 +1582,17 @@ struct FileInfoInspectorSheet: View {
                                 }
                             }
                         } else {
-                            inspectorRow(label: "Kích thước chính xác", value: entry.exactBytesText)
+                            inspectorRow(label: language.text("folders.info.exact_size"), value: entry.exactBytesText)
                         }
 
                         Divider()
-                        inspectorRow(label: "Ngày tạo", value: entry.formattedCreatedDate ?? "Không có")
+                        inspectorRow(label: language.text("folders.info.created_at"), value: entry.formattedCreatedDate ?? language.text("folders.info.unavailable"))
                         Divider()
-                        inspectorRow(label: "Ngày sửa đổi", value: entry.formattedModifiedDate ?? "Không có")
+                        inspectorRow(label: language.text("folders.info.modified_at"), value: entry.formattedModifiedDate ?? language.text("folders.info.unavailable"))
                         Divider()
                         inspectorRow(
-                            label: "Quyền POSIX",
-                            value: "\(entry.symbolicPermissions) (Octal: \(entry.octalPermissions))"
+                            label: language.text("folders.info.posix_permissions"),
+                            value: language.text("folders.info.permissions_value", entry.symbolicPermissions, entry.octalPermissions)
                         )
                     }
                     .totoroxCard()
@@ -1581,11 +1600,11 @@ struct FileInfoInspectorSheet: View {
                 .padding(16)
             }
             .background(TotoroxTheme.pageBackground)
-            .navigationTitle("Thông tin chi tiết")
+            .navigationTitle(language.text("folders.info.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Xong") { dismiss() }
+                    Button(language.text("common.done")) { dismiss() }
                         .fontWeight(.bold)
                 }
             }

@@ -27,28 +27,28 @@ enum FileManagerOperationError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidName: return "Enter a valid file or folder name."
-        case .nameTooLong: return "The name is too long."
-        case .itemAlreadyExists: return "An item with this name already exists."
-        case .sourceMissing: return "The selected source file is unavailable."
-        case .destinationMissing: return "The destination no longer exists."
-        case .sourceIsDirectory: return "Select a file, not a folder."
-        case .destinationIsDirectory: return "A folder with this name already exists."
-        case .destinationNotDirectory: return "The destination is not a folder."
-        case .symbolicLinkUnsupported: return "Symbolic links are not supported."
-        case .recursiveDestination: return "A folder cannot be copied or moved into itself."
-        case .sourceTooLarge: return "The selected file is too large."
-        case .cannotCreate: return "The item could not be created."
-        case .cannotRename: return "The item could not be renamed."
-        case .cannotDelete: return "The item could not be deleted."
-        case .cannotImport: return "The file could not be imported safely."
-        case .cannotCopy: return "The selected items could not be copied."
-        case .cannotMove: return "The selected items could not be moved."
-        case .cannotArchive: return "The ZIP archive could not be created."
-        case .cannotExtract: return "The ZIP archive could not be extracted."
-        case .unsafeArchive: return "The ZIP archive contains unsafe or unsupported entries."
-        case .insufficientSpace: return "There is not enough free space to extract this archive."
-        case .expansionTooLarge: return "The archive expands beyond the 3.6 GB limit."
+        case .invalidName: return AppLanguage.current.text("error.filemanager.invalid_name")
+        case .nameTooLong: return AppLanguage.current.text("error.filemanager.name_too_long")
+        case .itemAlreadyExists: return AppLanguage.current.text("error.filemanager.item_exists")
+        case .sourceMissing: return AppLanguage.current.text("error.filemanager.source_missing")
+        case .destinationMissing: return AppLanguage.current.text("error.filemanager.destination_missing")
+        case .sourceIsDirectory: return AppLanguage.current.text("error.filemanager.source_is_dir")
+        case .destinationIsDirectory: return AppLanguage.current.text("error.filemanager.dest_is_dir")
+        case .destinationNotDirectory: return AppLanguage.current.text("error.filemanager.dest_not_dir")
+        case .symbolicLinkUnsupported: return AppLanguage.current.text("error.filemanager.symlink_unsupported")
+        case .recursiveDestination: return AppLanguage.current.text("error.filemanager.recursive_dest")
+        case .sourceTooLarge: return AppLanguage.current.text("error.filemanager.source_too_large")
+        case .cannotCreate: return AppLanguage.current.text("error.filemanager.cannot_create")
+        case .cannotRename: return AppLanguage.current.text("error.filemanager.cannot_rename")
+        case .cannotDelete: return AppLanguage.current.text("error.filemanager.cannot_delete")
+        case .cannotImport: return AppLanguage.current.text("error.filemanager.cannot_import")
+        case .cannotCopy: return AppLanguage.current.text("error.filemanager.cannot_copy")
+        case .cannotMove: return AppLanguage.current.text("error.filemanager.cannot_move")
+        case .cannotArchive: return AppLanguage.current.text("error.filemanager.cannot_archive")
+        case .cannotExtract: return AppLanguage.current.text("error.filemanager.cannot_extract")
+        case .unsafeArchive: return AppLanguage.current.text("error.filemanager.unsafe_archive")
+        case .insufficientSpace: return AppLanguage.current.text("error.filemanager.insufficient_space")
+        case .expansionTooLarge: return AppLanguage.current.text("error.filemanager.expansion_too_large")
         }
     }
 }
