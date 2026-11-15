@@ -614,3 +614,4 @@
 "error.filemanager.cannot_import" = "Could not import the file.";
 "error.filemanager.cannot_archive" = "Could not create ZIP archive.";
 "error.filemanager.cannot_extract" = "Could not extract ZIP archive.";
+"error.fileio.invalid_destination" = "Destination path is invalid or escapes the target folder.";

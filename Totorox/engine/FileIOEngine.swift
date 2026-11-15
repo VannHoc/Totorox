@@ -51,10 +51,12 @@ public struct FileIOResult: Equatable, Sendable {
 
 public enum FileIOEngineError: Error, Equatable, LocalizedError {
     case symbolicLinkUnsupported
+    case invalidDestination
 
     public var errorDescription: String? {
         switch self {
         case .symbolicLinkUnsupported: return AppLanguage.current.text("error.filemanager.symlink_unsupported")
+        case .invalidDestination: return AppLanguage.current.text("error.fileio.invalid_destination")
         }
     }
 }
@@ -940,9 +942,15 @@ public final class FileIOEngine: @unchecked Sendable {
                 let relDst = mapping.destination.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                 let srcParts = relSrc.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
                 let dstParts = relDst.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-                guard !srcParts.isEmpty, !dstParts.isEmpty,
-                      !srcParts.contains(".."), !dstParts.contains(".."),
-                      !srcParts.contains("."), !dstParts.contains(".") else {
+                guard !srcParts.isEmpty, !dstParts.isEmpty else {
+                    continue
+                }
+                if srcParts.contains("..") || dstParts.contains("..") ||
+                    srcParts.contains(".") || dstParts.contains(".") {
+                    result.failed.append(FileIOFailureRecord(
+                        url: dstBase.appendingPathComponent(relDst),
+                        reason: FileIOEngineError.invalidDestination.localizedDescription
+                    ))
                     continue
                 }
 

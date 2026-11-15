@@ -161,7 +161,7 @@ struct AccountStatusBar: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(TotoroxTheme.divider, lineWidth: 1)
+                .stroke(TotoroxTheme.dividerColor, lineWidth: 1)
         )
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
