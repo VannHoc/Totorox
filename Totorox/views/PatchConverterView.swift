@@ -72,117 +72,117 @@ struct PatchConverterView: View {
     private static let historyStorageKey = "totorox.patch.history.v1"
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 20) {
-                // Header description
-                VStack(spacing: 4) {
-                    Text(language.text("converter.header.title"))
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                        .multilineTextAlignment(.center)
+        GeometryReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 18) {
+                    // Header description
+                    VStack(spacing: 4) {
+                        Text(language.text("converter.header.title"))
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .multilineTextAlignment(.center)
 
-                    Text(language.text("converter.header.subtitle"))
-                        .font(.system(size: 13))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.top, 8)
-                .padding(.horizontal, 16)
-
-                // Direction Pill Switcher
-                HStack(spacing: 8) {
-                    ForEach(ConverterDirection.allCases) { dir in
-                        let isSelected = (direction == dir)
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                direction = dir
-                                inspectGeneration = UUID()
-                                selectedSourceURL = nil
-                                sourceMetadataSummary = nil
-                                isSourceValid = false
-                                isSourcePasswordProtected = false
-                                sourcePasswordText = ""
-                                outputFileNameText = ""
-                                outputPasswordText = ""
-                                convertedFileURL = nil
-                                conversionError = nil
-                            }
-                        } label: {
-                            Text(dir.displayTitle(language: language))
-                                .font(.system(size: 14, weight: isSelected ? .bold : .medium))
-                                .foregroundColor(isSelected ? .white : TotoroxTheme.textSecondary)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 10)
-                                .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
+                        Text(language.text("converter.header.subtitle"))
+                            .font(.system(size: 13))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .multilineTextAlignment(.center)
                     }
-                }
-                .padding(.horizontal, 16)
 
-                // Dropzone / File Picker Card
-                VStack(spacing: 12) {
+                    // Direction Pill Switcher
+                    HStack(spacing: 8) {
+                        ForEach(ConverterDirection.allCases) { dir in
+                            let isSelected = (direction == dir)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    direction = dir
+                                    inspectGeneration = UUID()
+                                    selectedSourceURL = nil
+                                    sourceMetadataSummary = nil
+                                    isSourceValid = false
+                                    isSourcePasswordProtected = false
+                                    sourcePasswordText = ""
+                                    outputFileNameText = ""
+                                    outputPasswordText = ""
+                                    convertedFileURL = nil
+                                    conversionError = nil
+                                }
+                            } label: {
+                                Text(dir.displayTitle(language: language))
+                                    .font(.system(size: 14, weight: isSelected ? .bold : .medium))
+                                    .foregroundColor(isSelected ? .white : TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 10)
+                                    .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    // Dropzone / File Picker Card
                     if let source = selectedSourceURL {
-                        // Selected File Info Card
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(TotoroxTheme.mintAccent.opacity(0.12))
-                                    .frame(width: 48, height: 48)
-                                Image(systemName: direction == .zipToPatch ? "doc.zipper" : "archivebox.fill")
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                        VStack(spacing: 12) {
+                            HStack(spacing: 14) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(TotoroxTheme.mintAccent.opacity(0.12))
+                                        .frame(width: 48, height: 48)
+                                    Image(systemName: direction == .zipToPatch ? "doc.zipper" : "archivebox.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(source.lastPathComponent)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+
+                                    HStack(spacing: 8) {
+                                        Text(sourceFileSizeText)
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .foregroundStyle(TotoroxTheme.textSecondary)
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
+
+                                        TotoroxBadge(
+                                            title: language.text(direction == .zipToPatch ? "converter.badge.zip_source" : "converter.badge.3105_source"),
+                                            isAccent: true
+                                        )
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Button(language.text("converter.button.change_file")) {
+                                    showFilePicker = true
+                                }
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .fixedSize(horizontal: true, vertical: false)
                             }
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(source.lastPathComponent)
-                                    .font(.system(size: 15, weight: .bold))
-                                    .foregroundStyle(TotoroxTheme.textPrimary)
-                                    .lineLimit(1)
-
-                                HStack(spacing: 8) {
-                                    Text(sourceFileSizeText)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(TotoroxTheme.textSecondary)
-                                        .lineLimit(1)
-                                        .fixedSize(horizontal: true, vertical: false)
-
-                                    TotoroxBadge(
-                                        title: language.text(direction == .zipToPatch ? "converter.badge.zip_source" : "converter.badge.3105_source"),
-                                        isAccent: true
-                                    )
+                            if let summary = sourceMetadataSummary {
+                                Divider()
+                                let summaryIcon: String = isSourceValid
+                                    ? "info.circle"
+                                    : (isSourcePasswordProtected ? "lock.circle" : "exclamationmark.triangle.fill")
+                                let summaryColor: Color = isSourceValid
+                                    ? TotoroxTheme.mintAccent
+                                    : (isSourcePasswordProtected ? Color.orange : Color.red)
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: summaryIcon)
+                                        .foregroundStyle(summaryColor)
+                                    Text(summary)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(isSourceValid || isSourcePasswordProtected ? TotoroxTheme.textSecondary : Color.red)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 0)
                                 }
                             }
-
-                            Spacer(minLength: 4)
-
-                            Button(language.text("converter.button.change_file")) {
-                                showFilePicker = true
-                            }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                            .fixedSize(horizontal: true, vertical: false)
                         }
-
-                        if let summary = sourceMetadataSummary {
-                            Divider()
-                            let summaryIcon: String = isSourceValid
-                                ? "info.circle"
-                                : (isSourcePasswordProtected ? "lock.circle" : "exclamationmark.triangle.fill")
-                            let summaryColor: Color = isSourceValid
-                                ? TotoroxTheme.mintAccent
-                                : (isSourcePasswordProtected ? Color.orange : Color.red)
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: summaryIcon)
-                                    .foregroundStyle(summaryColor)
-                                Text(summary)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(isSourceValid || isSourcePasswordProtected ? TotoroxTheme.textSecondary : Color.red)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 0)
-                            }
-                        }
+                        .totoroxCard()
                     } else {
                         // Empty Dropzone
                         Button {
@@ -209,314 +209,320 @@ struct PatchConverterView: View {
                                     .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, 20)
                             .padding(.vertical, 28)
                             .background(TotoroxTheme.cardBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(TotoroxTheme.mintAccent.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                                    .stroke(TotoroxTheme.mintAccent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [6]))
                             )
+                            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
                         }
                         .buttonStyle(.plain)
                     }
-                }
-                .padding(.horizontal, 16)
-                .totoroxCard()
-                .padding(.horizontal, 16)
 
-                // Source Unlock Password Field (only shown when input file is password-protected)
-                if isSourcePasswordProtected {
-                    let trimmedSourcePwd = sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let needsRequiredPassword = trimmedSourcePwd.isEmpty
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(language.text("converter.section.source_password"))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(TotoroxTheme.textPrimary)
-
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock.shield.fill")
-                                .foregroundStyle(needsRequiredPassword ? Color.orange : TotoroxTheme.mintAccent)
-
-                            Group {
-                                if showSourcePassword {
-                                    TextField(
-                                        language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
-                                        text: $sourcePasswordText
-                                    )
-                                } else {
-                                    SecureField(
-                                        language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
-                                        text: $sourcePasswordText
-                                    )
-                                }
-                            }
-                            .font(.system(size: 14))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                            .onSubmit {
-                                if let source = selectedSourceURL {
-                                    inspectSourceFile(source, keepCustomInputs: true)
-                                }
-                            }
-
-                            if needsRequiredPassword {
-                                Text(language.text("converter.badge.required"))
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Color.orange.opacity(0.14))
-                                    .clipShape(Capsule())
-                            } else if let source = selectedSourceURL {
-                                Button(language.text("converter.button.unlock_preview")) {
-                                    inspectSourceFile(source, keepCustomInputs: true)
-                                }
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                                .buttonStyle(.plain)
-                            }
-
-                            Button {
-                                showSourcePassword.toggle()
-                            } label: {
-                                Image(systemName: showSourcePassword ? "eye.slash.fill" : "eye.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 14)
-                        .frame(height: 44)
-                        .background(TotoroxTheme.searchBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(needsRequiredPassword ? Color.orange.opacity(0.75) : Color.clear, lineWidth: 1.2)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .totoroxCard()
-                    .padding(.horizontal, 16)
-                }
-
-                // Output Customization Card (Filename + Output Password)
-                let canCustomizeAndConvert = isSourceValid
-                    || (isSourcePasswordProtected && !sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if selectedSourceURL != nil && canCustomizeAndConvert {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "slider.horizontal.3")
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                            Text(language.text("converter.section.output_config"))
-                                .font(.system(size: 14, weight: .bold))
+                    // Source Unlock Password Field (only shown when input file is password-protected)
+                    if isSourcePasswordProtected {
+                        let trimmedSourcePwd = sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let needsRequiredPassword = trimmedSourcePwd.isEmpty
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(language.text("converter.section.source_password"))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
-                        }
-
-                        // Output File Name
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(language.text("converter.label.output_filename"))
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
 
                             HStack(spacing: 8) {
-                                Image(systemName: "doc.text.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-
-                                TextField(
-                                    language.text("converter.placeholder.output_filename"),
-                                    text: $outputFileNameText
-                                )
-                                .font(.system(size: 14, weight: .medium))
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled(true)
-
-                                if !outputFileNameText.isEmpty {
-                                    Button {
-                                        outputFileNameText = ""
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(TotoroxTheme.textSecondary)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
-                                Text(".\(direction.outputExtension)")
-                                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(TotoroxTheme.mintAccent.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                            }
-                            .padding(.horizontal, 12)
-                            .frame(height: 44)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-
-                        // Output Password (optional for both .zip -> .3105 and .3105 -> .zip)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(language.text("converter.label.output_password"))
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
-
-                            HStack(spacing: 8) {
-                                Image(systemName: outputPasswordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "lock.open.fill" : "lock.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                Image(systemName: "lock.shield.fill")
+                                    .foregroundStyle(needsRequiredPassword ? Color.orange : TotoroxTheme.mintAccent)
 
                                 Group {
-                                    if showOutputPassword {
+                                    if showSourcePassword {
                                         TextField(
-                                            language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
-                                            text: $outputPasswordText
+                                            language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
+                                            text: $sourcePasswordText
                                         )
                                     } else {
                                         SecureField(
-                                            language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
-                                            text: $outputPasswordText
+                                            language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
+                                            text: $sourcePasswordText
                                         )
                                     }
                                 }
                                 .font(.system(size: 14))
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
+                                .onSubmit {
+                                    if let source = selectedSourceURL {
+                                        inspectSourceFile(source, keepCustomInputs: true)
+                                    }
+                                }
+
+                                if needsRequiredPassword {
+                                    Text(language.text("converter.badge.required"))
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(.orange)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.orange.opacity(0.14))
+                                        .clipShape(Capsule())
+                                } else if let source = selectedSourceURL {
+                                    Button(language.text("converter.button.unlock_preview")) {
+                                        inspectSourceFile(source, keepCustomInputs: true)
+                                    }
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .buttonStyle(.plain)
+                                }
 
                                 Button {
-                                    showOutputPassword.toggle()
+                                    showSourcePassword.toggle()
                                 } label: {
-                                    Image(systemName: showOutputPassword ? "eye.slash.fill" : "eye.fill")
+                                    Image(systemName: showSourcePassword ? "eye.slash.fill" : "eye.fill")
                                         .font(.system(size: 14))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                 }
                                 .buttonStyle(.plain)
                             }
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 14)
                             .frame(height: 44)
                             .background(TotoroxTheme.searchBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(needsRequiredPassword ? Color.orange.opacity(0.75) : Color.clear, lineWidth: 1.2)
+                            )
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .totoroxCard()
                     }
-                    .totoroxCard()
-                    .padding(.horizontal, 16)
-                }
 
-                // Error Banner
-                if let err = conversionError {
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Color.red)
-                        Text(err)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.red)
-                        Spacer()
-                    }
-                    .padding(12)
-                    .background(Color.red.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .padding(.horizontal, 16)
-                }
-
-                // Convert Button
-                TotoroxPrimaryButton(
-                    title: language.text("converter.button.start"),
-                    icon: "arrow.triangle.2.circlepath",
-                    isLoading: isConverting,
-                    isEnabled: selectedSourceURL != nil && canCustomizeAndConvert && !isConverting
-                ) {
-                    performConversion()
-                }
-                .padding(.horizontal, 16)
-
-                // Converted Result Banner
-                if let converted = convertedFileURL {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(TotoroxTheme.mintAccent.opacity(0.15))
-                                    .frame(width: 44, height: 44)
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 22))
+                    // Output Customization Card (Filename + Output Password)
+                    let canCustomizeAndConvert = isSourceValid
+                        || (isSourcePasswordProtected && !sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if selectedSourceURL != nil && canCustomizeAndConvert {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "slider.horizontal.3")
                                     .foregroundStyle(TotoroxTheme.mintAccent)
-                            }
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(language.text("converter.result.success"))
-                                    .font(.system(size: 15, weight: .bold))
+                                Text(language.text("converter.section.output_config"))
+                                    .font(.system(size: 14, weight: .bold))
                                     .foregroundStyle(TotoroxTheme.textPrimary)
+                            }
 
-                                Text("\(converted.lastPathComponent) (\(convertedFileSizeText))")
-                                    .font(.system(size: 12, design: .monospaced))
+                            // Output File Name
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(language.text("converter.label.output_filename"))
+                                    .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(TotoroxTheme.textSecondary)
+
+                                HStack(spacing: 8) {
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+
+                                    TextField(
+                                        language.text("converter.placeholder.output_filename"),
+                                        text: $outputFileNameText
+                                    )
+                                    .font(.system(size: 14, weight: .medium))
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled(true)
+
+                                    if !outputFileNameText.isEmpty {
+                                        Button {
+                                            outputFileNameText = ""
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
+                                    Text(".\(direction.outputExtension)")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(height: 44)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            Spacer()
-                        }
 
-                        Button {
-                            activeShareItem = ConverterShareURLItem(url: converted)
-                        } label: {
-                            HStack {
-                                Image(systemName: "square.and.arrow.up")
-                                Text(language.text("converter.button.share_output"))
-                                    .fontWeight(.bold)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .background(TotoroxTheme.mintAccent)
-                            .foregroundColor(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
-                    .totoroxCard()
-                    .padding(.horizontal, 16)
-                }
+                            // Output Password (optional for both .zip -> .3105 and .3105 -> .zip)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(language.text("converter.label.output_password"))
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
 
-                // Recent History
-                if !history.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(language.text("converter.history.title"))
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(TotoroxTheme.textPrimary)
-                            .padding(.horizontal, 16)
+                                HStack(spacing: 8) {
+                                    Image(systemName: outputPasswordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "lock.open.fill" : "lock.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
 
-                        VStack(spacing: 8) {
-                            ForEach(history) { item in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(item.sourceName) ➔ \(item.targetName)")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .lineLimit(1)
-                                        Text(item.fileSizeText)
-                                            .font(.system(size: 11, design: .monospaced))
+                                    Group {
+                                        if showOutputPassword {
+                                            TextField(
+                                                language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
+                                                text: $outputPasswordText
+                                            )
+                                        } else {
+                                            SecureField(
+                                                language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
+                                                text: $outputPasswordText
+                                            )
+                                        }
+                                    }
+                                    .font(.system(size: 14))
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled(true)
+
+                                    Button {
+                                        showOutputPassword.toggle()
+                                    } label: {
+                                        Image(systemName: showOutputPassword ? "eye.slash.fill" : "eye.fill")
+                                            .font(.system(size: 14))
                                             .foregroundStyle(TotoroxTheme.textSecondary)
                                     }
-                                    Spacer()
-                                    Button {
-                                        let target = URL(fileURLWithPath: item.targetPath)
-                                        if FileManager.default.fileExists(atPath: target.path) {
-                                            activeShareItem = ConverterShareURLItem(url: target)
-                                        } else {
-                                            loadPersistedHistory()
-                                        }
-                                    } label: {
-                                        Image(systemName: "square.and.arrow.up")
-                                            .foregroundStyle(TotoroxTheme.mintAccent)
-                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .totoroxCard(padding: 12)
+                                .padding(.horizontal, 12)
+                                .frame(height: 44)
+                                .background(TotoroxTheme.searchBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
                         }
-                        .padding(.horizontal, 16)
+                        .totoroxCard()
+                    }
+
+                    // Error Banner
+                    if let err = conversionError {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.red)
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(Color.red.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    // Convert Button
+                    TotoroxPrimaryButton(
+                        title: language.text("converter.button.start"),
+                        icon: "arrow.triangle.2.circlepath",
+                        isLoading: isConverting,
+                        isEnabled: selectedSourceURL != nil && canCustomizeAndConvert && !isConverting
+                    ) {
+                        performConversion()
+                    }
+
+                    // Converted Result Banner
+                    if let converted = convertedFileURL {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(TotoroxTheme.mintAccent.opacity(0.15))
+                                        .frame(width: 44, height: 44)
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(TotoroxTheme.mintAccent)
+                                }
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(language.text("converter.result.success"))
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+
+                                    Text("\(converted.lastPathComponent) (\(convertedFileSizeText))")
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Button {
+                                activeShareItem = ConverterShareURLItem(url: converted)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "square.and.arrow.up")
+                                    Text(language.text("converter.button.share_output"))
+                                        .fontWeight(.bold)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .background(TotoroxTheme.mintAccent)
+                                .foregroundColor(.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .totoroxCard()
+                    }
+
+                    // Recent History
+                    if !history.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(language.text("converter.history.title"))
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+
+                            VStack(spacing: 8) {
+                                ForEach(history) { item in
+                                    HStack(spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("\(item.sourceName) ➔ \(item.targetName)")
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                            Text(item.fileSizeText)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        Button {
+                                            let target = URL(fileURLWithPath: item.targetPath)
+                                            if FileManager.default.fileExists(atPath: target.path) {
+                                                activeShareItem = ConverterShareURLItem(url: target)
+                                            } else {
+                                                loadPersistedHistory()
+                                            }
+                                        } label: {
+                                            Image(systemName: "square.and.arrow.up")
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                                .padding(8)
+                                                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                                .clipShape(Circle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .totoroxCard(cornerRadius: 14, padding: 12)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
+                .frame(width: proxy.size.width > 0 ? proxy.size.width : nil)
             }
-            .padding(.bottom, 24)
-        }
-        .safeAreaInset(edge: .bottom) {
-            Color.clear.frame(height: 80)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(TotoroxTheme.pageBackground)
         .onAppear {
