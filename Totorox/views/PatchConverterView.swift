@@ -22,7 +22,7 @@ enum ConverterDirection: String, CaseIterable, Identifiable {
     }
 }
 
-struct ConversionHistoryItem: Identifiable, Codable {
+struct ConversionHistoryItem: Identifiable, Codable, Equatable {
     let id: UUID
     let sourceName: String
     let targetName: String
@@ -31,13 +31,20 @@ struct ConversionHistoryItem: Identifiable, Codable {
     let fileSizeText: String
 }
 
+private struct ConverterShareURLItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct PatchConverterView: View {
     @Environment(\.appLanguage) private var language
     @State private var direction: ConverterDirection = .zipToPatch
     @State private var selectedSourceURL: URL? = nil
     @State private var sourceFileSizeText: String = ""
     @State private var sourceMetadataSummary: String? = nil
+    @State private var isSourceValid: Bool = false
     @State private var isSourcePasswordProtected: Bool = false
+    @State private var inspectGeneration: UUID = UUID()
     @State private var sourcePasswordText: String = ""
     @State private var showSourcePassword: Bool = false
 
@@ -54,7 +61,7 @@ struct PatchConverterView: View {
 
     // UI sheets
     @State private var showFilePicker: Bool = false
-    @State private var showShareSheet: Bool = false
+    @State private var activeShareItem: ConverterShareURLItem? = nil
 
     // History
     @State private var history: [ConversionHistoryItem] = []
@@ -62,6 +69,7 @@ struct PatchConverterView: View {
     /// Converted outputs live in the temp folder. Keep only a small window so the folder cannot
     /// grow without bound while the history entries that reference them stay usable.
     private static let maximumRetainedConversions = 10
+    private static let historyStorageKey = "totorox.patch.history.v1"
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -88,8 +96,10 @@ struct PatchConverterView: View {
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 direction = dir
+                                inspectGeneration = UUID()
                                 selectedSourceURL = nil
                                 sourceMetadataSummary = nil
+                                isSourceValid = false
                                 isSourcePasswordProtected = false
                                 sourcePasswordText = ""
                                 outputFileNameText = ""
@@ -135,6 +145,8 @@ struct PatchConverterView: View {
                                     Text(sourceFileSizeText)
                                         .font(.system(size: 12, design: .monospaced))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
 
                                     TotoroxBadge(
                                         title: language.text(direction == .zipToPatch ? "converter.badge.zip_source" : "converter.badge.3105_source"),
@@ -143,24 +155,32 @@ struct PatchConverterView: View {
                                 }
                             }
 
-                            Spacer()
+                            Spacer(minLength: 4)
 
                             Button(language.text("converter.button.change_file")) {
                                 showFilePicker = true
                             }
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.mintAccent)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
 
                         if let summary = sourceMetadataSummary {
                             Divider()
+                            let summaryIcon: String = isSourceValid
+                                ? "info.circle"
+                                : (isSourcePasswordProtected ? "lock.circle" : "exclamationmark.triangle.fill")
+                            let summaryColor: Color = isSourceValid
+                                ? TotoroxTheme.mintAccent
+                                : (isSourcePasswordProtected ? Color.orange : Color.red)
                             HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                Image(systemName: summaryIcon)
+                                    .foregroundStyle(summaryColor)
                                 Text(summary)
                                     .font(.system(size: 12))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                Spacer()
+                                    .foregroundStyle(isSourceValid || isSourcePasswordProtected ? TotoroxTheme.textSecondary : Color.red)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 0)
                             }
                         }
                     } else {
@@ -280,7 +300,9 @@ struct PatchConverterView: View {
                 }
 
                 // Output Customization Card (Filename + Output Password)
-                if selectedSourceURL != nil {
+                let canCustomizeAndConvert = isSourceValid
+                    || (isSourcePasswordProtected && !sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if selectedSourceURL != nil && canCustomizeAndConvert {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack(spacing: 8) {
                             Image(systemName: "slider.horizontal.3")
@@ -332,12 +354,6 @@ struct PatchConverterView: View {
                             .frame(height: 44)
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                            if direction == .zipToPatch {
-                                Text(language.text("converter.hint.project_name"))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                            }
                         }
 
                         // Output Password (optional for both .zip -> .3105 and .3105 -> .zip)
@@ -381,10 +397,6 @@ struct PatchConverterView: View {
                             .frame(height: 44)
                             .background(TotoroxTheme.searchBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                            Text(language.text(direction == .zipToPatch ? "converter.hint.output_password_3105" : "converter.hint.output_password_zip"))
-                                .font(.system(size: 11))
-                                .foregroundStyle(TotoroxTheme.textSecondary)
                         }
                     }
                     .totoroxCard()
@@ -412,7 +424,7 @@ struct PatchConverterView: View {
                     title: language.text("converter.button.start"),
                     icon: "arrow.triangle.2.circlepath",
                     isLoading: isConverting,
-                    isEnabled: selectedSourceURL != nil && !isConverting
+                    isEnabled: selectedSourceURL != nil && canCustomizeAndConvert && !isConverting
                 ) {
                     performConversion()
                 }
@@ -444,7 +456,7 @@ struct PatchConverterView: View {
                         }
 
                         Button {
-                            showShareSheet = true
+                            activeShareItem = ConverterShareURLItem(url: converted)
                         } label: {
                             HStack {
                                 Image(systemName: "square.and.arrow.up")
@@ -483,8 +495,12 @@ struct PatchConverterView: View {
                                     }
                                     Spacer()
                                     Button {
-                                        convertedFileURL = URL(fileURLWithPath: item.targetPath)
-                                        showShareSheet = true
+                                        let target = URL(fileURLWithPath: item.targetPath)
+                                        if FileManager.default.fileExists(atPath: target.path) {
+                                            activeShareItem = ConverterShareURLItem(url: target)
+                                        } else {
+                                            loadPersistedHistory()
+                                        }
                                     } label: {
                                         Image(systemName: "square.and.arrow.up")
                                             .foregroundStyle(TotoroxTheme.mintAccent)
@@ -503,15 +519,20 @@ struct PatchConverterView: View {
             Color.clear.frame(height: 80)
         }
         .background(TotoroxTheme.pageBackground)
+        .onAppear {
+            loadPersistedHistory()
+        }
         .sheet(isPresented: $showFilePicker) {
-            DocumentPickerWrapper { picked in
+            DocumentPickerWrapper(
+                allowedContentTypes: direction == .zipToPatch
+                    ? [UTType.zip]
+                    : [UTType(filenameExtension: "3105") ?? .data, .data, .item]
+            ) { picked in
                 inspectSourceFile(picked, keepCustomInputs: false)
             }
         }
-        .sheet(isPresented: $showShareSheet) {
-            if let target = convertedFileURL {
-                ActivityViewControllerWrapper(activityItems: [target])
-            }
+        .sheet(item: $activeShareItem) { item in
+            ActivityViewControllerWrapper(activityItems: [item.url])
         }
     }
 
@@ -534,9 +555,12 @@ struct PatchConverterView: View {
             from: url.deletingPathExtension().lastPathComponent,
             fallback: "ConvertedPatch"
         )
+        let inspectionToken = UUID()
+        inspectGeneration = inspectionToken
         selectedSourceURL = url
         convertedFileURL = nil
         conversionError = nil
+        isSourceValid = false
         if !keepCustomInputs {
             isSourcePasswordProtected = false
             sourcePasswordText = ""
@@ -563,37 +587,39 @@ struct PatchConverterView: View {
             let sizeStr = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
 
             var detectedProtected = false
+            var detectedValid = false
             var suggestedStem: String? = nil
             let summary: String
             if currentDirection == .zipToPatch {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
                     summary = activeLanguage.text("converter.summary.zip_too_large")
-                } else if let zipInfo = try? PatchZipConverter.shared.inspectZipMetadata(at: url, password: currentSourcePassword) {
-                    detectedProtected = zipInfo.isPasswordProtected
-                    if let name = zipInfo.suggestedName, !name.isEmpty {
-                        suggestedStem = Self.sanitizedOutputStem(from: name, fallback: initialStem)
-                    }
-                    if zipInfo.isPasswordProtected && currentSourcePassword == nil {
-                        summary = activeLanguage.text("converter.summary.zip_protected", zipInfo.entryCount)
-                    } else if zipInfo.isPasswordProtected && !zipInfo.isUnlocked {
-                        summary = activeLanguage.text("converter.summary.zip_wrong_unlock_preview")
-                    } else if let headers = try? PatchZipConverter.shared.readZipArchiveHeaders(from: url) {
-                        let detectedBundle = headers.keys.lazy.compactMap { path -> String? in
-                            let parts = path.split(separator: "/").map(String.init)
-                            guard parts.count > 1 else { return nil }
-                            for seg in parts.dropLast() where seg.contains(".") && !seg.lowercased().hasSuffix(".bytes") && !seg.lowercased().hasSuffix(".assetbundle") {
-                                if seg.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil {
-                                    return seg
-                                }
-                            }
-                            return nil
-                        }.first ?? "com.garena.game.kgvn"
-                        summary = activeLanguage.text("converter.summary.zip_valid", zipInfo.entryCount, detectedBundle)
-                    } else {
-                        summary = activeLanguage.text("converter.summary.zip_standard")
-                    }
                 } else {
-                    summary = activeLanguage.text("converter.summary.zip_standard")
+                    do {
+                        let zipInfo = try PatchZipConverter.shared.inspectZipMetadata(at: url, password: currentSourcePassword)
+                        if let name = zipInfo.suggestedName, !name.isEmpty {
+                            suggestedStem = Self.sanitizedOutputStem(from: name, fallback: initialStem)
+                        }
+                        if zipInfo.entryCount == 0 {
+                            summary = activeLanguage.text("converter.summary.zip_empty")
+                        } else if zipInfo.hasUnsupportedCompression {
+                            summary = activeLanguage.text("converter.summary.zip_unsupported_compression")
+                        } else if !zipInfo.isValidPatchOrModArchive {
+                            summary = activeLanguage.text("converter.summary.zip_unrecognized_structure")
+                        } else if zipInfo.isPasswordProtected && currentSourcePassword == nil {
+                            detectedProtected = true
+                            summary = activeLanguage.text("converter.summary.zip_protected", zipInfo.entryCount)
+                        } else if zipInfo.isPasswordProtected && !zipInfo.isUnlocked {
+                            detectedProtected = true
+                            summary = activeLanguage.text("converter.summary.zip_wrong_unlock_preview")
+                        } else {
+                            detectedProtected = zipInfo.isPasswordProtected
+                            detectedValid = true
+                            let detectedTarget = zipInfo.detectedTarget ?? "com.garena.game.kgvn"
+                            summary = activeLanguage.text("converter.summary.zip_valid", zipInfo.entryCount, detectedTarget)
+                        }
+                    } catch {
+                        summary = activeLanguage.text("converter.summary.zip_invalid", error.localizedDescription)
+                    }
                 }
             } else {
                 if PatchPackageLimits.exceedsExpandedLimit(size) {
@@ -606,6 +632,7 @@ struct PatchConverterView: View {
                         patchURL: url,
                         password: currentSourcePassword
                     ) {
+                        detectedValid = true
                         if !project.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             suggestedStem = Self.sanitizedOutputStem(from: project.name, fallback: initialStem)
                         }
@@ -619,6 +646,7 @@ struct PatchConverterView: View {
                     } else if pkgSummary.isPasswordProtected {
                         summary = activeLanguage.text("converter.summary.3105_protected_retry", pkgSummary.schemaVersion)
                     } else {
+                        detectedValid = true
                         summary = activeLanguage.text("converter.summary.3105_valid", pkgSummary.schemaVersion)
                     }
                 } else {
@@ -627,8 +655,12 @@ struct PatchConverterView: View {
             }
 
             await MainActor.run {
+                guard self.inspectGeneration == inspectionToken,
+                      self.selectedSourceURL == url,
+                      self.direction == currentDirection else { return }
                 self.sourceFileSizeText = sizeStr
                 self.sourceMetadataSummary = summary
+                self.isSourceValid = detectedValid
                 self.isSourcePasswordProtected = detectedProtected
                 if let suggested = suggestedStem, !suggested.isEmpty,
                    (!keepCustomInputs || self.outputFileNameText == initialStem) {
@@ -643,6 +675,10 @@ struct PatchConverterView: View {
         let currentDirection = direction
         let trimmedSourcePwd = sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourcePassword = trimmedSourcePwd.isEmpty ? nil : trimmedSourcePwd
+        guard isSourceValid || (isSourcePasswordProtected && sourcePassword != nil) else {
+            conversionError = language.text("converter.error.invalid_source_file")
+            return
+        }
         if isSourcePasswordProtected && sourcePassword == nil {
             conversionError = language.text(
                 currentDirection == .patchToZip
@@ -664,8 +700,6 @@ struct PatchConverterView: View {
         conversionError = nil
         convertedFileURL = nil
 
-        // iOS can purge the temp folder at any time and this history is not persisted, so drop
-        // entries whose output is already gone instead of letting share taps fail silently.
         history.removeAll { !FileManager.default.fileExists(atPath: $0.targetPath) }
         let retainedPaths = Set(history.map { URL(fileURLWithPath: $0.targetPath).standardizedFileURL.path })
 
@@ -682,7 +716,10 @@ struct PatchConverterView: View {
             }
 
             do {
-                let outURL = tempDir.appendingPathComponent("\(outputStem).\(currentDirection.outputExtension)")
+                let outURL = AovModMergerEngine.uniqueOutputURL(
+                    in: tempDir,
+                    preferredName: "\(outputStem).\(currentDirection.outputExtension)"
+                )
                 if currentDirection == .zipToPatch {
                     try await converter.convertZipToPatch(
                         zipURL: source,
@@ -716,8 +753,13 @@ struct PatchConverterView: View {
                         fileSizeText: sizeStr
                     ), at: 0)
                     if self.history.count > Self.maximumRetainedConversions {
+                        let overflow = self.history.suffix(from: Self.maximumRetainedConversions)
+                        for old in overflow {
+                            try? FileManager.default.removeItem(atPath: old.targetPath)
+                        }
                         self.history.removeLast(self.history.count - Self.maximumRetainedConversions)
                     }
+                    self.savePersistedHistory()
                 }
             } catch {
                 await MainActor.run {
@@ -725,6 +767,26 @@ struct PatchConverterView: View {
                     self.isConverting = false
                 }
             }
+        }
+    }
+
+    private func loadPersistedHistory() {
+        let fm = FileManager.default
+        if let data = UserDefaults.standard.data(forKey: Self.historyStorageKey),
+           let decoded = try? JSONDecoder().decode([ConversionHistoryItem].self, from: data) {
+            let valid = Array(decoded.filter { fm.fileExists(atPath: $0.targetPath) }.prefix(Self.maximumRetainedConversions))
+            history = valid
+            if valid != decoded {
+                savePersistedHistory()
+            }
+        } else {
+            history.removeAll { !fm.fileExists(atPath: $0.targetPath) }
+        }
+    }
+
+    private func savePersistedHistory() {
+        if let data = try? JSONEncoder().encode(history) {
+            UserDefaults.standard.set(data, forKey: Self.historyStorageKey)
         }
     }
 }

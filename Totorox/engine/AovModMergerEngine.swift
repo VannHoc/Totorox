@@ -110,8 +110,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
     private init() {}
 
-    /// Đọc metadata nhẹ (số tướng, phiên bản Resources) để hiển thị trong danh sách chọn mod.
-    public func inspectModArchive(at url: URL) throws -> AovModSummary {
+    /// Đọc và xác thực chặt chẽ gói mod `.zip` trước khi cho phép thêm vào danh sách gộp.
+    private static func validatedHeadersAndSummary(at url: URL) throws -> (summary: AovModSummary, headers: [String: PatchZipConverter.ZipArchiveEntryHeader]) {
         guard url.pathExtension.lowercased() != "3105" else {
             throw AovModMergerError.invalidArchive(
                 AppLanguage.current.text("merge.error.only_zip_entry", url.lastPathComponent)
@@ -127,25 +127,66 @@ public final class AovModMergerEngine: @unchecked Sendable {
         guard !PatchPackageLimits.exceedsExpandedLimit(fileSize) else {
             throw AovModMergerError.sizeLimitExceeded
         }
-        guard let handle = try? FileHandle(forReadingFrom: url),
-              let magic = try? handle.read(upToCount: 2),
-              magic.count == 2, magic[0] == 0x50, magic[1] == 0x4B else {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.open_source_mod", url.lastPathComponent)
+            )
+        }
+        let magic = (try? handle.read(upToCount: 4)) ?? Data()
+        try? handle.close()
+        let isLocalZipMagic = magic.count == 4 && magic == Data([0x50, 0x4B, 0x03, 0x04])
+        let isEmptyZipMagic = magic.count == 4 && magic == Data([0x50, 0x4B, 0x05, 0x06])
+        guard isLocalZipMagic || isEmptyZipMagic else {
             throw AovModMergerError.invalidArchive(
                 AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
             )
         }
-        try? handle.close()
 
-        // Đọc danh mục Central Directory trong vài ms mà KHÔNG giải nén bất kỳ payload nào
-        if let headers = try? PatchZipConverter.shared.readZipArchiveHeaders(from: url) {
-            return Self.summary(
-                url: url,
-                fileSize: fileSize,
-                entryNames: Array(headers.keys)
+        let headers: [String: PatchZipConverter.ZipArchiveEntryHeader]
+        do {
+            headers = try PatchZipConverter.shared.readZipArchiveHeaders(from: url)
+        } catch let err as PatchZipConverterError where err == .sizeLimitExceeded {
+            throw AovModMergerError.sizeLimitExceeded
+        } catch {
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
             )
         }
 
-        return Self.summary(url: url, fileSize: fileSize, entryNames: [])
+        guard !headers.isEmpty else {
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.empty_zip", url.lastPathComponent)
+            )
+        }
+        if headers.values.contains(where: { $0.isEncrypted }) {
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.encrypted_zip", url.lastPathComponent)
+            )
+        }
+        if headers.values.contains(where: { $0.compressionMethod != 0 && $0.compressionMethod != 8 }) {
+            throw AovModMergerError.invalidArchive(
+                AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
+            )
+        }
+
+        let summary = Self.summary(
+            url: url,
+            fileSize: fileSize,
+            entryNames: Array(headers.keys)
+        )
+        let fallbackVersion = summary.resourceVersion ?? "0.0.0"
+        let hasValidAovStructure = headers.keys.contains {
+            Self.normalizeAovPath($0, fallbackVersion: fallbackVersion) != nil
+        }
+        guard hasValidAovStructure else {
+            throw AovModMergerError.missingResourceStructure(url.lastPathComponent)
+        }
+        return (summary, headers)
+    }
+
+    /// Đọc metadata nhẹ (số tướng, phiên bản Resources) để hiển thị trong danh sách chọn mod.
+    public func inspectModArchive(at url: URL) throws -> AovModSummary {
+        try Self.validatedHeadersAndSummary(at: url).summary
     }
 
     /// Dựng `AovModSummary` từ danh sách đường dẫn đã có sẵn, tránh đọc lại gói mod
@@ -217,25 +258,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         let modMetas: [ModMetadata] = try await Task.detached(priority: .userInitiated) { () -> [ModMetadata] in
             var items: [ModMetadata] = []
-            for (idx, url) in inputURLs.enumerated() {
-                guard url.pathExtension.lowercased() != "3105" else {
-                    throw AovModMergerError.invalidArchive(
-                        AppLanguage.current.text("merge.error.only_zip_entry", url.lastPathComponent)
-                    )
-                }
-
-                let fileSize = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                guard !PatchPackageLimits.exceedsExpandedLimit(fileSize) else {
-                    throw AovModMergerError.sizeLimitExceeded
-                }
-
-                let headers = try PatchZipConverter.shared.readZipArchiveHeaders(from: url)
-                let summary = Self.summary(
-                    url: url,
-                    fileSize: fileSize,
-                    entryNames: Array(headers.keys)
-                )
-                items.append(ModMetadata(summary: summary, headers: headers))
+            for url in inputURLs {
+                let inspected = try Self.validatedHeadersAndSummary(at: url)
+                items.append(ModMetadata(summary: inspected.summary, headers: inspected.headers))
             }
             return items
         }.value
@@ -288,6 +313,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 )
                 pathGroups[normalizedKey, default: []].append(entryRef)
             }
+        }
+        guard !pathGroups.isEmpty else {
+            throw AovModMergerError.missingResourceStructure(summaries.map(\.fileName).joined(separator: ", "))
         }
 
         // BƯỚC 3: Chọn lọc file cấu hình cần gửi lên máy chủ để chạy pipeline merge đầy đủ:
@@ -484,8 +512,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
             loadedModsWithHeroes: summaries.map { (heroIDs: $0.heroIDs, fileName: $0.fileName) },
             fileExtension: "zip"
         )
-        let outURL = outDir.appendingPathComponent(outName)
-        try? fileManager.removeItem(at: outURL)
+        let outURL = Self.uniqueOutputURL(in: outDir, preferredName: outName, fileManager: fileManager)
 
         var modHandles: [FileHandle?] = []
         for url in inputURLs {
@@ -918,5 +945,30 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
         return "AOV_Mod_\(countLabel)_\(shortHash).\(ext)"
+    }
+
+    static func uniqueOutputURL(
+        in directory: URL,
+        preferredName: String,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let candidate = directory.appendingPathComponent(preferredName)
+        guard fileManager.fileExists(atPath: candidate.path) else {
+            return candidate
+        }
+        let nsName = preferredName as NSString
+        let stem = nsName.deletingPathExtension
+        let ext = nsName.pathExtension
+        for index in 2...999 {
+            let suffixedName = ext.isEmpty ? "\(stem)_\(index)" : "\(stem)_\(index).\(ext)"
+            let nextCandidate = directory.appendingPathComponent(suffixedName)
+            if !fileManager.fileExists(atPath: nextCandidate.path) {
+                return nextCandidate
+            }
+        }
+        let fallbackName = ext.isEmpty
+            ? "\(stem)_\(UUID().uuidString.prefix(6))"
+            : "\(stem)_\(UUID().uuidString.prefix(6)).\(ext)"
+        return directory.appendingPathComponent(fallbackName)
     }
 }

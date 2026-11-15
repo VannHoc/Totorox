@@ -351,12 +351,9 @@
 "converter.section.output_config" = "输出设置";
 "converter.label.output_filename" = "输出文件名";
 "converter.placeholder.output_filename" = "例如：Skin_Mod_Pro";
-"converter.hint.project_name" = "该名称将同时用作输出文件名以及 .3105 包内部元数据名称。";
 "converter.label.output_password" = "输出文件密码（可选）";
 "converter.placeholder.output_password_3105" = "设置 .3105 加密密码（留空则不加密）";
 "converter.placeholder.output_password_zip" = "设置 .zip 压缩包密码（留空则不加密）";
-"converter.hint.output_password_3105" = "将使用 AES-256-GCM + PBKDF2 对导出的 .3105 文件进行加密。";
-"converter.hint.output_password_zip" = "将使用标准 ZipCrypto 对导出的 .zip 压缩包内文件进行加密。";
 "converter.button.start" = "开始转换";
 "converter.result.success" = "转换成功！";
 "converter.button.share_output" = "保存 / 分享输出文件";
@@ -366,6 +363,10 @@
 "converter.summary.zip_too_large" = "ZIP 压缩包过大，无法预览（超出 3.6 GB 限制）";
 "converter.summary.zip_valid" = "有效 ZIP（%lld 个文件）• 识别目标：%@";
 "converter.summary.zip_standard" = "有效 ZIP 压缩包";
+"converter.summary.zip_empty" = "空的 ZIP 压缩包（不包含任何文件）";
+"converter.summary.zip_invalid" = "无效或已损坏的 ZIP 文件（%@）";
+"converter.summary.zip_unsupported_compression" = "ZIP 压缩包使用了不支持的压缩或加密方式（例如 WinZip AES）";
+"converter.summary.zip_unrecognized_structure" = "此压缩包为普通 ZIP 文件，不包含有效的传说对决 Mod 或 .3105 补丁结构";
 "converter.summary.3105_too_large" = ".3105 文件包超过 3.6 GB 大小限制";
 "converter.summary.3105_protected" = "受密码保护的 .3105 v%lld 文件包 • 请输入密码解锁";
 "converter.summary.3105_project" = "名称：%@ • 作者：%@ • %lld 条规则 • 目标：%@";
@@ -374,6 +375,7 @@
 "converter.summary.3105_invalid_header" = "无法读取 .3105 文件头（文件可能已损坏或格式错误）";
 "converter.error.source_password_required_3105" = "此 .3105 文件包受密码保护，请输入源文件密码。";
 "converter.error.source_password_required_zip" = "此 .zip 压缩包受密码保护，请输入源文件解压密码。";
+"converter.error.invalid_source_file" = "源文件无效，请选择正确格式的有效文件后再转换。";
 "error.patch_converter.corrupted_archive" = "补丁包已损坏或结构无效：%@";
 "error.patch_converter.unsupported_format" = "不支持的格式：%@";
 "error.patch_converter.invalid_manifest" = "无效的包清单 (Manifest)：%@";
@@ -387,6 +389,7 @@
 "error.patch_converter.zip_password_required" = "此 .zip 压缩包已加密，请输入密码。";
 "error.patch_converter.zip_aes_unsupported" = "暂不支持 WinZip AES 加密的 .zip，请使用标准 ZipCrypto 加密。";
 "error.patch_converter.zip_no_rules" = ".zip 压缩包中不包含任何可打包的有效文件。";
+"error.patch_converter.zip_unrecognized_structure" = ".zip 压缩包不包含有效的传说对决 Mod (Resources/...) 或 .3105 补丁包目录结构。";
 "error.patch_converter.invalid_zip_magic" = "所选文件不是有效的 .zip 压缩包。";
 "error.patch_converter.invalid_envelope_plist" = "无法解析 .3105 文件包内的外层 plist。";
 "error.patch_converter.invalid_payload_plist" = "无法解析 .3105 文件包内的载荷 plist。";
@@ -443,7 +446,14 @@
 "merge.result.logs_toggle" = "查看处理日志（%lld 条）";
 "merge.result.send_to_overwrite" = "发送至覆盖文件标签页";
 "merge.result.share_output" = "保存 / 分享 .zip 文件";
+"merge.history.title" = "Mod 合并历史记录";
+"merge.history.clear" = "清空记录";
+"merge.history.meta" = "%@ • %lld 个文件 • %lld 处冲突";
+"merge.history.send_action" = "覆盖";
+"merge.history.share_action" = "分享 / 保存 .zip 文件";
+"merge.history.sources_more" = "%@（+%lld 个其他 Mod）";
 "merge.alert.unsupported_zip" = "仅支持 .zip 格式的 Mod 文件。已跳过：%@";
+"merge.alert.invalid_mods_skipped" = "无法添加 %lld 个无效文件：\n%@";
 "merge.badge.generic" = "传说对决 Mod";
 "merge.badge.hero" = "英雄 #%lld";
 "merge.badge.hero_skin" = "英雄 #%lld • 皮肤 #%lld";
@@ -460,6 +470,8 @@
 "merge.error.zip_creation" = "无法生成输出 ZIP 压缩包：%@";
 "merge.error.only_zip_entry" = "文件“%@”不是受支持的 .zip Mod 格式。";
 "merge.error.not_valid_zip_entry" = "无法读取 ZIP 文件“%@”（文件已损坏或非有效 ZIP 格式）。";
+"merge.error.empty_zip" = "ZIP 压缩包“%@”为空，不包含任何文件。";
+"merge.error.encrypted_zip" = "ZIP 压缩包“%@”已加密；Mod 合并功能暂不支持加密 ZIP。";
 "merge.error.invalid_server_response" = "服务器返回的合并方案响应无效。";
 "merge.error.server_prefix" = "服务器合并失败：%@";
 "merge.error.size_limit" = "合并后的文件包超出 3.6 GB 大小限制。";

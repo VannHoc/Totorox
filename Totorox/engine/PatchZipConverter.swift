@@ -949,6 +949,27 @@ public final class PatchZipConverter {
         public let suggestedName: String?
         public let entryCount: Int
         public let isUnlocked: Bool
+        public let isValidPatchOrModArchive: Bool
+        public let detectedTarget: String?
+        public let hasUnsupportedCompression: Bool
+
+        public init(
+            isPasswordProtected: Bool,
+            suggestedName: String?,
+            entryCount: Int,
+            isUnlocked: Bool,
+            isValidPatchOrModArchive: Bool = true,
+            detectedTarget: String? = nil,
+            hasUnsupportedCompression: Bool = false
+        ) {
+            self.isPasswordProtected = isPasswordProtected
+            self.suggestedName = suggestedName
+            self.entryCount = entryCount
+            self.isUnlocked = isUnlocked
+            self.isValidPatchOrModArchive = isValidPatchOrModArchive
+            self.detectedTarget = detectedTarget
+            self.hasUnsupportedCompression = hasUnsupportedCompression
+        }
     }
 
     private struct ZipCryptoCodec {
@@ -1166,20 +1187,26 @@ public final class PatchZipConverter {
 
         let eocdSig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
         var eocdOffset: Int?
+        var fallbackEocdOffset: Int?
         let maxSearch = min(data.count, 65535 + 22)
         let searchStart = data.count - maxSearch
 
-        for i in stride(from: data.count - 4, through: searchStart, by: -1) {
+        for i in stride(from: data.count - 22, through: searchStart, by: -1) {
             if data[i] == eocdSig[0] &&
                data[i+1] == eocdSig[1] &&
                data[i+2] == eocdSig[2] &&
                data[i+3] == eocdSig[3] {
-                eocdOffset = i
-                break
+                let commentLen = Int(data.readUInt16(at: i + 20))
+                if i + 22 + commentLen == data.count {
+                    eocdOffset = i
+                    break
+                } else if fallbackEocdOffset == nil {
+                    fallbackEocdOffset = i
+                }
             }
         }
 
-        guard let eocdPos = eocdOffset else {
+        guard let eocdPos = eocdOffset ?? fallbackEocdOffset else {
             throw PatchZipConverterError.corruptedArchive("End of Central Directory record not found.")
         }
         guard eocdPos + 22 <= data.count else {
@@ -1208,7 +1235,7 @@ public final class PatchZipConverter {
             }
         }
 
-        guard cdOffset < data.count else {
+        guard cdOffset >= 0, cdOffset <= eocdPos, cdOffset <= data.count else {
             throw PatchZipConverterError.corruptedArchive("Invalid central directory offset.")
         }
 
@@ -1381,6 +1408,7 @@ public final class PatchZipConverter {
         let directory = try findZipCentralDirectory(in: data)
         var results: [String: ZipArchiveEntryHeader] = [:]
         var currentCDPos = directory.offset
+        var totalUncompressedBytes: UInt64 = 0
 
         for _ in 0..<directory.entryCount {
             guard currentCDPos + 46 <= data.count else {
@@ -1415,6 +1443,9 @@ public final class PatchZipConverter {
             if uncompressedSize == 0xFFFFFFFF || compressedSize == 0xFFFFFFFF || localHeaderOffset == 0xFFFFFFFF {
                 var extraOffset = nameStart + nameLen
                 let extraEnd = extraOffset + extraLen
+                guard extraEnd <= data.count else {
+                    throw PatchZipConverterError.corruptedArchive("Truncated extra field in central directory.")
+                }
                 while extraOffset + 4 <= extraEnd {
                     let tag = data.readUInt16(at: extraOffset)
                     let blockSize = Int(data.readUInt16(at: extraOffset + 2))
@@ -1445,6 +1476,15 @@ public final class PatchZipConverter {
                 continue
             }
 
+            let (expandedSum, expandedOverflow) = totalUncompressedBytes.addingReportingOverflow(uncompressedSize)
+            guard !expandedOverflow,
+                  !PatchPackageLimits.exceedsExpandedLimit(expandedSum),
+                  compressedSize <= UInt64(UInt32.max),
+                  uncompressedSize <= UInt64(UInt32.max) else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            totalUncompressedBytes = expandedSum
+
             guard localHeaderOffset <= UInt64(Int.max) else {
                 throw PatchZipConverterError.corruptedArchive("Invalid local header offset for: \(filename)")
             }
@@ -1461,6 +1501,12 @@ public final class PatchZipConverter {
             let localNameLen = Int(data.readUInt16(at: localOff + 26))
             let localExtraLen = Int(data.readUInt16(at: localOff + 28))
             let payloadOffset = UInt64(localOff + 30 + localNameLen + localExtraLen)
+            let isEncrypted = (bitFlags & 0x0001) != 0
+            let storedPayloadSize = (isEncrypted || compressionMethod != 0) ? compressedSize : uncompressedSize
+            guard payloadOffset <= UInt64(data.count),
+                  storedPayloadSize <= UInt64(data.count) - payloadOffset else {
+                throw PatchZipConverterError.corruptedArchive("Truncated file payload for: \(filename)")
+            }
 
             results[filename] = ZipArchiveEntryHeader(
                 path: filename,
@@ -1502,8 +1548,13 @@ public final class PatchZipConverter {
             if hasSecurity { url.stopAccessingSecurityScopedResource() }
         }
         let data = try Data(contentsOf: url, options: .alwaysMapped)
+        guard data.count >= 4,
+              data.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) || data.prefix(4) == Data([0x50, 0x4B, 0x05, 0x06]) else {
+            throw PatchZipConverterError.corruptedArchive(AppLanguage.current.text("error.patch_converter.invalid_zip_magic"))
+        }
         let headers = try readZipArchiveHeaders(from: data)
         let isProtected = headers.values.contains { $0.isEncrypted }
+        let hasUnsupportedCompression = headers.values.contains { $0.compressionMethod != 0 && $0.compressionMethod != 8 }
         let activePaths = headers.keys.sorted().filter { path in
             let parts = path.replacingOccurrences(of: "\\", with: "/")
                 .split(separator: "/").map(String.init)
@@ -1513,11 +1564,13 @@ public final class PatchZipConverter {
             return true
         }
 
+        let classification = Self.classifyZipPaths(activePaths)
+        var resolvedTarget = classification.detectedTarget
         let cleanPwd = password.flatMap { $0.isEmpty ? nil : $0 }
         var detectedName: String? = nil
         var isUnlocked = !isProtected
 
-        if !isProtected || cleanPwd != nil {
+        if !hasUnsupportedCompression && (!isProtected || cleanPwd != nil) {
             let metaCandidates = ["settings.json", "patch.json", "manifest.json"]
             if let metaHeader = headers.values.first(where: { header in
                 let last = (header.path as NSString).lastPathComponent.lowercased()
@@ -1525,11 +1578,17 @@ public final class PatchZipConverter {
             }) {
                 if let jsonData = try? extractZipEntry(header: metaHeader, from: data, password: cleanPwd) {
                     isUnlocked = true
-                    if let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                       let name = dict["name"] as? String {
-                        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            detectedName = trimmed
+                    if let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                        if let name = dict["name"] as? String {
+                            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                detectedName = trimmed
+                            }
+                        }
+                        if let bundles = dict["bundleIdentifiers"] as? [String],
+                           let firstBundle = bundles.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                           !firstBundle.isEmpty {
+                            resolvedTarget = firstBundle
                         }
                     }
                 } else if metaHeader.isEncrypted {
@@ -1568,7 +1627,10 @@ public final class PatchZipConverter {
             isPasswordProtected: isProtected,
             suggestedName: detectedName,
             entryCount: activePaths.count,
-            isUnlocked: isUnlocked
+            isUnlocked: isUnlocked,
+            isValidPatchOrModArchive: classification.isValid,
+            detectedTarget: resolvedTarget,
+            hasUnsupportedCompression: hasUnsupportedCompression
         )
     }
 
@@ -2069,6 +2131,138 @@ public final class PatchZipConverter {
         return segment.range(of: #"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$"#, options: .regularExpression) != nil
     }
 
+    private struct ArchiveStructureClassification {
+        let isValid: Bool
+        let hasManifestOrSettings: Bool
+        let hasExplicitContainer: Bool
+        let hasContainerFolder: Bool
+        let hasAovStructure: Bool
+        let detectedAovVersion: String?
+        let explicitAppBundles: [String]
+        let detectedTarget: String?
+    }
+
+    private static let aovStructureMarkers: Set<String> = [
+        "resources", "databin", "ages", "assetrefs", "prefab_characters",
+        "thanos", "commonactions", "sound", "sound_vn", "languages",
+        "assetbundle", "assetbundles", "behaviac", "lua_signed"
+    ]
+
+    private static let aovStructureFileExtensions: Set<String> = [
+        ".pkg.bytes", ".assetbundle", ".mses", ".bytes", ".bnk", ".wem"
+    ]
+
+    private static let aovStructureKnownFiles: Set<String> = [
+        "languagemap.txt", "version.txt"
+    ]
+
+    private static func classifyZipPaths(_ rawPaths: [String]) -> ArchiveStructureClassification {
+        let rawItems: [(parts: [String], data: Data)] = rawPaths.sorted().compactMap { rawName in
+            let cleaned = rawName.replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !cleaned.isEmpty, !rawName.hasSuffix("/") else { return nil }
+            let parts = cleaned.split(separator: "/").map(String.init)
+            guard !parts.isEmpty else { return nil }
+            if parts.contains(where: { $0.caseInsensitiveCompare("__MACOSX") == .orderedSame }) { return nil }
+            if let last = parts.last, last == ".DS_Store" || last.hasPrefix("._") { return nil }
+            return (parts: parts, data: Data())
+        }
+        let items = unwrapCommonRootWrappers(rawItems).items
+        return classifyUnwrappedItems(items)
+    }
+
+    private static func classifyUnwrappedItems(_ items: [(parts: [String], data: Data)]) -> ArchiveStructureClassification {
+        guard !items.isEmpty else {
+            return ArchiveStructureClassification(
+                isValid: false,
+                hasManifestOrSettings: false,
+                hasExplicitContainer: false,
+                hasContainerFolder: false,
+                hasAovStructure: false,
+                detectedAovVersion: nil,
+                explicitAppBundles: [],
+                detectedTarget: nil
+            )
+        }
+
+        let metadataRoots: Set<String> = ["patch.json", "manifest.json", "settings.json"]
+        let containerFolderRoots: Set<String> = ["documents", "library", "tmp"]
+        var hasManifestOrSettings = false
+        var hasExplicitContainer = false
+        var hasContainerFolder = false
+        var hasAovStructure = false
+        var detectedAovVersion: String?
+        var explicitAppBundles: [String] = []
+        var firstExplicitBundle: String?
+
+        for item in items {
+            if item.parts.count == 1 && metadataRoots.contains(item.parts[0].lowercased()) {
+                hasManifestOrSettings = true
+                continue
+            }
+            if let classified = classifyContainerParts(item.parts) {
+                hasExplicitContainer = true
+                firstExplicitBundle = firstExplicitBundle ?? classified.bundleID
+                if classified.containerKind == "application" && !explicitAppBundles.contains(classified.bundleID) {
+                    explicitAppBundles.append(classified.bundleID)
+                }
+                let relParts = classified.relativePath.split(separator: "/").map(String.init)
+                if relParts.contains(where: { aovStructureMarkers.contains($0.lowercased()) }) {
+                    hasAovStructure = true
+                }
+                continue
+            }
+            if let firstLower = item.parts.first?.lowercased(),
+               containerFolderRoots.contains(firstLower),
+               item.parts.count >= 2 {
+                hasContainerFolder = true
+            }
+            for (idx, seg) in item.parts.enumerated() {
+                let lowerSeg = seg.lowercased()
+                if aovStructureMarkers.contains(lowerSeg) {
+                    hasAovStructure = true
+                    if lowerSeg == "resources", idx + 1 < item.parts.count, isVersionSegment(item.parts[idx + 1]) {
+                        detectedAovVersion = detectedAovVersion ?? item.parts[idx + 1]
+                    }
+                } else if idx == 0 && item.parts.count > 1 && isVersionSegment(seg) {
+                    hasAovStructure = true
+                    detectedAovVersion = detectedAovVersion ?? seg
+                }
+            }
+            if AovModMergerEngine.normalizeAovPath(item.parts.joined(separator: "/"), fallbackVersion: nil) != nil {
+                hasAovStructure = true
+            }
+            let lastLower = item.parts.last?.lowercased() ?? ""
+            if aovStructureKnownFiles.contains(lastLower)
+                || aovStructureFileExtensions.contains(where: { lastLower.hasSuffix($0) }) {
+                hasAovStructure = true
+            }
+        }
+
+        let isValid = hasManifestOrSettings || hasExplicitContainer || hasContainerFolder || hasAovStructure
+        let detectedTarget: String?
+        if let bundle = explicitAppBundles.first ?? firstExplicitBundle {
+            detectedTarget = bundle
+        } else if hasAovStructure {
+            detectedTarget = "com.garena.game.kgvn"
+        } else if hasManifestOrSettings || hasContainerFolder {
+            detectedTarget = "Documents / Container"
+        } else {
+            detectedTarget = nil
+        }
+
+        return ArchiveStructureClassification(
+            isValid: isValid,
+            hasManifestOrSettings: hasManifestOrSettings,
+            hasExplicitContainer: hasExplicitContainer,
+            hasContainerFolder: hasContainerFolder,
+            hasAovStructure: hasAovStructure,
+            detectedAovVersion: detectedAovVersion,
+            explicitAppBundles: explicitAppBundles,
+            detectedTarget: detectedTarget
+        )
+    }
+
     private static func unwrapCommonRootWrappers(
         _ rawItems: [(parts: [String], data: Data)]
     ) -> (items: [(parts: [String], data: Data)], inferredName: String?) {
@@ -2076,7 +2270,8 @@ public final class PatchZipConverter {
             "application", "appgroup", "systemappgroup", "payload",
             "documents", "library", "tmp",
             "resources", "databin", "ages", "assetrefs", "prefab_characters",
-            "thanos", "commonactions", "sound", "sound_vn", "languages", "assetbundles"
+            "thanos", "commonactions", "sound", "sound_vn", "languages",
+            "assetbundle", "assetbundles", "behaviac", "lua_signed"
         ]
         var current = rawItems
         var lastStripped: String?
@@ -2273,45 +2468,16 @@ public final class PatchZipConverter {
             }
         }
 
-        let aovMarkers: Set<String> = [
-            "resources", "databin", "ages", "assetrefs", "prefab_characters",
-            "thanos", "commonactions", "sound", "sound_vn", "languages", "assetbundles"
-        ]
-        var hasAovStructure = false
-        var detectedAovVersion: String?
-        var explicitAppBundles: [String] = []
-        let metadataRoots: Set<String> = ["patch.json", "manifest.json", "settings.json"]
-
-        for item in items {
-            if item.parts.count == 1 && metadataRoots.contains(item.parts[0].lowercased()) {
-                continue
-            }
-            if let classified = Self.classifyContainerParts(item.parts) {
-                if classified.containerKind == "application" && !explicitAppBundles.contains(classified.bundleID) {
-                    explicitAppBundles.append(classified.bundleID)
-                }
-                continue
-            }
-            for (idx, seg) in item.parts.enumerated() {
-                let lowerSeg = seg.lowercased()
-                if aovMarkers.contains(lowerSeg) {
-                    hasAovStructure = true
-                    if lowerSeg == "resources", idx + 1 < item.parts.count, Self.isVersionSegment(item.parts[idx + 1]) {
-                        detectedAovVersion = detectedAovVersion ?? item.parts[idx + 1]
-                    }
-                } else if idx == 0 && item.parts.count > 1 && Self.isVersionSegment(seg) {
-                    hasAovStructure = true
-                    detectedAovVersion = detectedAovVersion ?? seg
-                }
-            }
-            let lastLower = item.parts.last?.lowercased() ?? ""
-            if lastLower.hasSuffix(".pkg.bytes")
-                || lastLower.hasSuffix(".assetbundle")
-                || lastLower.hasSuffix(".mses")
-                || lastLower == "languagemap.txt" {
-                hasAovStructure = true
-            }
+        let classification = Self.classifyUnwrappedItems(items)
+        guard classification.isValid else {
+            throw PatchZipConverterError.invalidProject(
+                AppLanguage.current.text("error.patch_converter.zip_unrecognized_structure")
+            )
         }
+        let hasAovStructure = classification.hasAovStructure
+        let detectedAovVersion = classification.detectedAovVersion
+        let explicitAppBundles = classification.explicitAppBundles
+        let metadataRoots: Set<String> = ["patch.json", "manifest.json", "settings.json"]
 
         let fallbackBundleID = explicitAppBundles.first
             ?? (hasAovStructure ? "com.garena.game.kgvn" : "com.apple.mobile.MobileHouseArrest")

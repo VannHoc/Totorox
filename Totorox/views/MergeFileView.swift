@@ -3,6 +3,23 @@ import UniformTypeIdentifiers
 import UIKit
 import CryptoKit
 
+struct MergeHistoryItem: Identifiable, Codable, Equatable {
+    let id: UUID
+    let sourceSummary: String
+    let targetName: String
+    let targetPath: String
+    let resourceVersion: String
+    let totalFilesWritten: Int
+    let smartMergedConflicts: Int
+    let fileSizeText: String
+    let timestamp: Date
+}
+
+private struct MergeShareURLItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct MergeFileView: View {
     @Environment(\.appLanguage) private var language
     @State private var selectedMods: [AovModSummary] = []
@@ -13,9 +30,13 @@ struct MergeFileView: View {
     @State private var progressStatus: String = ""
     @State private var progressValue: Double = 0.0
     @State private var mergeResult: AovMergeResult? = nil
-    @State private var showShareSheet: Bool = false
+    @State private var activeShareItem: MergeShareURLItem? = nil
     @State private var showLogsDetail: Bool = false
     @State private var alertMessage: String? = nil
+    @State private var mergeHistory: [MergeHistoryItem] = []
+
+    private static let maximumRetainedMerges = 10
+    private static let historyStorageKey = "totorox.merge.history.v1"
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -33,21 +54,27 @@ struct MergeFileView: View {
                 if let result = mergeResult {
                     mergeResultCard(result)
                 }
+
+                // MARK: - Lịch sử gộp file mod
+                if !mergeHistory.isEmpty {
+                    mergeHistorySection
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 32)
         }
         .background(TotoroxTheme.pageBackground)
+        .onAppear {
+            loadPersistedHistory()
+        }
         .sheet(isPresented: $showMultiZipPicker) {
             MultiZipDocumentPicker { urls in
                 handlePickedModURLs(urls)
             }
         }
-        .sheet(isPresented: $showShareSheet) {
-            if let result = mergeResult {
-                ActivityShareSheet(items: [result.outputZipURL])
-            }
+        .sheet(item: $activeShareItem) { item in
+            ActivityShareSheet(items: [item.url])
         }
         .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
@@ -420,7 +447,7 @@ struct MergeFileView: View {
 
                 // Nút Lưu / Chia sẻ file .zip
                 Button {
-                    showShareSheet = true
+                    activeShareItem = MergeShareURLItem(url: result.outputZipURL)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.and.arrow.up")
@@ -436,6 +463,103 @@ struct MergeFileView: View {
             }
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
+    }
+
+    private var mergeHistorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(language.text("merge.history.title"))
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+
+                Spacer()
+
+                Button(language.text("merge.history.clear")) {
+                    clearMergeHistory()
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.red.opacity(0.85))
+                .buttonStyle(.plain)
+            }
+
+            VStack(spacing: 8) {
+                ForEach(mergeHistory) { item in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.targetName)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                .lineLimit(1)
+
+                            Text(item.sourceSummary)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                .lineLimit(1)
+
+                            Text(
+                                language.text(
+                                    "merge.history.meta",
+                                    item.fileSizeText,
+                                    item.totalFilesWritten,
+                                    item.smartMergedConflicts
+                                )
+                            )
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 4)
+
+                        HStack(spacing: 8) {
+                            Button {
+                                let target = URL(fileURLWithPath: item.targetPath)
+                                guard FileManager.default.fileExists(atPath: target.path) else {
+                                    loadPersistedHistory()
+                                    return
+                                }
+                                AppNavigationCoordinator.shared.navigateToOverwrite(
+                                    patchURL: target,
+                                    bundleID: "com.garena.game.kgvn"
+                                )
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 11, weight: .semibold))
+                                    Text(language.text("merge.history.send_action"))
+                                        .font(.system(size: 11.5, weight: .bold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(TotoroxTheme.mintAccent)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                let target = URL(fileURLWithPath: item.targetPath)
+                                if FileManager.default.fileExists(atPath: target.path) {
+                                    activeShareItem = MergeShareURLItem(url: target)
+                                } else {
+                                    loadPersistedHistory()
+                                }
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+                                    .padding(7)
+                                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(language.text("merge.history.share_action"))
+                        }
+                    }
+                    .modifier(TotoroxCardModifier(cornerRadius: 14, padding: 12))
+                }
+            }
+        }
     }
 
     private func resultInfoRow(label: String, value: String) -> some View {
@@ -500,11 +624,12 @@ struct MergeFileView: View {
         }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
-        guard let magic = try? handle.read(upToCount: 2), magic.count == 2 else { return false }
-        return magic[0] == 0x50 && magic[1] == 0x4B
+        guard let magic = try? handle.read(upToCount: 4), magic.count == 4 else { return false }
+        return magic == Data([0x50, 0x4B, 0x03, 0x04])
     }
 
     private func handlePickedModURLs(_ urls: [URL]) {
+        let activeLanguage = language
         Task.detached(priority: .userInitiated) {
             struct PickedItem: Sendable {
                 let summary: AovModSummary
@@ -512,10 +637,10 @@ struct MergeFileView: View {
             }
 
             var newlyInspected: [PickedItem] = []
-            var rejectedNames: [String] = []
+            var rejectedDetails: [String] = []
             for url in urls {
                 if url.pathExtension.lowercased() == "3105" {
-                    rejectedNames.append(url.lastPathComponent)
+                    rejectedDetails.append("• \(activeLanguage.text("merge.error.only_zip_entry", url.lastPathComponent))")
                     continue
                 }
 
@@ -534,27 +659,20 @@ struct MergeFileView: View {
 
                 if (try? fm.copyItem(at: url, to: localCopy)) != nil {
                     guard Self.isZipArchiveFile(at: localCopy) else {
-                        rejectedNames.append(url.lastPathComponent)
+                        rejectedDetails.append("• \(activeLanguage.text("merge.error.not_valid_zip_entry", url.lastPathComponent))")
                         try? fm.removeItem(at: importDir)
                         continue
                     }
-                    let hash = Self.sha256Hex(forFileAt: localCopy)
-                    let summary: AovModSummary
-                    if let inspected = try? AovModMergerEngine.shared.inspectModArchive(at: localCopy) {
-                        summary = inspected
-                    } else {
-                        let sz = Int64((try? localCopy.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                        summary = AovModSummary(
-                            url: localCopy,
-                            fileName: url.lastPathComponent,
-                            fileSize: sz,
-                            heroID: nil,
-                            skinID: nil,
-                            resourceVersion: nil
-                        )
+                    do {
+                        let summary = try AovModMergerEngine.shared.inspectModArchive(at: localCopy)
+                        let hash = Self.sha256Hex(forFileAt: localCopy)
+                        newlyInspected.append(PickedItem(summary: summary, sha256: hash))
+                    } catch {
+                        rejectedDetails.append("• \(error.localizedDescription)")
+                        try? fm.removeItem(at: importDir)
                     }
-                    newlyInspected.append(PickedItem(summary: summary, sha256: hash))
                 } else {
+                    rejectedDetails.append("• \(activeLanguage.text("merge.error.open_source_mod", url.lastPathComponent))")
                     try? fm.removeItem(at: importDir)
                 }
             }
@@ -581,8 +699,12 @@ struct MergeFileView: View {
                         }
                     }
                 }
-                if !rejectedNames.isEmpty {
-                    self.alertMessage = language.text("merge.alert.unsupported_zip", rejectedNames.joined(separator: ", "))
+                if !rejectedDetails.isEmpty {
+                    self.alertMessage = self.language.text(
+                        "merge.alert.invalid_mods_skipped",
+                        rejectedDetails.count,
+                        rejectedDetails.joined(separator: "\n")
+                    )
                 }
             }
         }
@@ -592,9 +714,11 @@ struct MergeFileView: View {
         let urls = selectedMods.map(\.url)
         guard urls.count >= 2 else { return }
 
+        let activeLanguage = language
+        loadPersistedHistory()
         isMerging = true
         mergeResult = nil
-        progressStatus = language.text("merge.progress.initializing")
+        progressStatus = activeLanguage.text("merge.progress.initializing")
         progressValue = 0.02
 
         Task {
@@ -608,6 +732,42 @@ struct MergeFileView: View {
                 await MainActor.run {
                     self.isMerging = false
                     self.mergeResult = res
+                    let modNames = res.mergedMods.map {
+                        URL(fileURLWithPath: $0.fileName).deletingPathExtension().lastPathComponent
+                    }
+                    let sourceSummary: String
+                    if modNames.count <= 2 {
+                        sourceSummary = modNames.joined(separator: " + ")
+                    } else {
+                        let firstTwo = modNames.prefix(2).joined(separator: ", ")
+                        sourceSummary = activeLanguage.text("merge.history.sources_more", firstTwo, modNames.count - 2)
+                    }
+                    let sizeStr = ByteCountFormatter.string(fromByteCount: res.outputFileSize, countStyle: .file)
+                    let item = MergeHistoryItem(
+                        id: UUID(),
+                        sourceSummary: sourceSummary,
+                        targetName: res.outputZipURL.lastPathComponent,
+                        targetPath: res.outputZipURL.path,
+                        resourceVersion: res.resourceVersion,
+                        totalFilesWritten: res.totalFilesWritten,
+                        smartMergedConflicts: res.smartMergedConflicts,
+                        fileSizeText: sizeStr,
+                        timestamp: Date()
+                    )
+                    self.mergeHistory.insert(item, at: 0)
+                    if self.mergeHistory.count > Self.maximumRetainedMerges {
+                        let activeResultPath = res.outputZipURL.standardizedFileURL.path
+                        let overflow = self.mergeHistory.suffix(from: Self.maximumRetainedMerges)
+                        for old in overflow {
+                            let oldPath = URL(fileURLWithPath: old.targetPath).standardizedFileURL.path
+                            if oldPath != activeResultPath {
+                                try? FileManager.default.removeItem(atPath: old.targetPath)
+                            }
+                        }
+                        self.mergeHistory.removeLast(self.mergeHistory.count - Self.maximumRetainedMerges)
+                    }
+                    self.savePersistedHistory()
+                    self.pruneOrphanedMergedFiles()
                 }
             } catch {
                 await MainActor.run {
@@ -615,6 +775,54 @@ struct MergeFileView: View {
                     self.alertMessage = error.localizedDescription
                 }
             }
+        }
+    }
+
+    private func loadPersistedHistory() {
+        let fm = FileManager.default
+        if let data = UserDefaults.standard.data(forKey: Self.historyStorageKey),
+           let decoded = try? JSONDecoder().decode([MergeHistoryItem].self, from: data) {
+            let valid = Array(decoded.filter { fm.fileExists(atPath: $0.targetPath) }.prefix(Self.maximumRetainedMerges))
+            mergeHistory = valid
+            if valid != decoded {
+                savePersistedHistory()
+            }
+        } else {
+            mergeHistory.removeAll { !fm.fileExists(atPath: $0.targetPath) }
+        }
+        pruneOrphanedMergedFiles()
+    }
+
+    private func savePersistedHistory() {
+        if let data = try? JSONEncoder().encode(mergeHistory) {
+            UserDefaults.standard.set(data, forKey: Self.historyStorageKey)
+        }
+    }
+
+    private func clearMergeHistory() {
+        let fm = FileManager.default
+        let activeResultPath = mergeResult?.outputZipURL.standardizedFileURL.path
+        for item in mergeHistory {
+            let itemPath = URL(fileURLWithPath: item.targetPath).standardizedFileURL.path
+            if itemPath != activeResultPath {
+                try? fm.removeItem(atPath: item.targetPath)
+            }
+        }
+        mergeHistory.removeAll()
+        savePersistedHistory()
+        pruneOrphanedMergedFiles()
+    }
+
+    private func pruneOrphanedMergedFiles() {
+        let fm = FileManager.default
+        let mergedDir = fm.temporaryDirectory.appendingPathComponent("TotoroxMergedMods", isDirectory: true)
+        var retained = Set(mergeHistory.map { URL(fileURLWithPath: $0.targetPath).standardizedFileURL.path })
+        if let current = mergeResult?.outputZipURL {
+            retained.insert(current.standardizedFileURL.path)
+        }
+        guard let entries = try? fm.contentsOfDirectory(at: mergedDir, includingPropertiesForKeys: nil) else { return }
+        for entry in entries where !retained.contains(entry.standardizedFileURL.path) {
+            try? fm.removeItem(at: entry)
         }
     }
 }

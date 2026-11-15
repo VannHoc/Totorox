@@ -351,12 +351,9 @@
 "converter.section.output_config" = "Tùy chỉnh tệp xuất";
 "converter.label.output_filename" = "Tên tệp sau khi chuyển đổi";
 "converter.placeholder.output_filename" = "Ví dụ: Skin_Mod_Pro";
-"converter.hint.project_name" = "Tên này sẽ được dùng cho tên tệp đầu ra và tên gói bên trong .3105.";
 "converter.label.output_password" = "Mật khẩu cho tệp đầu ra (tùy chọn)";
 "converter.placeholder.output_password_3105" = "Đặt mật khẩu khóa file .3105 (để trống nếu không khóa)";
 "converter.placeholder.output_password_zip" = "Đặt mật khẩu khóa file .zip (để trống nếu không khóa)";
-"converter.hint.output_password_3105" = "Mật khẩu sẽ mã hóa toàn bộ gói .3105 bằng AES-256-GCM + PBKDF2.";
-"converter.hint.output_password_zip" = "Mật khẩu sẽ bảo vệ các tệp trong file .zip (chuẩn ZipCrypto tương thích đa nền tảng).";
 "converter.button.start" = "Bắt đầu chuyển đổi";
 "converter.result.success" = "Chuyển đổi thành công!";
 "converter.button.share_output" = "Lưu / Chia sẻ tệp kết quả";
@@ -366,6 +363,10 @@
 "converter.summary.zip_too_large" = "Tệp ZIP quá lớn để xem trước nhanh (vượt giới hạn 3.6 GB)";
 "converter.summary.zip_valid" = "ZIP hợp lệ (%lld tệp) • Đích nhận diện: %@";
 "converter.summary.zip_standard" = "Tệp ZIP hợp lệ";
+"converter.summary.zip_empty" = "Tệp ZIP trống (không chứa dữ liệu hợp lệ)";
+"converter.summary.zip_invalid" = "Tệp ZIP không hợp lệ hoặc bị hỏng (%@)";
+"converter.summary.zip_unsupported_compression" = "Tệp ZIP sử dụng phương thức nén/mã hóa không được hỗ trợ (ví dụ WinZip AES)";
+"converter.summary.zip_unrecognized_structure" = "Đây là tệp ZIP thông thường, không chứa cấu trúc Mod Liên Quân hoặc gói .3105 hợp lệ";
 "converter.summary.3105_too_large" = "Gói .3105 vượt quá giới hạn dung lượng 3.6 GB";
 "converter.summary.3105_protected" = "Gói .3105 v%lld có mật khẩu • Hãy nhập mật khẩu để mở khóa";
 "converter.summary.3105_project" = "Gói: %@ • Tác giả: %@ • %lld quy tắc • Đích: %@";
@@ -374,6 +375,7 @@
 "converter.summary.3105_invalid_header" = "Không đọc được header của gói .3105 (tệp có thể bị hỏng hoặc sai định dạng)";
 "converter.error.source_password_required_3105" = "Gói .3105 này được bảo vệ bằng mật khẩu. Vui lòng nhập mật khẩu mở tệp nguồn.";
 "converter.error.source_password_required_zip" = "Tệp .zip này được bảo vệ bằng mật khẩu. Vui lòng nhập mật khẩu giải nén nguồn.";
+"converter.error.invalid_source_file" = "Tệp nguồn không hợp lệ. Vui lòng chọn đúng tệp hợp lệ để chuyển đổi.";
 "error.patch_converter.corrupted_archive" = "Gói bản vá bị lỗi hoặc sai cấu trúc: %@";
 "error.patch_converter.unsupported_format" = "Định dạng không được hỗ trợ: %@";
 "error.patch_converter.invalid_manifest" = "Header / Manifest của gói không hợp lệ: %@";
@@ -387,6 +389,7 @@
 "error.patch_converter.zip_password_required" = "Tệp .zip có đặt mật khẩu. Vui lòng nhập mật khẩu.";
 "error.patch_converter.zip_aes_unsupported" = "Chưa hỗ trợ .zip mã hóa WinZip AES. Vui lòng dùng mật khẩu ZIP chuẩn (ZipCrypto).";
 "error.patch_converter.zip_no_rules" = "Tệp .zip không chứa tệp dữ liệu hợp lệ nào.";
+"error.patch_converter.zip_unrecognized_structure" = "Tệp .zip không chứa cấu trúc Mod Liên Quân (Resources/...) hoặc thư mục gói .3105 hợp lệ.";
 "error.patch_converter.invalid_zip_magic" = "Tệp được chọn không phải là file .zip hợp lệ.";
 "error.patch_converter.invalid_envelope_plist" = "Không thể đọc envelope plist bên trong gói .3105.";
 "error.patch_converter.invalid_payload_plist" = "Không thể đọc dữ liệu payload plist bên trong gói .3105.";
@@ -443,7 +446,14 @@
 "merge.result.logs_toggle" = "Xem nhật ký xử lý (%lld bước)";
 "merge.result.send_to_overwrite" = "Gửi ngay sang Tab Đè file";
 "merge.result.share_output" = "Lưu / Chia sẻ tệp .zip";
+"merge.history.title" = "Lịch sử gộp file mod";
+"merge.history.clear" = "Xóa lịch sử";
+"merge.history.meta" = "%@ • %lld tệp • %lld xung đột";
+"merge.history.send_action" = "Đè file";
+"merge.history.share_action" = "Chia sẻ / Lưu tệp .zip";
+"merge.history.sources_more" = "%@ (+%lld mod khác)";
 "merge.alert.unsupported_zip" = "Chỉ hỗ trợ file mod định dạng .zip. Đã bỏ qua: %@";
+"merge.alert.invalid_mods_skipped" = "Không thể thêm %lld tệp không hợp lệ:\n%@";
 "merge.badge.generic" = "Mod Liên Quân";
 "merge.badge.hero" = "Tướng #%lld";
 "merge.badge.hero_skin" = "Tướng #%lld • Skin #%lld";
@@ -460,6 +470,8 @@
 "merge.error.zip_creation" = "Không thể đóng gói tệp ZIP đầu ra: %@";
 "merge.error.only_zip_entry" = "Tệp '%@' không phải định dạng .zip được hỗ trợ để gộp.";
 "merge.error.not_valid_zip_entry" = "Không thể đọc tệp ZIP '%@' (tệp hỏng hoặc không phải định dạng ZIP).";
+"merge.error.empty_zip" = "Tệp ZIP '%@' trống, không chứa dữ liệu nào.";
+"merge.error.encrypted_zip" = "Tệp ZIP '%@' có mật khẩu; tính năng Gộp Mod chưa hỗ trợ ZIP đặt mật khẩu.";
 "merge.error.invalid_server_response" = "Phản hồi kế hoạch gộp từ máy chủ không hợp lệ.";
 "merge.error.server_prefix" = "Lỗi gộp từ máy chủ: %@";
 "merge.error.size_limit" = "Dung lượng gộp dự kiến vượt quá giới hạn 3.6 GB.";
