@@ -729,7 +729,7 @@ public final class PatchZipConverter {
             header.appendUInt16(1 << 11)
             header.appendUInt16(0)
             header.appendUInt16(0)
-            header.appendUInt16(0)
+            header.appendUInt16(0x0021) // DOS 1980-01-01 valid date (month=0/day=0 is invalid)
             header.appendUInt32(entryCRC)
             header.appendUInt32(size)
             header.appendUInt32(size)
@@ -746,7 +746,7 @@ public final class PatchZipConverter {
             centralDirectory.appendUInt16(1 << 11)
             centralDirectory.appendUInt16(0)
             centralDirectory.appendUInt16(0)
-            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0x0021)
             centralDirectory.appendUInt32(entryCRC)
             centralDirectory.appendUInt32(size)
             centralDirectory.appendUInt32(size)
@@ -796,7 +796,7 @@ public final class PatchZipConverter {
             header.appendUInt16(1 << 11)
             header.appendUInt16(compressionMethod)
             header.appendUInt16(0)
-            header.appendUInt16(0)
+            header.appendUInt16(0x0021)
             header.appendUInt32(crc32)
             header.appendUInt32(compressedSize)
             header.appendUInt32(uncompressedSize)
@@ -824,7 +824,7 @@ public final class PatchZipConverter {
             centralDirectory.appendUInt16(1 << 11)
             centralDirectory.appendUInt16(compressionMethod)
             centralDirectory.appendUInt16(0)
-            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0x0021)
             centralDirectory.appendUInt32(crc32)
             centralDirectory.appendUInt32(compressedSize)
             centralDirectory.appendUInt32(uncompressedSize)
@@ -872,7 +872,7 @@ public final class PatchZipConverter {
             header.appendUInt16(1 << 11)
             header.appendUInt16(compressionMethod)
             header.appendUInt16(0)
-            header.appendUInt16(0)
+            header.appendUInt16(0x0021)
             header.appendUInt32(crc32)
             header.appendUInt32(compressedSize)
             header.appendUInt32(uncompressedSize)
@@ -889,7 +889,7 @@ public final class PatchZipConverter {
             centralDirectory.appendUInt16(1 << 11)
             centralDirectory.appendUInt16(compressionMethod)
             centralDirectory.appendUInt16(0)
-            centralDirectory.appendUInt16(0)
+            centralDirectory.appendUInt16(0x0021)
             centralDirectory.appendUInt32(crc32)
             centralDirectory.appendUInt32(compressedSize)
             centralDirectory.appendUInt32(uncompressedSize)
@@ -1106,7 +1106,7 @@ public final class PatchZipConverter {
             archive.appendUInt16(bitFlags)   // General purpose bit flag (UTF-8 + optional ZipCrypto)
             archive.appendUInt16(0)          // Compression method: 0 (Stored)
             archive.appendUInt16(0)          // Last mod file time
-            archive.appendUInt16(0)          // Last mod file date
+            archive.appendUInt16(0x0021)     // Last mod file date (DOS 1980-01-01)
             archive.appendUInt32(entryCRC)   // CRC-32
             archive.appendUInt32(compressedSize)   // Compressed size
             archive.appendUInt32(uncompressedSize) // Uncompressed size
@@ -1122,7 +1122,7 @@ public final class PatchZipConverter {
             centralDirectory.appendUInt16(bitFlags)   // Bit flag
             centralDirectory.appendUInt16(0)          // Compression method (Stored)
             centralDirectory.appendUInt16(0)          // Last mod time
-            centralDirectory.appendUInt16(0)          // Last mod date
+            centralDirectory.appendUInt16(0x0021)     // Last mod date (DOS 1980-01-01)
             centralDirectory.appendUInt32(entryCRC)   // CRC-32
             centralDirectory.appendUInt32(compressedSize)   // Compressed size
             centralDirectory.appendUInt32(uncompressedSize) // Uncompressed size
