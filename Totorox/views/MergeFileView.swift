@@ -62,46 +62,93 @@ struct MergeFileView: View {
     // MARK: - Card 1: Header Banner
 
     private var headerBannerCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(TotoroxTheme.mintAccent.opacity(0.15))
-                        .frame(width: 50, height: 50)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    TotoroxTheme.mintAccent.opacity(0.20),
+                                    TotoroxTheme.mintAccent.opacity(0.08)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 48, height: 48)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(TotoroxTheme.mintAccent.opacity(0.22), lineWidth: 0.75)
+                        )
 
                     Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: 21, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(language.text("merge.header.title"))
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.88)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    HStack(spacing: 5) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .bold))
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(language.text("merge.header.credit"))
-                            Text(language.text("merge.header.subcredit"))
-                                .opacity(0.8)
-                        }
-                        .font(.system(size: 12, weight: .semibold))
+                        Text(language.text("merge.header.credit"))
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.88)
                     }
                     .foregroundStyle(TotoroxTheme.mintAccent)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
             }
 
-            Divider()
+            Rectangle()
+                .fill(TotoroxTheme.dividerColor)
+                .frame(height: 1)
 
             Text(language.text("merge.header.subtitle"))
-                .font(.system(size: 12.5))
+                .font(.system(size: 13))
+                .lineSpacing(3)
                 .foregroundStyle(TotoroxTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.zipper")
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text(".ZIP")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(TotoroxTheme.mintAccent)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                .clipShape(Capsule())
+
+                Spacer(minLength: 6)
+
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                    Text(language.text("merge.header.subcredit"))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(TotoroxTheme.searchBackground.opacity(0.9))
+                .clipShape(Capsule())
+            }
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
     }
