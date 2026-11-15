@@ -15,9 +15,8 @@ struct SettingsView: View {
     @State private var showLogoutConfirm = false
 
     private var appVersionDisplay: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(language.text("common.version", version)) (Build \(build))"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.0"
+        return language.text("common.version", version)
     }
 
     var body: some View {
