@@ -168,6 +168,98 @@ struct AccountStatusBar: View {
     }
 }
 
+// MARK: - Hardware UDID Verification Card
+
+struct DeviceVerificationCard: View {
+    @ObservedObject private var license = LicenseManager.shared
+    @Environment(\.appLanguage) private var language
+    @Environment(\.openURL) private var openURL
+
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.system(size: compact ? 18 : 20, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .frame(width: compact ? 34 : 38, height: compact ? 34 : 38)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(language.text("udid.verify.title"))
+                        .font(.system(size: compact ? 13 : 14, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                    Text(language.text("udid.verify.subtitle"))
+                        .font(.system(size: compact ? 11 : 12))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if !compact {
+                VStack(alignment: .leading, spacing: 5) {
+                    stepRow(number: "1", text: language.text("udid.verify.step1"))
+                    stepRow(number: "2", text: language.text("udid.verify.step2"))
+                    stepRow(number: "3", text: language.text("udid.verify.step3"))
+                }
+                .padding(10)
+                .background(TotoroxTheme.pageBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            Button {
+                guard let url = license.deviceProfileURL() else { return }
+                openURL(url)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "safari.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(language.text("udid.verify.button"))
+                        .font(.system(size: compact ? 13 : 14, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: compact ? 38 : 44)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.15, green: 0.39, blue: 0.92), Color(red: 0.23, green: 0.51, blue: 0.96)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(license.deviceProfileURL() == nil)
+        }
+        .padding(compact ? 12 : 16)
+        .background(TotoroxTheme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 2)
+    }
+
+    private func stepRow(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(number)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.orange)
+                .frame(width: 18, height: 18)
+                .background(Color.orange.opacity(0.14))
+                .clipShape(Circle())
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 // MARK: - Reusable Search Bar Component
 
 struct TotoroxSearchBar: View {

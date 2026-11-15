@@ -255,8 +255,20 @@
 "settings.license_switch_confirm_title" = "更换 License Key？";
 "settings.license_switch_confirm_msg" = "当前密钥将从本机注销，并跳转回密钥输入界面。";
 "settings.license_switch_confirm_action" = "进入输入密钥页面";
-"settings.udid_hardware" = "硬件 UDID (MobileGestalt)";
-"settings.udid_fallback" = "备用设备标识符";
+"settings.udid_verified_profile" = "真实硬件 UDID (已通过 Apple OTA 验证)";
+"udid.verify.title" = "设备 UDID 尚未验证";
+"udid.verify.subtitle" = "需通过 Safari 验证真实硬件 UDID，方可兑换激活码并绑定保护账户。";
+"udid.verify.step1" = "点击下方按钮打开 Safari，点击\"允许\"下载配置描述文件。";
+"udid.verify.step2" = "前往 设置 → 已下载描述文件 → 安装，以完成硬件 UDID 读取。";
+"udid.verify.step3" = "点击页面中的\"打开 Totorox 应用\"按钮即可自动完成绑定。";
+"udid.verify.button" = "验证设备 (获取真实 UDID)";
+"udid.verify.not_verified_short" = "尚未验证真实硬件 UDID";
+"udid.verify.alert.success_title" = "设备验证成功";
+"udid.verify.alert.success_fmt" = "已绑定真实硬件 UDID：\n%@";
+"udid.verify.alert.error_title" = "UDID 验证失败";
+"udid.verify.alert.conflict" = "当前设备的 UDID 已被其他账户绑定。";
+"udid.verify.alert.mismatch" = "此账户已锁定其他设备，请联系管理员重置 UDID。";
+"udid.verify.alert.invalid" = "未能从 Apple OTA 描述文件读取有效 UDID，请重试。";
 
 /* --- Account, Auth & Redeem --- */
 "account.section_title" = "账户与套餐";
@@ -270,6 +282,7 @@
 "account.uses_unlimited" = "无限制";
 "account.daily_usage_label" = "今日已用";
 "account.redeem_button" = "输入激活码 (兑换)";
+"account.redeem_more_button" = "叠加兑换激活码 (Redeem)";
 "account.status_redeem" = "兑换";
 "account.logout_button" = "退出登录";
 "account.logout_confirm_title" = "确认退出登录？";
@@ -406,8 +419,8 @@
 /* --- Tab 4: AoV Mod Merger UI & Engine --- */
 "merge.header.title" = "传说对决 Mod 合并工具";
 "merge.header.credit" = "智能 Mod 合并引擎";
-"merge.header.subcredit" = "由 VannHoc 开发 • 高速流式合并";
-"merge.header.subtitle" = "将多个 .zip Mod 智能合并为单个压缩包，完整保留回城、加速、音效与击杀播报特效。";
+"merge.header.subcredit" = "由 VannHoc 独家开发";
+"merge.header.subtitle" = "合并多个 .zip Mod 压缩包，完整保留原版特效。";
 "merge.list.title" = "Mod 压缩包列表 (.zip)";
 "merge.list.file_count" = "%lld 个文件";
 "merge.list.empty_hint" = "请选择至少 2 个英雄 .zip Mod 文件以合并为一个完整包。";

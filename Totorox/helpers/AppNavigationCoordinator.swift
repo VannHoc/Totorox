@@ -66,6 +66,12 @@ final class AppNavigationCoordinator: ObservableObject {
             self.selectedTab = .patch
         case "folders", "explorer":
             self.selectedTab = .folders
+        case "udid-verified":
+            let udid = components?.queryItems?.first(where: { $0.name == "udid" })?.value
+            let status = components?.queryItems?.first(where: { $0.name == "status" })?.value
+            Task {
+                await LicenseManager.shared.handleUDIDVerificationCallback(udid: udid, status: status)
+            }
         default:
             self.selectedTab = .overwrite
         }

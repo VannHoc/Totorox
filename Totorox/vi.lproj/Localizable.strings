@@ -255,8 +255,20 @@
 "settings.license_switch_confirm_title" = "Đổi License Key?";
 "settings.license_switch_confirm_msg" = "Key hiện tại sẽ được đăng xuất khỏi máy để mở lại màn hình nhập License Key.";
 "settings.license_switch_confirm_action" = "Mở màn hình nhập Key";
-"settings.udid_hardware" = "UDID phần cứng (MobileGestalt)";
-"settings.udid_fallback" = "Mã thiết bị dự phòng";
+"settings.udid_verified_profile" = "UDID phần cứng thật (Đã xác minh qua Apple OTA)";
+"udid.verify.title" = "Chưa xác minh UDID thiết bị";
+"udid.verify.subtitle" = "Cần xác minh UDID phần cứng thật qua Safari để nạp mã kích hoạt và bảo vệ tài khoản.";
+"udid.verify.step1" = "Nhấn nút bên dưới để mở Safari và chọn Cho phép tải hồ sơ cấu hình.";
+"udid.verify.step2" = "Mở Cài đặt → Đã tải về hồ sơ → Cài đặt để iOS xác thực phần cứng.";
+"udid.verify.step3" = "Nhấn \"Mở lại ứng dụng Totorox\" trên trình duyệt để hoàn tất tự động.";
+"udid.verify.button" = "Xác minh thiết bị (Lấy UDID thật)";
+"udid.verify.not_verified_short" = "Thiết bị chưa xác minh UDID thật";
+"udid.verify.alert.success_title" = "Xác minh thiết bị thành công";
+"udid.verify.alert.success_fmt" = "Đã gắn UDID phần cứng thật:\n%@";
+"udid.verify.alert.error_title" = "Xác minh UDID thất bại";
+"udid.verify.alert.conflict" = "UDID thiết bị này đã được liên kết với một tài khoản khác trước đó.";
+"udid.verify.alert.mismatch" = "Tài khoản này đang khóa với một thiết bị khác. Vui lòng liên hệ Admin để Reset UDID.";
+"udid.verify.alert.invalid" = "Không đọc được UDID hợp lệ từ hồ sơ Apple OTA. Vui lòng thử lại.";
 
 /* --- Account, Auth & Redeem --- */
 "account.section_title" = "TÀI KHOẢN & GÓI DỊCH VỤ";
@@ -270,6 +282,7 @@
 "account.uses_unlimited" = "Vô hạn";
 "account.daily_usage_label" = "Lượt dùng hôm nay";
 "account.redeem_button" = "Nhập mã kích hoạt (Redeem Code)";
+"account.redeem_more_button" = "Nhập mã kích hoạt thêm (Redeem Code)";
 "account.status_redeem" = "Nạp mã";
 "account.logout_button" = "Đăng xuất";
 "account.logout_confirm_title" = "Đăng xuất tài khoản?";
@@ -320,16 +333,16 @@
 "api.error.server_not_configured" = "Chưa cấu hình địa chỉ máy chủ. Nhấn 3 lần vào logo Totoro để nhập URL máy chủ.";
 
 /* --- Tab 3: Two-Way Patch Converter UI & Errors --- */
-"converter.header.title" = "Chuyển đổi qua lại .3105 ⇄ .zip";
-"converter.header.subtitle" = "Giải mã .3105 ra .zip hoặc đóng gói .zip thành .3105, tùy chỉnh tên tệp và mật khẩu xuất";
+"converter.header.title" = "Chuyển đổi .3105 ⇄ .zip";
+"converter.header.subtitle" = "Giải mã, đóng gói và tùy chỉnh mật khẩu tệp xuất.";
 "converter.dir.zip_to_patch" = ".zip ➔ .3105";
 "converter.dir.patch_to_zip" = ".3105 ➔ .zip";
 "converter.badge.zip_source" = "Tệp nguồn .zip";
 "converter.badge.3105_source" = "Tệp nguồn .3105";
 "converter.button.change_file" = "Đổi tệp";
-"converter.dropzone.pick_zip" = "Chọn tệp .zip cần đóng gói thành .3105";
-"converter.dropzone.pick_3105" = "Chọn tệp .3105 cần chuyển sang .zip";
-"converter.dropzone.subtitle" = "Hỗ trợ nhận diện mật khẩu tự động & kiểm tra cấu trúc cục bộ miễn phí";
+"converter.dropzone.pick_zip" = "Chọn tệp .zip để đóng gói";
+"converter.dropzone.pick_3105" = "Chọn tệp .3105 để giải mã";
+"converter.dropzone.subtitle" = "Tự động nhận diện mật khẩu & kiểm tra cấu trúc tệp.";
 "converter.section.source_password" = "Mật khẩu mở tệp nguồn";
 "converter.badge.required" = "Bắt buộc";
 "converter.placeholder.source_password_3105" = "Nhập mật khẩu giải mã .3105";
@@ -344,7 +357,7 @@
 "converter.placeholder.output_password_zip" = "Đặt mật khẩu khóa file .zip (để trống nếu không khóa)";
 "converter.hint.output_password_3105" = "Mật khẩu sẽ mã hóa toàn bộ gói .3105 bằng AES-256-GCM + PBKDF2.";
 "converter.hint.output_password_zip" = "Mật khẩu sẽ bảo vệ các tệp trong file .zip (chuẩn ZipCrypto tương thích đa nền tảng).";
-"converter.button.start" = "Bắt đầu Chuyển đổi";
+"converter.button.start" = "Bắt đầu chuyển đổi";
 "converter.result.success" = "Chuyển đổi thành công!";
 "converter.button.share_output" = "Lưu / Chia sẻ tệp kết quả";
 "converter.history.title" = "Lịch sử chuyển đổi";
@@ -406,16 +419,16 @@
 /* --- Tab 4: AoV Mod Merger UI & Engine --- */
 "merge.header.title" = "Gộp File Mod Liên Quân";
 "merge.header.credit" = "Công cụ gộp mod thông minh";
-"merge.header.subcredit" = "Phát triển bởi VannHoc • Streaming tốc độ cao";
-"merge.header.subtitle" = "Gộp thông minh nhiều file mod .zip thành 1 file duy nhất, giữ nguyên hiệu ứng biến về, gia tốc, âm thanh và thông báo hạ gục.";
-"merge.list.title" = "Danh sách gói Mod (.zip)";
+"merge.header.subcredit" = "Độc quyền phát triển bởi VannHoc";
+"merge.header.subtitle" = "Hợp nhất nhiều tệp mod .zip, giữ trọn vẹn hiệu ứng gốc.";
+"merge.list.title" = "Danh sách tệp Mod (.zip)";
 "merge.list.file_count" = "%lld tệp";
-"merge.list.empty_hint" = "Chọn từ 2 file mod tướng (.zip) trở lên để gộp thành 1 gói hoàn chỉnh.";
-"merge.button.add_first" = "Chọn file mod .zip";
-"merge.button.add_more" = "Thêm file mod .zip";
+"merge.list.empty_hint" = "Chọn từ 2 tệp mod (.zip) trở lên để bắt đầu gộp.";
+"merge.button.add_first" = "Thêm tệp mod (.zip)";
+"merge.button.add_more" = "Thêm tệp mod (.zip)";
 "merge.button.clear_all" = "Xóa hết";
 "merge.button.merging" = "Đang gộp tệp mod...";
-"merge.button.start" = "Bắt đầu Gộp (%lld file)";
+"merge.button.start" = "Bắt đầu gộp (%lld tệp)";
 "merge.progress.initializing" = "Đang khởi tạo tiến trình gộp...";
 "merge.progress.reading_catalog" = "Đang đọc mục lục các gói mod...";
 "merge.progress.extracting_configs" = "Đang trích xuất tệp cấu hình trùng (%lld xung đột)...";

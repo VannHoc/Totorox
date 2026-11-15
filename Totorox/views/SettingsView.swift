@@ -62,6 +62,11 @@ struct SettingsView: View {
                     // License & Device UDID Card
                     licenseAndDeviceCard
 
+                    if !license.isDeviceVerified {
+                        DeviceVerificationCard(compact: false)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
                     // Language Selection
                     VStack(alignment: .leading, spacing: 14) {
                         Text(language.text("settings.section_language"))
@@ -192,13 +197,10 @@ struct SettingsView: View {
                             .foregroundStyle(TotoroxTheme.textSecondary)
                     }
                     .totoroxCard()
-
-                    // Prominent red Logout CTA at the bottom (centered, non-full-width)
-                    logoutBottomButton
-                        .padding(.top, 6)
-                        .padding(.bottom, 12)
                 }
                 .padding(16)
+                .animation(.easeInOut(duration: 0.25), value: license.hasActivePackage)
+                .animation(.easeInOut(duration: 0.25), value: license.isDeviceVerified)
             }
             .background(TotoroxTheme.pageBackground)
             .navigationTitle(language.text("settings.title"))
@@ -240,7 +242,25 @@ struct SettingsView: View {
             } message: {
                 Text(language.text("account.logout_confirm_msg"))
             }
+            .alert(item: settingsUDIDAlertBinding) { alertItem in
+                Alert(
+                    title: Text(alertItem.title),
+                    message: Text(alertItem.message),
+                    dismissButton: .default(Text(language.text("common.ok")))
+                )
+            }
         }
+    }
+
+    private var settingsUDIDAlertBinding: Binding<LicenseManager.UDIDVerificationAlert?> {
+        Binding(
+            get: { !showRedeemSheet ? license.udidVerificationAlert : nil },
+            set: { newValue in
+                if newValue == nil {
+                    license.udidVerificationAlert = nil
+                }
+            }
+        )
     }
 
     private var licenseAndDeviceCard: some View {
@@ -254,15 +274,15 @@ struct SettingsView: View {
 
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
+                        .fill(license.hasActivePackage ? TotoroxTheme.mintAccent : Color.orange)
                         .frame(width: 7, height: 7)
-                    Text(license.hasActivePlan ? language.text("account.status_active_plan") : language.text("account.status_no_plan"))
+                    Text(license.hasActivePackage ? language.text("account.status_active_plan") : language.text("account.status_no_plan"))
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange)
+                        .foregroundStyle(license.hasActivePackage ? TotoroxTheme.mintAccent : Color.orange)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background((license.hasActivePlan ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
+                .background((license.hasActivePackage ? TotoroxTheme.mintAccent : Color.orange).opacity(0.12))
                 .clipShape(Capsule())
             }
 
@@ -273,30 +293,34 @@ struct SettingsView: View {
                 isAccent: true
             )
 
-            Divider()
-
-            settingsRow(
-                label: language.text("settings.license_expires_label"),
-                value: license.formattedExpiry(language: language, short: false),
-                icon: "calendar.badge.clock"
-            )
-
-            Divider()
-
-            settingsRow(
-                label: language.text("settings.license_remaining_label"),
-                value: license.formattedRemainingUses(language: language),
-                icon: "speedometer",
-                isAccent: license.hasActivePlan
-            )
-
-            if license.isUnlimited, let dailyUsed = license.currentUser?.dailyUsed, let dailyCap = license.currentUser?.dailyCap {
+            if license.hasActivePackage {
                 Divider()
+
                 settingsRow(
-                    label: language.text("account.daily_usage_label"),
-                    value: "\(dailyUsed) / \(dailyCap)",
-                    icon: "shield.checkered"
+                    label: language.text("settings.license_expires_label"),
+                    value: license.formattedExpiry(language: language, short: false),
+                    icon: "calendar.badge.clock"
                 )
+
+                Divider()
+
+                settingsRow(
+                    label: language.text("settings.license_remaining_label"),
+                    value: license.formattedRemainingUses(language: language),
+                    icon: "speedometer",
+                    isAccent: true
+                )
+
+                if license.isUnlimited,
+                   let dailyUsed = license.currentUser?.dailyUsed,
+                   let dailyCap = license.currentUser?.dailyCap {
+                    Divider()
+                    settingsRow(
+                        label: language.text("account.daily_usage_label"),
+                        value: "\(dailyUsed) / \(dailyCap)",
+                        icon: "shield.checkered"
+                    )
+                }
             }
 
             Divider()
@@ -309,7 +333,9 @@ struct SettingsView: View {
                     Image(systemName: "ticket.fill")
                         .foregroundStyle(TotoroxTheme.mintAccent)
                         .frame(width: 24)
-                    Text(language.text("account.redeem_button"))
+                    Text(license.hasActivePackage
+                         ? language.text("account.redeem_more_button")
+                         : language.text("account.redeem_button"))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
                     Spacer()
@@ -320,112 +346,102 @@ struct SettingsView: View {
                 .padding(.vertical, 4)
             }
 
-            Divider()
+            if license.hasActivePackage {
+                Divider()
 
-            // Device UDID
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 16))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                        .frame(width: 24)
+                if license.isDeviceVerified {
+                    // Device Real Hardware UDID
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "cpu")
+                                .font(.system(size: 16))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .frame(width: 24)
 
-                    Text(language.text("activation.device_udid"))
-                        .font(.system(size: 14))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
+                            Text(language.text("activation.device_udid"))
+                                .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
 
-                    Spacer()
+                            Spacer()
 
-                    copyBadgeButton(
-                        copied: didCopyUDID,
-                        copiedLabel: language.text("activation.copied_udid")
-                    ) {
-                        copyToClipboard(license.deviceIdentifier)
+                            copyBadgeButton(
+                                copied: didCopyUDID,
+                                copiedLabel: language.text("activation.copied_udid")
+                            ) {
+                                copyToClipboard(license.deviceIdentifier)
+                            }
+                        }
+
+                        Text(license.deviceIdentifier)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .padding(.leading, 34)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(language.text("settings.udid_verified_profile"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .padding(.leading, 34)
                     }
+                    .padding(.vertical, 2)
+                } else {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.orange)
+                            .frame(width: 24)
+                        Text(language.text("udid.verify.not_verified_short"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.orange)
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
                 }
 
-                Text(license.deviceIdentifier)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .padding(.leading, 34)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                Divider()
 
-                Text(DeviceIDManager.shared.isHardwareUDID ? language.text("settings.udid_hardware") : language.text("settings.udid_fallback"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .padding(.leading, 34)
+                Button {
+                    Task { await license.refresh() }
+                } label: {
+                    HStack(spacing: 12) {
+                        if license.isRefreshing {
+                            ProgressView()
+                                .frame(width: 24)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .frame(width: 24)
+                        }
+                        Text(language.text("settings.license_refresh_btn"))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+                .disabled(license.isRefreshing)
             }
-            .padding(.vertical, 2)
 
             Divider()
 
-            Button {
-                Task { await license.refresh() }
+            // Logout row inside Account & Package card
+            Button(role: .destructive) {
+                showLogoutConfirm = true
             } label: {
                 HStack(spacing: 12) {
-                    if license.isRefreshing {
-                        ProgressView()
-                            .frame(width: 24)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                            .frame(width: 24)
-                    }
-                    Text(language.text("settings.license_refresh_btn"))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .foregroundStyle(Color.red)
+                        .frame(width: 24)
+                    Text(language.text("account.logout_button"))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.red)
                     Spacer()
                 }
                 .padding(.vertical, 4)
             }
-            .disabled(license.isRefreshing)
         }
         .totoroxCard()
-    }
-
-    private var logoutBottomButton: some View {
-        HStack {
-            Spacer(minLength: 0)
-
-            Button {
-                showLogoutConfirm = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 17, weight: .bold))
-                    Text(language.text("account.logout_button"))
-                        .font(.system(size: 16, weight: .bold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 40)
-                .frame(minWidth: 210, minHeight: 54)
-                .background(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.96, green: 0.27, blue: 0.30),
-                            Color(red: 0.82, green: 0.14, blue: 0.20),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
-                )
-                .shadow(
-                    color: Color(red: 0.86, green: 0.16, blue: 0.22).opacity(0.32),
-                    radius: 12,
-                    x: 0,
-                    y: 6
-                )
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-        }
     }
 
     private func copyBadgeButton(copied: Bool, copiedLabel: String, action: @escaping () -> Void) -> some View {

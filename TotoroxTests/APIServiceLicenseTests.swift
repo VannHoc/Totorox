@@ -227,7 +227,7 @@ final class APIServiceLicenseTests: XCTestCase {
         XCTAssertEqual(normalized, "TOTOROX-ABCD-1234-EF56")
     }
 
-    func testDeviceIDManagerPrefersHardwareUDIDOverStoredFallback() throws {
+    func testDeviceIDManagerStoresVerifiedHardwareUDIDWithoutRandomFallback() throws {
         let suiteName = "DeviceIDManagerTest.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -237,21 +237,48 @@ final class APIServiceLicenseTests: XCTestCase {
         try "LEGACY-UUID-HWID".write(to: tempFile, atomically: true, encoding: .utf8)
         defaults.set("LEGACY-UUID-HWID", forKey: "totorox.deviceIdentifier")
 
-        let managerWithUDID = DeviceIDManager(
-            hardwareUDIDProvider: { "  00008110-001C12345678901E \n" },
+        var storedUDID: String? = nil
+        let manager = DeviceIDManager(
             defaults: defaults,
-            fileURL: tempFile
+            fileURL: tempFile,
+            udidReader: { storedUDID },
+            udidWriter: {
+                storedUDID = $0
+                return true
+            },
+            udidRemover: {
+                storedUDID = nil
+                return true
+            }
         )
-        XCTAssertTrue(managerWithUDID.isHardwareUDID)
-        XCTAssertEqual(managerWithUDID.identifier, "00008110-001C12345678901E")
+        XCTAssertFalse(manager.isHardwareUDID)
+        XCTAssertNil(manager.verifiedUDID)
+        XCTAssertEqual(manager.identifier, "")
+        XCTAssertNil(defaults.object(forKey: "totorox.deviceIdentifier"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tempFile.path))
 
-        let managerFallback = DeviceIDManager(
-            hardwareUDIDProvider: { nil },
-            defaults: defaults,
-            fileURL: tempFile
+        XCTAssertTrue(manager.saveVerifiedUDID("  00008110-001C12345678901E \n"))
+        XCTAssertTrue(manager.isHardwareUDID)
+        XCTAssertEqual(manager.identifier, "00008110-001C12345678901E")
+        XCTAssertEqual(storedUDID, "00008110-001C12345678901E")
+
+        manager.clearVerifiedUDID()
+        XCTAssertFalse(manager.isHardwareUDID)
+        XCTAssertEqual(manager.identifier, "")
+        XCTAssertNil(storedUDID)
+    }
+
+    func testAPIServiceFixedPublicBaseURLAndDeviceProfileURL() {
+        UserDefaults.standard.set("https://stale.example.invalid", forKey: APIService.baseURLDefaultsKey)
+        let api = APIService()
+        XCTAssertEqual(api.baseURL.absoluteString, "https://api.totorox.io.vn")
+        XCTAssertNil(UserDefaults.standard.object(forKey: APIService.baseURLDefaultsKey))
+
+        let profileURL = api.deviceProfileURL(username: "totorox user")
+        XCTAssertEqual(
+            profileURL?.absoluteString,
+            "https://api.totorox.io.vn/api/v1/device/profile?username=totorox%20user"
         )
-        XCTAssertFalse(managerFallback.isHardwareUDID)
-        XCTAssertEqual(managerFallback.identifier, "00008110-001C12345678901E")
     }
 
     @MainActor
@@ -404,6 +431,92 @@ final class APIServiceLicenseTests: XCTestCase {
             observeAPINotifications: false
         )
         XCTAssertFalse(changedDeviceManager.isAuthenticated, "Đổi từ UUID cũ sang UDID mới không được vào thẳng không cần xác minh")
+    }
+
+    @MainActor
+    func testLicenseManagerPackageStatesAndUDIDVerificationCallback() async throws {
+        let suiteName = "PackageAndUDIDTest.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var storedToken: String? = nil
+        var savedUDID: String? = "00008110-OLD-STALE"
+
+        // Login returns exhausted finite quota and is_udid_verified=false (simulating Admin Reset UDID)
+        let exhaustedSession = StubURLProtocol.makeSession(
+            statusCode: 200,
+            body: #"""
+            {
+              "ok": true,
+              "token": "tok_pkg_1",
+              "user": {
+                "id": 22,
+                "username": "modder01",
+                "expires_at": 4102444800,
+                "max_uses": 5,
+                "used_count": 5,
+                "remaining_uses": 0,
+                "has_active_plan": false,
+                "udid": null,
+                "is_udid_verified": false
+              }
+            }
+            """#
+        )
+        let api1 = APIService(baseURL: URL(string: "https://example.test")!, session: exhaustedSession)
+        let manager = LicenseManager(
+            api: api1,
+            defaults: defaults,
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
+            deviceIdentifierProvider: { savedUDID ?? "" },
+            deviceIdentifierSaver: { savedUDID = $0 },
+            deviceIdentifierClearer: { savedUDID = nil },
+            autoRefresh: false,
+            observeAPINotifications: false
+        )
+
+        let ok = await manager.login(username: "modder01", password: "password123")
+        XCTAssertTrue(ok)
+        XCTAssertFalse(manager.hasActivePackage, "Hết lượt dùng thì hasActivePackage phải là false")
+        XCTAssertFalse(manager.isDeviceVerified, "Server báo is_udid_verified=false phải xóa UDID cũ")
+        XCTAssertNil(savedUDID)
+        XCTAssertEqual(manager.deviceIdentifier, "")
+
+        // Conflict callback shows alert without saving UDID
+        await manager.handleUDIDVerificationCallback(udid: "", status: "conflict")
+        XCTAssertFalse(manager.isDeviceVerified)
+        XCTAssertNotNil(manager.udidVerificationAlert)
+
+        // Successful OTA verification callback updates savedUDID + currentUser immediately and triggers refresh
+        StubURLProtocol.handler = { _ in
+            StubURLProtocol.Stub(
+                statusCode: 200,
+                body: #"""
+                {
+                  "ok": true,
+                  "user": {
+                    "id": 22,
+                    "username": "modder01",
+                    "expires_at": 4102444800,
+                    "max_uses": 5,
+                    "used_count": 2,
+                    "remaining_uses": 3,
+                    "has_active_plan": true,
+                    "udid": "00008110-001C12345678901E",
+                    "is_udid_verified": true
+                  }
+                }
+                """#
+            )
+        }
+        await manager.handleUDIDVerificationCallback(udid: "00008110-001C12345678901E", status: "ok")
+        XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-HWID"), "00008110-001C12345678901E")
+        XCTAssertEqual(savedUDID, "00008110-001C12345678901E")
+        XCTAssertEqual(manager.deviceIdentifier, "00008110-001C12345678901E")
+        XCTAssertTrue(manager.isDeviceVerified)
+        XCTAssertTrue(manager.hasActivePackage)
     }
 }
 

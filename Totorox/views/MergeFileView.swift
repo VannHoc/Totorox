@@ -83,7 +83,7 @@ struct MergeFileView: View {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .bold))
 
-                        VStack(alignment: .leading, spacing: 1) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(language.text("merge.header.credit"))
                             Text(language.text("merge.header.subcredit"))
                                 .opacity(0.8)
@@ -101,8 +101,7 @@ struct MergeFileView: View {
             Text(language.text("merge.header.subtitle"))
                 .font(.system(size: 12.5))
                 .foregroundStyle(TotoroxTheme.textSecondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.9)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
     }
@@ -139,8 +138,10 @@ struct MergeFileView: View {
                     Text(language.text("merge.list.empty_hint"))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(TotoroxTheme.textSecondary)
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 18)
                 .background(TotoroxTheme.searchBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
