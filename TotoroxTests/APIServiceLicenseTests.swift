@@ -103,7 +103,7 @@ final class APIServiceLicenseTests: XCTestCase {
             XCTAssertEqual(resp.addedDays, 30)
             XCTAssertTrue(resp.user.isUnlimited)
             XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_abc")
-            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Device-ID"), "TEST-UDID")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-HWID"), "TEST-UDID")
         case .failure(let error):
             XCTFail("Redeem failed: \(error.localizedDescription)")
         }
@@ -196,7 +196,7 @@ final class APIServiceLicenseTests: XCTestCase {
             XCTAssertTrue(resp.ok)
             XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/convert-header")
             XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_conv")
-            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Device-ID"), "TEST-UDID")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-HWID"), "TEST-UDID")
         case .failure(let error):
             XCTFail("convertHeader failed: \(error.localizedDescription)")
         }
