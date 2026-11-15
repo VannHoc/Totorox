@@ -217,7 +217,7 @@ public final class PatchZipConverter {
     }
 
     /// Đọc metadata gói `.3105` hoàn toàn tại local (không gọi `/convert-header`, không trừ lượt).
-    public func inspectProjectMetadataLocally(patchData: Data, password: String? = nil) -> PatchProject? {
+    func inspectProjectMetadataLocally(patchData: Data, password: String? = nil) -> PatchProject? {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)),
               let envelope = try? parseEnvelope(patchData),
               let encryptedPayload = envelope.encryptedPayload else {
@@ -255,7 +255,7 @@ public final class PatchZipConverter {
         return try? decodePayloadProject(from: payloadBytes)
     }
 
-    public func inspectProjectMetadataLocally(patchURL: URL, password: String? = nil) -> PatchProject? {
+    func inspectProjectMetadataLocally(patchURL: URL, password: String? = nil) -> PatchProject? {
         guard fileManager.fileExists(atPath: patchURL.path) else { return nil }
         let size = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard Int64(size) <= Self.localInspectionLimit,
