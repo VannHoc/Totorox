@@ -184,6 +184,7 @@ final class APIServiceLicenseTests: XCTestCase {
           "ok": true,
           "mode": "zip_to_3105",
           "password_protected": false,
+          "accepted_bytes": 4,
           "header": {"schemaVersion": 9},
           "toc": [],
           "note": "ok"
