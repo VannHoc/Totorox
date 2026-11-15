@@ -600,4 +600,38 @@ final class FileIOEngineTests: XCTestCase {
         }
         XCTAssertFalse(fileManager.fileExists(atPath: realDirectory.appendingPathComponent("NewFolder").path))
     }
+
+    // MARK: - 15. Server Overwrite Mapping Execution & Traversal Guard
+    func testApplyMappedFiles_CopiesCreatesParentsAndRejectsTraversal() async throws {
+        let sourceRoot = tempDirectory.appendingPathComponent("MappedSource", isDirectory: true)
+        let destinationRoot = tempDirectory.appendingPathComponent("MappedDest", isDirectory: true)
+        try fileManager.createDirectory(at: sourceRoot.appendingPathComponent("1.64.1/Databin/Client", isDirectory: true), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destinationRoot.appendingPathComponent("Resources/1.64.1/Databin/Client", isDirectory: true), withIntermediateDirectories: true)
+
+        let srcFile = sourceRoot.appendingPathComponent("1.64.1/Databin/Client/HeroSkin.bytes")
+        try Data("NEW_SKIN_DATA".utf8).write(to: srcFile)
+        try Data("IGNORED_EXTRA".utf8).write(to: sourceRoot.appendingPathComponent("ignored.txt"))
+        try Data("UNSAFE".utf8).write(to: sourceRoot.appendingPathComponent("unsafe_src.bin"))
+
+        let existingDestFile = destinationRoot.appendingPathComponent("Resources/1.64.1/Databin/Client/HeroSkin.bytes")
+        try Data("OLD_SKIN".utf8).write(to: existingDestFile)
+
+        let mappings: [(source: String, destination: String)] = [
+            (source: "1.64.1/Databin/Client/HeroSkin.bytes", destination: "Resources/1.64.1/Databin/Client/HeroSkin.bytes"),
+            (source: "unsafe_src.bin", destination: "../../escape.txt"),
+        ]
+
+        let result = await engine.applyMappedFiles(
+            mappings,
+            from: sourceRoot,
+            to: destinationRoot,
+            conflictResolver: { _, _, _ in .replace }
+        )
+
+        XCTAssertEqual(result.succeeded.count, 1)
+        XCTAssertEqual(result.failed.count, 1, "Path traversal destination must be rejected")
+        XCTAssertEqual(try Data(contentsOf: existingDestFile), Data("NEW_SKIN_DATA".utf8))
+        XCTAssertFalse(fileManager.fileExists(atPath: destinationRoot.appendingPathComponent("ignored.txt").path))
+        XCTAssertFalse(fileManager.fileExists(atPath: tempDirectory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
+    }
 }

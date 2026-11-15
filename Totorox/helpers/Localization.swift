@@ -30,6 +30,15 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Reads the currently active in-app language dynamically for non-SwiftUI helpers/errors.
+    static var current: AppLanguage {
+        if let raw = UserDefaults.standard.string(forKey: storageKey),
+           let parsed = AppLanguage(rawValue: raw) {
+            return parsed
+        }
+        return .systemDefault
+    }
+
     func text(_ key: String) -> String {
         localizedBundle.localizedString(forKey: key, value: key, table: nil)
     }

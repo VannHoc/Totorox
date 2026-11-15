@@ -17,7 +17,7 @@ struct DirectorySizeResult: Sendable, Equatable {
         nf.numberStyle = .decimal
         let byteStr = nf.string(from: NSNumber(value: totalBytes)) ?? "\(totalBytes)"
         let humanSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
-        return "\(humanSize) (\(byteStr) bytes) • \(fileCount) tệp, \(folderCount) thư mục con"
+        return AppLanguage.current.text("dirsize.formatted", humanSize, byteStr, fileCount, folderCount)
     }
 }
 

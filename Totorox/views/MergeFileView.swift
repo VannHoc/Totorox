@@ -4,6 +4,7 @@ import UIKit
 import CryptoKit
 
 struct MergeFileView: View {
+    @Environment(\.appLanguage) private var language
     @State private var selectedMods: [AovModSummary] = []
     @State private var modContentHashes: [URL: String] = [:]
 
@@ -48,11 +49,11 @@ struct MergeFileView: View {
                 ActivityShareSheet(items: [result.outputZipURL])
             }
         }
-        .alert("Thông báo", isPresented: Binding(
+        .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
             set: { if !$0 { alertMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { alertMessage = nil }
+            Button(language.text("common.ok"), role: .cancel) { alertMessage = nil }
         } message: {
             Text(alertMessage ?? "")
         }
@@ -74,7 +75,7 @@ struct MergeFileView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Gộp File Mod Liên Quân")
+                    Text(language.text("merge.header.title"))
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
 
@@ -83,8 +84,8 @@ struct MergeFileView: View {
                             .font(.system(size: 11, weight: .bold))
 
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Tính năng triển bởi VannHoc")
-                            Text("Tự nghĩ, tự làm không lấy của ai")
+                            Text(language.text("merge.header.credit"))
+                            Text(language.text("merge.header.subcredit"))
                                 .opacity(0.8)
                         }
                         .font(.system(size: 12, weight: .semibold))
@@ -97,7 +98,7 @@ struct MergeFileView: View {
 
             Divider()
 
-            Text("Hợp nhất thông minh, giữ trọn vẹn mọi hiệu ứng gốc.")
+            Text(language.text("merge.header.subtitle"))
                 .font(.system(size: 12.5))
                 .foregroundStyle(TotoroxTheme.textSecondary)
                 .lineLimit(1)
@@ -115,13 +116,13 @@ struct MergeFileView: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
 
-                Text("Danh sách tệp Mod (.zip)")
+                Text(language.text("merge.list.title"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)
 
                 Spacer()
 
-                Text("\(selectedMods.count) tệp")
+                Text(language.text("merge.list.file_count", selectedMods.count))
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
                     .padding(.horizontal, 8)
@@ -135,7 +136,7 @@ struct MergeFileView: View {
                     Image(systemName: "tray.and.arrow.down.fill")
                         .font(.system(size: 28))
                         .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
-                    Text("Chọn từ 2 tệp .zip mod tướng khác nhau trở lên")
+                    Text(language.text("merge.list.empty_hint"))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(TotoroxTheme.textSecondary)
                 }
@@ -201,7 +202,7 @@ struct MergeFileView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "plus.circle.fill")
-                        Text(selectedMods.isEmpty ? "Thêm tệp Mod (.zip)" : "Thêm tệp .zip khác")
+                        Text(language.text(selectedMods.isEmpty ? "merge.button.add_first" : "merge.button.add_more"))
                     }
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -218,7 +219,7 @@ struct MergeFileView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "trash")
-                            Text("Xóa hết")
+                            Text(language.text("merge.button.clear_all"))
                         }
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.red.opacity(0.85))
@@ -270,12 +271,12 @@ struct MergeFileView: View {
                     if isMerging {
                         ProgressView()
                             .tint(.white)
-                        Text("Đang giải mã & hợp nhất nhị phân...")
+                        Text(language.text("merge.button.merging"))
                             .font(.system(size: 15, weight: .bold))
                     } else {
                         Image(systemName: "wand.and.stars")
                             .font(.system(size: 15, weight: .bold))
-                        Text("Bắt đầu Gộp File Mod (\(selectedMods.count) tệp)")
+                        Text(language.text("merge.button.start", selectedMods.count))
                             .font(.system(size: 15, weight: .bold))
                     }
                 }
@@ -300,7 +301,7 @@ struct MergeFileView: View {
                     .foregroundStyle(TotoroxTheme.mintAccent)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Đã gộp thành công!")
+                    Text(language.text("merge.result.success"))
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
 
@@ -323,9 +324,9 @@ struct MergeFileView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
-                resultInfoRow(label: "Đường dẫn ánh xạ trong .zip:", value: "Resources/\(result.resourceVersion)/...")
-                resultInfoRow(label: "Tổng số tệp đã đóng gói:", value: "\(result.totalFilesWritten) tệp")
-                resultInfoRow(label: "File trùng đã gộp:", value: "\(result.smartMergedConflicts) tệp (XML/Databin/IFix/UnityFS)")
+                resultInfoRow(label: language.text("merge.result.mapped_path"), value: "Resources/\(result.resourceVersion)/...")
+                resultInfoRow(label: language.text("merge.result.total_files"), value: language.text("merge.list.file_count", result.totalFilesWritten))
+                resultInfoRow(label: language.text("merge.result.merged_conflicts"), value: language.text("merge.result.merged_conflicts_value", result.smartMergedConflicts))
             }
 
             if !result.logs.isEmpty {
@@ -342,7 +343,7 @@ struct MergeFileView: View {
                         .padding(.top, 6)
                     },
                     label: {
-                        Text("Xem chi tiết quá trình hợp nhất (\(result.logs.count) bước)")
+                        Text(language.text("merge.result.logs_toggle", result.logs.count))
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(TotoroxTheme.mintAccent)
                     }
@@ -359,7 +360,7 @@ struct MergeFileView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "bolt.fill")
-                        Text("Đưa sang tab Đè file (Liên Quân)")
+                        Text(language.text("merge.result.send_to_overwrite"))
                     }
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white)
@@ -375,7 +376,7 @@ struct MergeFileView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.and.arrow.up")
-                        Text("Lưu / Chia sẻ tệp")
+                        Text(language.text("merge.result.share_output"))
                     }
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -533,7 +534,7 @@ struct MergeFileView: View {
                     }
                 }
                 if !rejectedNames.isEmpty {
-                    self.alertMessage = "Chức năng gộp file chỉ hỗ trợ gói mod định dạng .zip (đã bỏ qua: \(rejectedNames.joined(separator: ", ")))."
+                    self.alertMessage = language.text("merge.alert.unsupported_zip", rejectedNames.joined(separator: ", "))
                 }
             }
         }
@@ -545,7 +546,7 @@ struct MergeFileView: View {
 
         isMerging = true
         mergeResult = nil
-        progressStatus = "Đang khởi tạo tiến trình gộp..."
+        progressStatus = language.text("merge.progress.initializing")
         progressValue = 0.02
 
         Task {

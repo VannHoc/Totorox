@@ -291,11 +291,10 @@ extension PatchPackageError: LocalizedError {
     }
 
     var errorDescription: String? {
-        let message = String(localized: String.LocalizationValue(localizationKey))
         if let localizationArgument {
-            return String(format: message, localizationArgument)
+            return AppLanguage.current.text(localizationKey, localizationArgument)
         }
-        return message
+        return AppLanguage.current.text(localizationKey)
     }
 
     var localizationArgument: String? {

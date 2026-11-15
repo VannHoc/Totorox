@@ -457,7 +457,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             await MainActor.run {
                 self.isLoading = true
-                self.statusMessage = "Đang quét danh sách ứng dụng..."
+                self.statusMessage = AppLanguage.current.text("scanner.scanning")
             }
 
             // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX
@@ -579,7 +579,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             await MainActor.run {
                 self.apps = finalSorted
                 self.isLoading = false
-                self.statusMessage = "Đã tìm thấy \(finalSorted.count) ứng dụng."
+                self.statusMessage = AppLanguage.current.text("scanner.found_apps", finalSorted.count)
                 NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
             }
             return finalSorted

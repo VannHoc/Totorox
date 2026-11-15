@@ -78,9 +78,11 @@ struct FileEntry: Identifiable, Hashable {
     var childCountText: String {
         if isDirectory {
             if let count = childCount {
-                return count == 0 ? "Trống" : "\(count) tệp"
+                return count == 0
+                    ? AppLanguage.current.text("container.empty")
+                    : AppLanguage.current.text("container.file_count", count)
             }
-            return "Thư mục"
+            return AppLanguage.current.text("container.folder")
         }
         return sizeText
     }
@@ -117,7 +119,7 @@ struct FileEntry: Identifiable, Hashable {
     }
 
     var exactBytesText: String {
-        if isDirectory { return "Thư mục" }
+        if isDirectory { return AppLanguage.current.text("container.folder") }
         guard size >= 0 else { return "—" }
         let nf = NumberFormatter()
         nf.numberStyle = .decimal
@@ -127,13 +129,13 @@ struct FileEntry: Identifiable, Hashable {
 
     var typeDescription: String {
         if isAppContainer {
-            return "Thư mục Ứng dụng (App Container)"
+            return AppLanguage.current.text("container.type.app_container")
         } else if isDirectory {
-            return "Thư mục (Directory)"
+            return AppLanguage.current.text("container.type.directory")
         } else if isSymlink {
-            return "Liên kết tượng trưng (Symbolic Link)"
+            return AppLanguage.current.text("container.type.symlink")
         } else {
-            return "Tệp tin (File)"
+            return AppLanguage.current.text("container.type.file")
         }
     }
 

@@ -15,15 +15,15 @@ public enum PatchZipConverterError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .corruptedArchive(let msg): return "Corrupted archive: \(msg)"
-        case .unsupportedFormat(let msg): return "Unsupported format: \(msg)"
-        case .invalidManifest(let msg): return "Invalid manifest: \(msg)"
-        case .missingPayloadFile(let msg): return "Missing payload file: \(msg)"
-        case .invalidProject(let msg): return "Invalid project: \(msg)"
-        case .insufficientSpace: return "Insufficient disk space."
-        case .sizeLimitExceeded: return "Archive exceeds the 3.6 GB limit."
-        case .ioFailure(let msg): return "I/O error: \(msg)"
-        case .cryptoFailed(let msg): return "Lỗi mật mã: \(msg)"
+        case .corruptedArchive(let msg): return AppLanguage.current.text("error.patch_converter.corrupted_archive", msg)
+        case .unsupportedFormat(let msg): return AppLanguage.current.text("error.patch_converter.unsupported_format", msg)
+        case .invalidManifest(let msg): return AppLanguage.current.text("error.patch_converter.invalid_manifest", msg)
+        case .missingPayloadFile(let msg): return AppLanguage.current.text("error.patch_converter.missing_payload", msg)
+        case .invalidProject(let msg): return AppLanguage.current.text("error.patch_converter.invalid_project", msg)
+        case .insufficientSpace: return AppLanguage.current.text("error.patch_converter.insufficient_space")
+        case .sizeLimitExceeded: return AppLanguage.current.text("error.patch_converter.size_limit_exceeded")
+        case .ioFailure(let msg): return AppLanguage.current.text("error.patch_converter.io_failure", msg)
+        case .cryptoFailed(let msg): return AppLanguage.current.text("error.patch_converter.crypto_failed", msg)
         }
     }
 }
@@ -152,7 +152,7 @@ public final class PatchZipConverter {
         let kind = header["kind"]?.string ?? ""
         guard kind == "patch_package" else {
             throw PatchZipConverterError.unsupportedFormat(
-                header["note"]?.string ?? "Không nhận diện được gói .3105 (kind=\(kind.isEmpty ? "?" : kind))."
+                header["note"]?.string ?? AppLanguage.current.text("error.patch_converter.unrecognized_3105_kind", kind.isEmpty ? "?" : kind)
             )
         }
 
@@ -172,7 +172,7 @@ public final class PatchZipConverter {
 
     func inspect(patchURL: URL) async throws -> PatchPackageSummary {
         guard fileManager.fileExists(atPath: patchURL.path) else {
-            throw PatchZipConverterError.ioFailure("Không tìm thấy gói .3105 nguồn.")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.missing_source_3105"))
         }
         let size = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) else {
@@ -182,7 +182,7 @@ public final class PatchZipConverter {
         // Binary plist đặt offset table ở cuối, nên slice đầu file không parse được.
         // Gói nhỏ đọc trọn để parse local; gói lớn mới cần nhờ server.
         if Int64(size) <= Self.localInspectionLimit,
-           let full = try? Data(contentsOf: patchURL),
+           let full = try? Data(contentsOf: patchURL, options: .alwaysMapped),
            let localSummary = try? localSummary(patchData: full) {
             return localSummary
         }
@@ -205,7 +205,7 @@ public final class PatchZipConverter {
         let header = response.header
         guard header["kind"]?.string == "patch_package" else {
             throw PatchZipConverterError.unsupportedFormat(
-                header["note"]?.string ?? "Không nhận diện được gói .3105."
+                header["note"]?.string ?? AppLanguage.current.text("error.patch_converter.unrecognized_3105")
             )
         }
         return PatchPackageSummary(
@@ -214,6 +214,56 @@ public final class PatchZipConverter {
             isPasswordProtected: header["is_password_protected"]?.bool ?? false,
             keyFingerprint: header["key_fingerprint"]?.string.flatMap { Data(base64Encoded: $0) } ?? Data()
         )
+    }
+
+    /// Đọc metadata gói `.3105` hoàn toàn tại local (không gọi `/convert-header`, không trừ lượt).
+    public func inspectProjectMetadataLocally(patchData: Data, password: String? = nil) -> PatchProject? {
+        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)),
+              let envelope = try? parseEnvelope(patchData),
+              let encryptedPayload = envelope.encryptedPayload else {
+            return nil
+        }
+
+        let contentKey: Data
+        if envelope.isPasswordProtected {
+            guard let unwrapped = try? unwrapContentKeyLocally(envelope: envelope, password: password) else {
+                return nil
+            }
+            contentKey = unwrapped
+        } else if let publicKey = envelope.publicContentKey, !publicKey.isEmpty {
+            contentKey = publicKey
+        } else {
+            return nil
+        }
+
+        guard let payloadBytes = try? openPayload(
+            encryptedPayload: encryptedPayload,
+            contentKey: contentKey,
+            packageID: envelope.packageID,
+            packageIDRaw: envelope.packageIDRaw,
+            schemaVersion: envelope.schemaVersion,
+            passwordProtected: envelope.isPasswordProtected,
+            password: password,
+            kdfSalt: envelope.kdfSalt,
+            kdfIterations: envelope.kdfIterations,
+            wrappedContentKey: envelope.wrappedContentKey,
+            publicContentKey: envelope.publicContentKey
+        ) else {
+            return nil
+        }
+
+        return try? decodePayloadProject(from: payloadBytes)
+    }
+
+    public func inspectProjectMetadataLocally(patchURL: URL, password: String? = nil) -> PatchProject? {
+        guard fileManager.fileExists(atPath: patchURL.path) else { return nil }
+        let size = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard Int64(size) <= Self.localInspectionLimit,
+              !PatchPackageLimits.exceedsExpandedLimit(Int64(size)),
+              let data = try? Data(contentsOf: patchURL, options: .alwaysMapped) else {
+            return nil
+        }
+        return inspectProjectMetadataLocally(patchData: data, password: password)
     }
 
     /// Giải mã gói `.3105` trên server (`mode: from_zip`) và dựng `PatchProject` ở local.
@@ -254,11 +304,13 @@ public final class PatchZipConverter {
         } else if let localKey = localPreUnwrappedKey {
             contentKey = localKey
         } else {
-            throw PatchZipConverterError.corruptedArchive(response.note ?? "Máy chủ không trả content key.")
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? AppLanguage.current.text("error.patch_converter.missing_content_key")
+            )
         }
 
         guard let encryptedPayload = envelope.encryptedPayload else {
-            throw PatchZipConverterError.invalidProject("Gói .3105 thiếu encryptedPayload.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.missing_encrypted_payload"))
         }
         let payloadBytes = try openPayload(
             encryptedPayload: encryptedPayload,
@@ -274,6 +326,10 @@ public final class PatchZipConverter {
             publicContentKey: envelope.publicContentKey
         )
 
+        return try decodePayloadProject(from: payloadBytes)
+    }
+
+    private func decodePayloadProject(from payloadBytes: Data) throws -> PatchProject {
         let decoder = PropertyListDecoder()
         if let wrapper = try? decoder.decode(PatchProjectPayload.self, from: payloadBytes) {
             return wrapper.project
@@ -285,7 +341,7 @@ public final class PatchZipConverter {
            let project = projectFromDictionary(dict) {
             return project
         }
-        throw PatchZipConverterError.invalidProject("Không giải mã được payload PLIST của gói .3105.")
+        throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.invalid_payload_plist"))
     }
 
     private func projectFromDictionary(_ dict: [String: Any]) -> PatchProject? {
@@ -347,17 +403,28 @@ public final class PatchZipConverter {
 
     // MARK: - .3105 -> .zip Conversion
 
-    public func convertPatch3105ToZip(inputURL: URL, outputZipURL: URL, password: String? = nil) async throws {
-        try await convertPatchToZip(patchURL: inputURL, destinationZipURL: outputZipURL, password: password)
+    public func convertPatch3105ToZip(
+        inputURL: URL,
+        outputZipURL: URL,
+        password: String? = nil,
+        outputPassword: String? = nil
+    ) async throws {
+        try await convertPatchToZip(
+            patchURL: inputURL,
+            destinationZipURL: outputZipURL,
+            password: password,
+            outputPassword: outputPassword
+        )
     }
 
     public func convertPatchToZip(
         patchURL: URL,
         destinationZipURL: URL,
-        password: String? = nil
+        password: String? = nil,
+        outputPassword: String? = nil
     ) async throws {
         guard fileManager.fileExists(atPath: patchURL.path) else {
-            throw PatchZipConverterError.ioFailure("Không tìm thấy gói .3105 nguồn.")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.missing_source_3105"))
         }
         let patchFileSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(patchFileSize)) else {
@@ -371,45 +438,71 @@ public final class PatchZipConverter {
         do {
             patchData = try Data(contentsOf: patchURL)
         } catch {
-            throw PatchZipConverterError.ioFailure("Không đọc được gói .3105: \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.read_3105_failed", error.localizedDescription))
         }
 
-        let zipData = try await convertPatchDataToZipData(patchData, password: password)
-        try writeAtomically(zipData, to: destinationZipURL, description: "tệp .zip đầu ra")
+        let zipData = try await convertPatchDataToZipData(
+            patchData,
+            password: password,
+            outputPassword: outputPassword
+        )
+        try writeAtomically(zipData, to: destinationZipURL, description: AppLanguage.current.text("error.patch_converter.output_zip_label"))
     }
 
     public func convertPatchDataToZipData(
         _ patchData: Data,
-        password: String? = nil
+        password: String? = nil,
+        outputPassword: String? = nil
     ) async throws -> Data {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(patchData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
         }
 
+        let cleanOutputPassword = outputPassword.flatMap { $0.isEmpty ? nil : $0 }
+
         // Nguồn đã là ZIP hợp lệ: không cần server.
         if patchData.count >= 4,
            patchData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) {
+            if cleanOutputPassword != nil {
+                let entries = try parseZipArchive(patchData, password: password)
+                let sorted = entries.keys.sorted().map { (path: $0, data: entries[$0] ?? Data()) }
+                return try buildZipArchive(entries: sorted, password: cleanOutputPassword)
+            }
             return patchData
         }
 
         // Hybrid: server chỉ trả content key; client tự giải mã và dựng .zip local.
         let project = try await decodeProject(patchData: patchData, password: password)
-        return try buildProjectZip(project)
+        return try buildProjectZip(project, password: cleanOutputPassword)
     }
 
     // MARK: - .zip -> .3105 Conversion
 
-    public func convertZipToPatch3105(inputZipURL: URL, outputPatchURL: URL, password: String? = nil) async throws {
-        try await convertZipToPatch(zipURL: inputZipURL, destinationPatchURL: outputPatchURL, password: password)
+    public func convertZipToPatch3105(
+        inputZipURL: URL,
+        outputPatchURL: URL,
+        password: String? = nil,
+        sourcePassword: String? = nil,
+        customProjectName: String? = nil
+    ) async throws {
+        try await convertZipToPatch(
+            zipURL: inputZipURL,
+            destinationPatchURL: outputPatchURL,
+            password: password,
+            sourcePassword: sourcePassword,
+            customProjectName: customProjectName
+        )
     }
 
     public func convertZipToPatch(
         zipURL: URL,
         destinationPatchURL: URL,
-        password: String? = nil
+        password: String? = nil,
+        sourcePassword: String? = nil,
+        customProjectName: String? = nil
     ) async throws {
         guard fileManager.fileExists(atPath: zipURL.path) else {
-            throw PatchZipConverterError.ioFailure("Không tìm thấy tệp .zip nguồn.")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.missing_source_zip"))
         }
         let zipFileSize = (try? zipURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(zipFileSize)) else {
@@ -423,16 +516,23 @@ public final class PatchZipConverter {
         do {
             zipData = try Data(contentsOf: zipURL)
         } catch {
-            throw PatchZipConverterError.ioFailure("Không đọc được tệp .zip: \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.read_zip_failed", error.localizedDescription))
         }
 
-        let patchData = try await convertZipDataToPatchData(zipData, password: password)
-        try writeAtomically(patchData, to: destinationPatchURL, description: "tệp .3105 đầu ra")
+        let patchData = try await convertZipDataToPatchData(
+            zipData,
+            password: password,
+            sourcePassword: sourcePassword,
+            customProjectName: customProjectName
+        )
+        try writeAtomically(patchData, to: destinationPatchURL, description: AppLanguage.current.text("error.patch_converter.output_3105_label"))
     }
 
     public func convertZipDataToPatchData(
         _ zipData: Data,
-        password: String? = nil
+        password: String? = nil,
+        sourcePassword: String? = nil,
+        customProjectName: String? = nil
     ) async throws -> Data {
         guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(zipData.count)) else {
             throw PatchZipConverterError.sizeLimitExceeded
@@ -442,11 +542,15 @@ public final class PatchZipConverter {
         // niêm phong `.3105` chạy trên server (thin client).
         guard zipData.count >= 4,
               zipData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) else {
-            throw PatchZipConverterError.corruptedArchive("Tệp nguồn không phải ZIP hợp lệ.")
+            throw PatchZipConverterError.corruptedArchive(AppLanguage.current.text("error.patch_converter.invalid_zip_magic"))
         }
 
         let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
-        let built = try buildPatchProjectWithSettings(fromZipData: zipData)
+        let built = try buildPatchProjectWithSettings(
+            fromZipData: zipData,
+            sourcePassword: sourcePassword,
+            customProjectName: customProjectName
+        )
         let project = built.project
         let metadataPayload = try manifestData(for: project)
         let response = try await sendConvertHeader(
@@ -457,7 +561,9 @@ public final class PatchZipConverter {
         )
         guard let contentKeyB64 = response.contentKeyB64,
               let contentKey = Data(base64Encoded: contentKeyB64) else {
-            throw PatchZipConverterError.corruptedArchive(response.note ?? "Máy chủ không trả content key.")
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? AppLanguage.current.text("error.patch_converter.missing_content_key")
+            )
         }
         let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
         let schemaVersion = 9
@@ -492,7 +598,10 @@ public final class PatchZipConverter {
     ) async throws -> ConvertHeaderResponse {
         guard Int64(payload.count) <= APIService.maximumUploadBytes else {
             throw PatchZipConverterError.ioFailure(
-                "Header/ngữ cảnh vượt quá \(ByteCountFormatter.string(fromByteCount: APIService.maximumUploadBytes, countStyle: .file)) nên không gửi được lên máy chủ."
+                AppLanguage.current.text(
+                    "error.patch_converter.header_too_large",
+                    ByteCountFormatter.string(fromByteCount: APIService.maximumUploadBytes, countStyle: .file)
+                )
             )
         }
 
@@ -505,7 +614,7 @@ public final class PatchZipConverter {
         do {
             try payload.write(to: payloadURL, options: .atomic)
         } catch {
-            throw PatchZipConverterError.ioFailure("Không tạo được tệp tạm: \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.temp_file_failed", error.localizedDescription))
         }
 
         let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
@@ -513,7 +622,7 @@ public final class PatchZipConverter {
             fileURL: payloadURL,
             mode: mode,
             password: cleanPassword,
-            licenseKey: LicenseManager.shared.licenseKey,
+            token: LicenseManager.shared.authToken,
             hwid: LicenseManager.shared.deviceIdentifier
         ) {
         case .success(let response):
@@ -521,10 +630,10 @@ public final class PatchZipConverter {
         case .failure(let error):
             let message = error.localizedDescription
             let lower = message.lowercased()
-            if lower.contains("mật khẩu") || lower.contains("password") || lower.contains("wrapped content key") || lower.contains("giải mã") {
+            if lower.contains("mật khẩu") || lower.contains("password") || lower.contains("wrapped content key") || lower.contains("giải mã") || lower.contains("密码") {
                 throw PatchZipConverterError.cryptoFailed(message)
             }
-            throw PatchZipConverterError.ioFailure("Máy chủ convert-header: \(message)")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.server_header_error", message))
         }
     }
 
@@ -539,7 +648,7 @@ public final class PatchZipConverter {
             }
             try data.write(to: destinationURL, options: .atomic)
         } catch {
-            throw PatchZipConverterError.ioFailure("Không ghi được \(description): \(error.localizedDescription)")
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.write_failed", description, error.localizedDescription))
         }
     }
 
@@ -588,7 +697,7 @@ public final class PatchZipConverter {
                 try fileManager.removeItem(at: destinationURL)
             }
             guard fileManager.createFile(atPath: destinationURL.path, contents: nil) else {
-                throw PatchZipConverterError.ioFailure("Không tạo được tệp .zip đầu ra.")
+                throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.create_zip_failed"))
             }
             self.handle = try FileHandle(forWritingTo: destinationURL)
         }
@@ -703,7 +812,7 @@ public final class PatchZipConverter {
             while remaining > 0 {
                 let toRead = min(remaining, bufferSize)
                 guard let chunk = try sourceHandle.read(upToCount: toRead), !chunk.isEmpty else {
-                    throw PatchZipConverterError.corruptedArchive("Dữ liệu entry bị cắt ngắn trong tệp mod nguồn: \(destinationPath)")
+                    throw PatchZipConverterError.corruptedArchive(AppLanguage.current.text("error.patch_converter.truncated_entry", destinationPath))
                 }
                 try write(chunk)
                 remaining -= chunk.count
@@ -835,7 +944,129 @@ public final class PatchZipConverter {
         }
     }
 
-    func buildZipArchive(entries: [(path: String, data: Data)]) throws -> Data {
+    public struct ZipInspectionInfo: Sendable, Equatable {
+        public let isPasswordProtected: Bool
+        public let suggestedName: String?
+        public let entryCount: Int
+        public let isUnlocked: Bool
+    }
+
+    private struct ZipCryptoCodec {
+        private var key0: UInt32 = 0x12345678
+        private var key1: UInt32 = 0x23456789
+        private var key2: UInt32 = 0x34567890
+
+        init(password: String) {
+            for byte in Data(password.utf8) {
+                updateKeys(byte)
+            }
+        }
+
+        private mutating func updateKeys(_ byte: UInt8) {
+            key0 = Self.crc32Update(key0, byte: byte)
+            key1 = key1 &+ (key0 & 0xFF)
+            key1 = key1 &* 134775813 &+ 1
+            key2 = Self.crc32Update(key2, byte: UInt8((key1 >> 24) & 0xFF))
+        }
+
+        private static func crc32Update(_ crc: UInt32, byte: UInt8) -> UInt32 {
+            let index = Int((crc ^ UInt32(byte)) & 0xFF)
+            return (crc >> 8) ^ PatchZipConverter.crcTable[index]
+        }
+
+        private func keyStreamByte() -> UInt8 {
+            let temp = UInt32(UInt16(truncatingIfNeeded: key2) | 2)
+            return UInt8(((temp &* (temp ^ 1)) >> 8) & 0xFF)
+        }
+
+        mutating func encryptByte(_ plain: UInt8) -> UInt8 {
+            let encrypted = plain ^ keyStreamByte()
+            updateKeys(plain)
+            return encrypted
+        }
+
+        mutating func decryptByte(_ cipher: UInt8) -> UInt8 {
+            let plain = cipher ^ keyStreamByte()
+            updateKeys(plain)
+            return plain
+        }
+
+        static func encrypt(_ plaintext: Data, crc32: UInt32, password: String) -> Data {
+            var codec = ZipCryptoCodec(password: password)
+            var header = [UInt8](repeating: 0, count: 12)
+            if SecRandomCopyBytes(kSecRandomDefault, 11, &header) != errSecSuccess {
+                var rng = SystemRandomNumberGenerator()
+                for idx in 0..<11 {
+                    header[idx] = UInt8.random(in: 0...255, using: &rng)
+                }
+            }
+            header[11] = UInt8((crc32 >> 24) & 0xFF)
+
+            var output = Data(capacity: 12 + plaintext.count)
+            for byte in header {
+                output.append(codec.encryptByte(byte))
+            }
+            for byte in plaintext {
+                output.append(codec.encryptByte(byte))
+            }
+            return output
+        }
+
+        static func verifyHeaderOnly(
+            encryptedPayload: Data,
+            crc32: UInt32,
+            bitFlags: UInt16,
+            dosTime: UInt16,
+            password: String
+        ) -> Bool {
+            guard encryptedPayload.count >= 12 else { return false }
+            var codec = ZipCryptoCodec(password: password)
+            let start = encryptedPayload.startIndex
+            var lastDecrypted: UInt8 = 0
+            for idx in 0..<12 {
+                lastDecrypted = codec.decryptByte(encryptedPayload[start + idx])
+            }
+            let expectedCheckByte = (bitFlags & 0x0008) != 0
+                ? UInt8((dosTime >> 8) & 0xFF)
+                : UInt8((crc32 >> 24) & 0xFF)
+            return lastDecrypted == expectedCheckByte
+        }
+
+        static func decrypt(
+            _ encryptedPayload: Data,
+            crc32: UInt32,
+            bitFlags: UInt16,
+            dosTime: UInt16,
+            password: String
+        ) throws -> Data {
+            guard encryptedPayload.count >= 12 else {
+                throw PatchZipConverterError.corruptedArchive("Truncated encrypted ZIP payload.")
+            }
+            var codec = ZipCryptoCodec(password: password)
+            let start = encryptedPayload.startIndex
+            var lastDecrypted: UInt8 = 0
+            for idx in 0..<12 {
+                lastDecrypted = codec.decryptByte(encryptedPayload[start + idx])
+            }
+            let expectedCheckByte = (bitFlags & 0x0008) != 0
+                ? UInt8((dosTime >> 8) & 0xFF)
+                : UInt8((crc32 >> 24) & 0xFF)
+            guard lastDecrypted == expectedCheckByte else {
+                throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.zip_wrong_password"))
+            }
+
+            var output = Data(capacity: encryptedPayload.count - 12)
+            for idx in 12..<encryptedPayload.count {
+                output.append(codec.decryptByte(encryptedPayload[start + idx]))
+            }
+            return output
+        }
+    }
+
+    func buildZipArchive(entries: [(path: String, data: Data)], password: String? = nil) throws -> Data {
+        let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
+        let bitFlags: UInt16 = cleanPassword != nil ? ((1 << 11) | 0x0001) : (1 << 11)
+
         var archive = Data()
         var centralDirectory = Data()
         var centralCount: UInt16 = 0
@@ -857,34 +1088,44 @@ public final class PatchZipConverter {
 
             let localHeaderOffset = UInt32(archive.count)
             let entryCRC = crc32Checksum(entry.data)
-            let size = UInt32(entry.data.count)
+            let uncompressedSize = UInt32(entry.data.count)
+            let storedPayload: Data
+            if let zipPassword = cleanPassword {
+                guard entry.data.count <= Int(UInt32.max) - 12 else {
+                    throw PatchZipConverterError.sizeLimitExceeded
+                }
+                storedPayload = ZipCryptoCodec.encrypt(entry.data, crc32: entryCRC, password: zipPassword)
+            } else {
+                storedPayload = entry.data
+            }
+            let compressedSize = UInt32(storedPayload.count)
 
             // 1. Local File Header
             archive.appendUInt32(0x04034b50) // Local file header signature
             archive.appendUInt16(20)         // Version needed to extract (2.0)
-            archive.appendUInt16(1 << 11)    // General purpose bit flag (UTF-8)
+            archive.appendUInt16(bitFlags)   // General purpose bit flag (UTF-8 + optional ZipCrypto)
             archive.appendUInt16(0)          // Compression method: 0 (Stored)
             archive.appendUInt16(0)          // Last mod file time
             archive.appendUInt16(0)          // Last mod file date
             archive.appendUInt32(entryCRC)   // CRC-32
-            archive.appendUInt32(size)       // Compressed size
-            archive.appendUInt32(size)       // Uncompressed size
+            archive.appendUInt32(compressedSize)   // Compressed size
+            archive.appendUInt32(uncompressedSize) // Uncompressed size
             archive.appendUInt16(UInt16(pathBytes.count)) // File name length
             archive.appendUInt16(0)          // Extra field length
             archive.append(pathBytes)        // File name
-            archive.append(entry.data)       // Uncompressed file data
+            archive.append(storedPayload)    // File data (plaintext or ZipCrypto payload)
 
             // 2. Central Directory Header
             centralDirectory.appendUInt32(0x02014b50) // Central file header signature
             centralDirectory.appendUInt16(20)         // Version made by
             centralDirectory.appendUInt16(20)         // Version needed to extract
-            centralDirectory.appendUInt16(1 << 11)    // Bit flag (UTF-8)
+            centralDirectory.appendUInt16(bitFlags)   // Bit flag
             centralDirectory.appendUInt16(0)          // Compression method (Stored)
             centralDirectory.appendUInt16(0)          // Last mod time
             centralDirectory.appendUInt16(0)          // Last mod date
             centralDirectory.appendUInt32(entryCRC)   // CRC-32
-            centralDirectory.appendUInt32(size)       // Compressed size
-            centralDirectory.appendUInt32(size)       // Uncompressed size
+            centralDirectory.appendUInt32(compressedSize)   // Compressed size
+            centralDirectory.appendUInt32(uncompressedSize) // Uncompressed size
             centralDirectory.appendUInt16(UInt16(pathBytes.count)) // File name length
             centralDirectory.appendUInt16(0)          // Extra field length
             centralDirectory.appendUInt16(0)          // File comment length
@@ -915,7 +1156,7 @@ public final class PatchZipConverter {
         return archive
     }
 
-    public func parseZipArchive(_ data: Data) throws -> [String: Data] {
+    private func findZipCentralDirectory(in data: Data) throws -> (entryCount: Int, offset: Int) {
         guard data.count >= 22 else {
             throw PatchZipConverterError.corruptedArchive("Zip file too small to contain EOCD.")
         }
@@ -923,7 +1164,6 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.sizeLimitExceeded
         }
 
-        // Search backward for End of Central Directory signature (0x06054b50)
         let eocdSig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
         var eocdOffset: Int?
         let maxSearch = min(data.count, 65535 + 22)
@@ -949,7 +1189,6 @@ public final class PatchZipConverter {
         var cdTotalEntries = Int(data.readUInt16(at: eocdPos + 10))
         var cdOffset = Int(data.readUInt32(at: eocdPos + 16))
 
-        // Check for ZIP64 EOCD locator (0x07064b50) immediately preceding EOCD
         if eocdPos >= 20 {
             let locSig = data.readUInt32(at: eocdPos - 20)
             if locSig == 0x07064b50 {
@@ -973,11 +1212,16 @@ public final class PatchZipConverter {
             throw PatchZipConverterError.corruptedArchive("Invalid central directory offset.")
         }
 
+        return (cdTotalEntries, cdOffset)
+    }
+
+    public func parseZipArchive(_ data: Data, password: String? = nil) throws -> [String: Data] {
+        let directory = try findZipCentralDirectory(in: data)
         var results: [String: Data] = [:]
-        var currentCDPos = cdOffset
+        var currentCDPos = directory.offset
         var totalUncompressedBytes: UInt64 = 0
 
-        for _ in 0..<cdTotalEntries {
+        for _ in 0..<directory.entryCount {
             guard currentCDPos + 46 <= data.count else {
                 throw PatchZipConverterError.corruptedArchive("Truncated central directory record.")
             }
@@ -986,7 +1230,9 @@ public final class PatchZipConverter {
                 throw PatchZipConverterError.corruptedArchive("Invalid central directory header signature.")
             }
 
+            let bitFlags = data.readUInt16(at: currentCDPos + 8)
             let compressionMethod = data.readUInt16(at: currentCDPos + 10)
+            let dosTime = data.readUInt16(at: currentCDPos + 12)
             let entryCRC = data.readUInt32(at: currentCDPos + 16)
             var compressedSize = UInt64(data.readUInt32(at: currentCDPos + 20))
             var uncompressedSize = UInt64(data.readUInt32(at: currentCDPos + 24))
@@ -1049,7 +1295,6 @@ public final class PatchZipConverter {
             }
             totalUncompressedBytes = expandedSum
 
-            // Parse Local File Header
             guard localHeaderOffset <= UInt64(Int.max) else {
                 throw PatchZipConverterError.corruptedArchive("Invalid local header offset for: \(filename)")
             }
@@ -1067,7 +1312,8 @@ public final class PatchZipConverter {
             let localExtraLen = Int(data.readUInt16(at: localOff + 28))
             let dataStart = localOff + 30 + localNameLen + localExtraLen
 
-            let payloadSize = (compressionMethod == 0) ? Int(uncompressedSize) : Int(compressedSize)
+            let isEncrypted = (bitFlags & 0x0001) != 0
+            let payloadSize = (isEncrypted || compressionMethod != 0) ? Int(compressedSize) : Int(uncompressedSize)
             guard dataStart >= 0,
                   dataStart <= data.count,
                   payloadSize >= 0,
@@ -1075,24 +1321,17 @@ public final class PatchZipConverter {
                 throw PatchZipConverterError.corruptedArchive("Truncated file payload for: \(filename)")
             }
 
-            if compressionMethod == 0 {
-                // Stored
-                let fileData = data.subdata(in: dataStart..<(dataStart + Int(uncompressedSize)))
-                results[filename] = fileData
-            } else if compressionMethod == 8 {
-                // Deflated -> Decompress raw deflate stream using Central Directory sizes
-                let compressedData = data.subdata(in: dataStart..<(dataStart + Int(compressedSize)))
-                let decompressedData = try decompressDeflate(compressedData, expectedSize: Int(uncompressedSize))
-                if entryCRC != 0 {
-                    let calcCRC = crc32Checksum(decompressedData)
-                    if calcCRC != entryCRC {
-                        throw PatchZipConverterError.corruptedArchive("CRC32 checksum mismatch for: \(filename)")
-                    }
-                }
-                results[filename] = decompressedData
-            } else {
-                throw PatchZipConverterError.unsupportedFormat("Unsupported compression method: \(compressionMethod)")
-            }
+            let rawPayload = data.subdata(in: dataStart..<(dataStart + payloadSize))
+            results[filename] = try extractZipEntryPayload(
+                rawPayload: rawPayload,
+                path: filename,
+                compressionMethod: compressionMethod,
+                bitFlags: bitFlags,
+                dosTime: dosTime,
+                crc32: entryCRC,
+                uncompressedSize: Int(uncompressedSize),
+                password: password
+            )
         }
 
         return results
@@ -1106,6 +1345,12 @@ public final class PatchZipConverter {
         public let uncompressedSize: UInt32
         public let localHeaderOffset: UInt64
         public let payloadOffset: UInt64
+        public let bitFlags: UInt16
+        public let dosTime: UInt16
+
+        public var isEncrypted: Bool {
+            (bitFlags & 0x0001) != 0
+        }
 
         public init(
             path: String,
@@ -1114,7 +1359,9 @@ public final class PatchZipConverter {
             compressedSize: UInt32,
             uncompressedSize: UInt32,
             localHeaderOffset: UInt64,
-            payloadOffset: UInt64
+            payloadOffset: UInt64,
+            bitFlags: UInt16 = 0,
+            dosTime: UInt16 = 0
         ) {
             self.path = path
             self.compressionMethod = compressionMethod
@@ -1123,71 +1370,19 @@ public final class PatchZipConverter {
             self.uncompressedSize = uncompressedSize
             self.localHeaderOffset = localHeaderOffset
             self.payloadOffset = payloadOffset
+            self.bitFlags = bitFlags
+            self.dosTime = dosTime
         }
     }
 
     /// Đọc nhanh danh mục Central Directory của file ZIP mà KHÔNG giải nén bất kỳ payload nào.
     /// Thời gian thực thi < 2ms cho file 150 MB, tiêu tốn 0 byte RAM giải nén.
     public func readZipArchiveHeaders(from data: Data) throws -> [String: ZipArchiveEntryHeader] {
-        guard data.count >= 22 else {
-            throw PatchZipConverterError.corruptedArchive("Zip file too small to contain EOCD.")
-        }
-        guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(data.count)) else {
-            throw PatchZipConverterError.sizeLimitExceeded
-        }
-
-        let eocdSig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
-        var eocdOffset: Int?
-        let maxSearch = min(data.count, 65535 + 22)
-        let searchStart = data.count - maxSearch
-
-        for i in stride(from: data.count - 4, through: searchStart, by: -1) {
-            if data[i] == eocdSig[0] &&
-               data[i+1] == eocdSig[1] &&
-               data[i+2] == eocdSig[2] &&
-               data[i+3] == eocdSig[3] {
-                eocdOffset = i
-                break
-            }
-        }
-
-        guard let eocdPos = eocdOffset else {
-            throw PatchZipConverterError.corruptedArchive("End of Central Directory record not found.")
-        }
-        guard eocdPos + 22 <= data.count else {
-            throw PatchZipConverterError.corruptedArchive("Truncated End of Central Directory record.")
-        }
-
-        var cdTotalEntries = Int(data.readUInt16(at: eocdPos + 10))
-        var cdOffset = Int(data.readUInt32(at: eocdPos + 16))
-
-        if eocdPos >= 20 {
-            let locSig = data.readUInt32(at: eocdPos - 20)
-            if locSig == 0x07064b50 {
-                let zip64RawOffset = data.readUInt64(at: eocdPos - 12)
-                if zip64RawOffset <= UInt64(Int.max) {
-                    let zip64EOCDOffset = Int(zip64RawOffset)
-                    if zip64EOCDOffset + 56 <= data.count
-                        && data.readUInt32(at: zip64EOCDOffset) == 0x06064b50 {
-                        let rawCount = data.readUInt64(at: zip64EOCDOffset + 32)
-                        let rawOffset = data.readUInt64(at: zip64EOCDOffset + 48)
-                        if rawCount <= UInt64(Int.max), rawOffset <= UInt64(Int.max) {
-                            cdTotalEntries = Int(rawCount)
-                            cdOffset = Int(rawOffset)
-                        }
-                    }
-                }
-            }
-        }
-
-        guard cdOffset < data.count else {
-            throw PatchZipConverterError.corruptedArchive("Invalid central directory offset.")
-        }
-
+        let directory = try findZipCentralDirectory(in: data)
         var results: [String: ZipArchiveEntryHeader] = [:]
-        var currentCDPos = cdOffset
+        var currentCDPos = directory.offset
 
-        for _ in 0..<cdTotalEntries {
+        for _ in 0..<directory.entryCount {
             guard currentCDPos + 46 <= data.count else {
                 throw PatchZipConverterError.corruptedArchive("Truncated central directory record.")
             }
@@ -1196,7 +1391,9 @@ public final class PatchZipConverter {
                 throw PatchZipConverterError.corruptedArchive("Invalid central directory header signature.")
             }
 
+            let bitFlags = data.readUInt16(at: currentCDPos + 8)
             let compressionMethod = data.readUInt16(at: currentCDPos + 10)
+            let dosTime = data.readUInt16(at: currentCDPos + 12)
             let entryCRC = data.readUInt32(at: currentCDPos + 16)
             var compressedSize = UInt64(data.readUInt32(at: currentCDPos + 20))
             var uncompressedSize = UInt64(data.readUInt32(at: currentCDPos + 24))
@@ -1272,7 +1469,9 @@ public final class PatchZipConverter {
                 compressedSize: UInt32(compressedSize),
                 uncompressedSize: UInt32(uncompressedSize),
                 localHeaderOffset: localHeaderOffset,
-                payloadOffset: payloadOffset
+                payloadOffset: payloadOffset,
+                bitFlags: bitFlags,
+                dosTime: dosTime
             )
         }
 
@@ -1289,38 +1488,184 @@ public final class PatchZipConverter {
         return try readZipArchiveHeaders(from: data)
     }
 
-    /// Trích xuất/giải nén có chọn lọc một entry duy nhất từ Data
-    public func extractZipEntry(header: ZipArchiveEntryHeader, from sourceData: Data) throws -> Data {
-        let start = Int(header.payloadOffset)
-        let end = start + Int(header.compressedSize)
-        guard start >= 0, end <= sourceData.count else {
-            throw PatchZipConverterError.corruptedArchive("Payload out of bounds for \(header.path)")
-        }
-        let payload = sourceData.subdata(in: start..<end)
-        if header.compressionMethod == 0 {
-            return payload
-        } else if header.compressionMethod == 8 {
-            let decompressed = try decompressDeflate(payload, expectedSize: Int(header.uncompressedSize))
-            if header.crc32 != 0 {
-                let calc = crc32Checksum(decompressed)
-                guard calc == header.crc32 else {
-                    throw PatchZipConverterError.corruptedArchive("CRC32 checksum mismatch for \(header.path)")
-                }
-            }
-            return decompressed
-        } else {
-            throw PatchZipConverterError.unsupportedFormat("Phương thức nén không được hỗ trợ: \(header.compressionMethod)")
-        }
+    public func isZipPasswordProtected(url: URL) -> Bool {
+        (try? readZipArchiveHeaders(from: url).values.contains { $0.isEncrypted }) ?? false
     }
 
-    /// Trích xuất/giải nén có chọn lọc một entry duy nhất từ URL file ZIP
-    public func extractZipEntry(header: ZipArchiveEntryHeader, from url: URL) throws -> Data {
+    public func isZipPasswordProtected(data: Data) -> Bool {
+        (try? readZipArchiveHeaders(from: data).values.contains { $0.isEncrypted }) ?? false
+    }
+
+    public func inspectZipMetadata(at url: URL, password: String? = nil) throws -> ZipInspectionInfo {
         let hasSecurity = url.startAccessingSecurityScopedResource()
         defer {
             if hasSecurity { url.stopAccessingSecurityScopedResource() }
         }
         let data = try Data(contentsOf: url, options: .alwaysMapped)
-        return try extractZipEntry(header: header, from: data)
+        let headers = try readZipArchiveHeaders(from: data)
+        let isProtected = headers.values.contains { $0.isEncrypted }
+        let activePaths = headers.keys.sorted().filter { path in
+            let parts = path.replacingOccurrences(of: "\\", with: "/")
+                .split(separator: "/").map(String.init)
+            guard !parts.isEmpty else { return false }
+            if parts.contains(where: { $0.caseInsensitiveCompare("__MACOSX") == .orderedSame }) { return false }
+            if let last = parts.last, last == ".DS_Store" || last.hasPrefix("._") { return false }
+            return true
+        }
+
+        let cleanPwd = password.flatMap { $0.isEmpty ? nil : $0 }
+        var detectedName: String? = nil
+        var isUnlocked = !isProtected
+
+        if !isProtected || cleanPwd != nil {
+            let metaCandidates = ["settings.json", "patch.json", "manifest.json"]
+            if let metaHeader = headers.values.first(where: { header in
+                let last = (header.path as NSString).lastPathComponent.lowercased()
+                return metaCandidates.contains(last)
+            }) {
+                if let jsonData = try? extractZipEntry(header: metaHeader, from: data, password: cleanPwd) {
+                    isUnlocked = true
+                    if let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                       let name = dict["name"] as? String {
+                        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            detectedName = trimmed
+                        }
+                    }
+                } else if metaHeader.isEncrypted {
+                    isUnlocked = false
+                }
+            } else if isProtected, let zipPassword = cleanPwd {
+                let encryptedHeaders = headers.values.filter { $0.isEncrypted }
+                if let smallHeader = encryptedHeaders.filter({ $0.uncompressedSize <= 256 * 1024 }).min(by: { $0.uncompressedSize < $1.uncompressedSize }) {
+                    isUnlocked = (try? extractZipEntry(header: smallHeader, from: data, password: zipPassword)) != nil
+                } else if let anyHeader = encryptedHeaders.first {
+                    let start = Int(anyHeader.payloadOffset)
+                    let end = min(data.count, start + min(12, Int(anyHeader.compressedSize)))
+                    if start >= 0, end - start >= 12 {
+                        isUnlocked = ZipCryptoCodec.verifyHeaderOnly(
+                            encryptedPayload: data.subdata(in: start..<end),
+                            crc32: anyHeader.crc32,
+                            bitFlags: anyHeader.bitFlags,
+                            dosTime: anyHeader.dosTime,
+                            password: zipPassword
+                        )
+                    }
+                }
+            }
+        }
+
+        if detectedName == nil {
+            let dummyItems = activePaths.map { path in
+                let parts = path.replacingOccurrences(of: "\\", with: "/")
+                    .split(separator: "/").map(String.init)
+                return (parts: parts, data: Data())
+            }
+            detectedName = Self.unwrapCommonRootWrappers(dummyItems).inferredName
+        }
+
+        return ZipInspectionInfo(
+            isPasswordProtected: isProtected,
+            suggestedName: detectedName,
+            entryCount: activePaths.count,
+            isUnlocked: isUnlocked
+        )
+    }
+
+    private func extractZipEntryPayload(
+        rawPayload: Data,
+        path: String,
+        compressionMethod: UInt16,
+        bitFlags: UInt16,
+        dosTime: UInt16,
+        crc32 entryCRC: UInt32,
+        uncompressedSize: Int,
+        password: String?
+    ) throws -> Data {
+        if compressionMethod == 99 {
+            throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.zip_aes_unsupported"))
+        }
+
+        let isEncrypted = (bitFlags & 0x0001) != 0
+        let clearPayload: Data
+        if isEncrypted {
+            let cleanPwd = password.flatMap { $0.isEmpty ? nil : $0 }
+            guard let zipPassword = cleanPwd else {
+                throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.zip_password_required"))
+            }
+            clearPayload = try ZipCryptoCodec.decrypt(
+                rawPayload,
+                crc32: entryCRC,
+                bitFlags: bitFlags,
+                dosTime: dosTime,
+                password: zipPassword
+            )
+        } else {
+            clearPayload = rawPayload
+        }
+
+        let result: Data
+        if compressionMethod == 0 {
+            result = clearPayload
+        } else if compressionMethod == 8 {
+            do {
+                result = try decompressDeflate(clearPayload, expectedSize: uncompressedSize)
+            } catch {
+                if isEncrypted {
+                    throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.zip_wrong_password"))
+                }
+                throw error
+            }
+        } else {
+            throw PatchZipConverterError.unsupportedFormat(
+                AppLanguage.current.text("error.patch_converter.unsupported_compression", compressionMethod)
+            )
+        }
+
+        let shouldVerifyCRC = (isEncrypted && (entryCRC != 0 || result.isEmpty)) || (compressionMethod == 8 && entryCRC != 0)
+        if shouldVerifyCRC {
+            let calc = crc32Checksum(result)
+            if calc != entryCRC {
+                if isEncrypted {
+                    throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.zip_wrong_password"))
+                }
+                throw PatchZipConverterError.corruptedArchive("CRC32 checksum mismatch for \(path)")
+            }
+        }
+        return result
+    }
+
+    /// Trích xuất/giải nén có chọn lọc một entry duy nhất từ Data
+    public func extractZipEntry(header: ZipArchiveEntryHeader, from sourceData: Data, password: String? = nil) throws -> Data {
+        let byteCount = (header.isEncrypted || header.compressionMethod != 0)
+            ? Int(header.compressedSize)
+            : Int(header.uncompressedSize)
+        let start = Int(header.payloadOffset)
+        let end = start + byteCount
+        guard start >= 0, byteCount >= 0, end <= sourceData.count else {
+            throw PatchZipConverterError.corruptedArchive("Payload out of bounds for \(header.path)")
+        }
+        let rawPayload = sourceData.subdata(in: start..<end)
+        return try extractZipEntryPayload(
+            rawPayload: rawPayload,
+            path: header.path,
+            compressionMethod: header.compressionMethod,
+            bitFlags: header.bitFlags,
+            dosTime: header.dosTime,
+            crc32: header.crc32,
+            uncompressedSize: Int(header.uncompressedSize),
+            password: password
+        )
+    }
+
+    /// Trích xuất/giải nén có chọn lọc một entry duy nhất từ URL file ZIP
+    public func extractZipEntry(header: ZipArchiveEntryHeader, from url: URL, password: String? = nil) throws -> Data {
+        let hasSecurity = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurity { url.stopAccessingSecurityScopedResource() }
+        }
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
+        return try extractZipEntry(header: header, from: data, password: password)
     }
 
     private func decompressDeflate(_ compressed: Data, expectedSize: Int) throws -> Data {
@@ -1400,15 +1745,15 @@ public final class PatchZipConverter {
         let magic = Data("3105PATCH\0".utf8)
         guard data.count > magic.count,
               data.prefix(magic.count) == magic else {
-            throw PatchZipConverterError.invalidProject("Thiếu magic 3105PATCH.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.missing_magic"))
         }
         let body = data.dropFirst(magic.count)
         guard let plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
-            throw PatchZipConverterError.invalidProject("Envelope không phải plist hợp lệ.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.invalid_envelope_plist"))
         }
         guard let packageIDString = plist["packageID"] as? String,
               let packageID = UUID(uuidString: packageIDString) else {
-            throw PatchZipConverterError.invalidProject("packageID không hợp lệ.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.invalid_package_id"))
         }
         let schemaVersion = plist["schemaVersion"] as? Int ?? 0
         let keyAADVersion = plist["keyAADVersion"] as? Int
@@ -1452,7 +1797,7 @@ public final class PatchZipConverter {
         let magic = Data("3105PATCH\0".utf8)
         let body = data.dropFirst(magic.count)
         guard let plist = try PropertyListSerialization.propertyList(from: Data(body), options: [], format: nil) as? [String: Any] else {
-            throw PatchZipConverterError.invalidProject("Envelope không phải plist hợp lệ.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.invalid_envelope_plist"))
         }
         var metadata: [String: Any] = [:]
         for key in Self.envelopeMetadataKeys {
@@ -1499,7 +1844,7 @@ public final class PatchZipConverter {
             }
         }
         guard status == kCCSuccess else {
-            throw PatchZipConverterError.cryptoFailed("Không thể dẫn xuất khóa PBKDF2 (\(status)).")
+            throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.pbkdf2_failed", status))
         }
         return derivedKey
     }
@@ -1507,11 +1852,11 @@ public final class PatchZipConverter {
     private func unwrapContentKeyLocally(envelope: ParsedEnvelope, password: String?) throws -> Data {
         let cleanPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !cleanPassword.isEmpty else {
-            throw PatchZipConverterError.cryptoFailed("Gói bảo vệ mật khẩu nhưng chưa nhập mật khẩu.")
+            throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.password_required"))
         }
         guard let salt = envelope.kdfSalt, !salt.isEmpty,
               let wrapped = envelope.wrappedContentKey, !wrapped.isEmpty else {
-            throw PatchZipConverterError.invalidProject("Gói .3105 thiếu kdfSalt hoặc wrappedContentKey.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.missing_kdf_or_wrapped_key"))
         }
         let iterations = envelope.kdfIterations ?? 120_000
         let kek = try pbkdf2SHA256(password: cleanPassword, salt: salt, iterations: iterations, keyByteCount: 32)
@@ -1555,7 +1900,7 @@ public final class PatchZipConverter {
             }
         }
 
-        throw PatchZipConverterError.cryptoFailed("Mật khẩu gói .3105 không chính xác hoặc không mở được wrapped content key.")
+        throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.wrong_3105_password"))
     }
 
     private func openPayload(
@@ -1595,7 +1940,7 @@ public final class PatchZipConverter {
                 return decrypted
             }
         }
-        throw PatchZipConverterError.invalidProject("Không giải mã được payload AES-GCM.")
+        throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.payload_decrypt_failed"))
     }
 
     private func aesGCMSeal(plaintext: Data, key: Data, aad: Data) throws -> Data {
@@ -1641,10 +1986,10 @@ public final class PatchZipConverter {
             }
         }
 
-        throw PatchZipConverterError.cryptoFailed("Không thể giải mã AES-GCM với bất kỳ cấu trúc nonce nào.")
+        throw PatchZipConverterError.cryptoFailed(AppLanguage.current.text("error.patch_converter.aes_gcm_decrypt_failed"))
     }
 
-    func buildProjectZip(_ project: PatchProject) throws -> Data {
+    func buildProjectZip(_ project: PatchProject, password: String? = nil) throws -> Data {
         let fallbackBundle = project.bundleIdentifiers.first(where: { !$0.isEmpty }) ?? "com.garena.game.kgvn"
         var payloadEntries: [(path: String, data: Data)] = []
         var seenPayloadPaths = Set<String>()
@@ -1663,7 +2008,7 @@ public final class PatchZipConverter {
                 payloadEntries.append((path: zipEntryPath, data: rule.replacementData))
             }
         }
-        return try buildZipArchive(entries: payloadEntries)
+        return try buildZipArchive(entries: payloadEntries, password: password)
     }
 
     private func manifestData(for project: PatchProject) throws -> Data {
@@ -1788,12 +2133,24 @@ public final class PatchZipConverter {
         return nil
     }
 
-    func buildPatchProject(fromZipData zipData: Data) throws -> PatchProject {
-        try buildPatchProjectWithSettings(fromZipData: zipData).project
+    func buildPatchProject(
+        fromZipData zipData: Data,
+        sourcePassword: String? = nil,
+        customProjectName: String? = nil
+    ) throws -> PatchProject {
+        try buildPatchProjectWithSettings(
+            fromZipData: zipData,
+            sourcePassword: sourcePassword,
+            customProjectName: customProjectName
+        ).project
     }
 
-    private func buildPatchProjectWithSettings(fromZipData zipData: Data) throws -> (project: PatchProject, settings: [Any]) {
-        let entries = try parseZipArchive(zipData)
+    private func buildPatchProjectWithSettings(
+        fromZipData zipData: Data,
+        sourcePassword: String? = nil,
+        customProjectName: String? = nil
+    ) throws -> (project: PatchProject, settings: [Any]) {
+        let entries = try parseZipArchive(zipData, password: sourcePassword)
         let rawItems: [(parts: [String], data: Data)] = entries.keys.sorted().compactMap { rawName in
             let cleaned = rawName.replacingOccurrences(of: "\\", with: "/")
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -2014,9 +2371,11 @@ public final class PatchZipConverter {
             )
         }
         guard !rules.isEmpty else {
-            throw PatchZipConverterError.invalidProject("ZIP không chứa rule nào.")
+            throw PatchZipConverterError.invalidProject(AppLanguage.current.text("error.patch_converter.zip_no_rules"))
         }
-        let patchName = (settingsName?.isEmpty == false ? settingsName : nil)
+        let customName = customProjectName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let patchName = (customName?.isEmpty == false ? customName : nil)
+            ?? (settingsName?.isEmpty == false ? settingsName : nil)
             ?? (unwrapped.inferredName?.isEmpty == false ? unwrapped.inferredName : nil)
             ?? "Converted Patch"
         let patchAuthor = (settingsAuthor?.isEmpty == false ? settingsAuthor : nil) ?? "Totorox"

@@ -1,71 +1,76 @@
 import Foundation
 import SwiftUI
 
-/// Quản lý trạng thái kích hoạt license.
-///
-/// - Nếu có key hợp lệ đã kích hoạt: `status.isActive == true`.
-/// - Nếu chưa có key hoặc key bị hủy: `.unlicensed`.
-/// - Nếu key bị từ chối server: `.rejected(String)`.
+/// Quản lý phiên tài khoản (Bearer token) và trạng thái gói / lượt dùng.
 @MainActor
 final class LicenseManager: ObservableObject {
     enum Status: Equatable {
-        case unlicensed
-        case activating
-        case active(expiresAt: Date?, remaining: Int?, dailyQuota: Int?)
+        case signedOut
+        case authenticating
+        case authenticated(user: UserProfile)
         case rejected(String)
 
-        var isActive: Bool {
-            if case .active = self { return true }
+        var isAuthenticated: Bool {
+            if case .authenticated = self { return true }
             return false
         }
     }
 
-    private struct CachedLicenseSnapshot: Codable, Equatable {
-        let licenseKey: String
+    private struct CachedSessionSnapshot: Codable, Equatable {
+        let token: String
         let deviceIdentifier: String?
-        let expiresAt: Date?
-        let remaining: Int?
-        let dailyQuota: Int?
+        let user: UserProfile
     }
 
     static let shared = LicenseManager()
 
     enum Keys {
-        static let licenseKey = "totorox.licenseKey"
-        static let licenseSnapshot = "totorox.licenseSnapshot"
-        static let installInitialized = "totorox.licenseInstallInitialized"
+        static let authToken = "totorox.authToken"
+        static let userSnapshot = "totorox.userSnapshot"
+        static let installInitialized = "totorox.accountInstallInitialized"
+        // Legacy keys cleaned up on migration/reinstall
+        static let legacyLicenseKey = "totorox.licenseKey"
+        static let legacySnapshot = "totorox.licenseSnapshot"
     }
 
-    @Published private(set) var status: Status = .unlicensed
-    @Published private(set) var licenseKey: String = ""
+    @Published private(set) var status: Status = .signedOut
+    @Published private(set) var authToken: String = ""
+    @Published private(set) var currentUser: UserProfile?
     @Published private(set) var deviceIdentifier: String
     @Published private(set) var isRefreshing: Bool = false
 
     private let api: APIService
     private let defaults: UserDefaults
-    private let keyReader: () -> String?
-    private let keyWriter: (String) -> Void
-    private let keyRemover: () -> Void
+    private let tokenReader: () -> String?
+    private let tokenWriter: (String) -> Void
+    private let tokenRemover: () -> Void
     private var inFlightRefreshTask: Task<Void, Never>?
+    private var notificationObservers: [NSObjectProtocol] = []
 
     init(
         api: APIService = .shared,
         defaults: UserDefaults = .standard,
-        keyReader: @escaping () -> String? = { KeychainHelper.string(for: Keys.licenseKey) },
-        keyWriter: @escaping (String) -> Void = { KeychainHelper.set($0, for: Keys.licenseKey) },
-        keyRemover: @escaping () -> Void = { KeychainHelper.remove(Keys.licenseKey) },
+        keyReader: @escaping () -> String? = { KeychainHelper.string(for: Keys.authToken) },
+        keyWriter: @escaping (String) -> Void = { KeychainHelper.set($0, for: Keys.authToken) },
+        keyRemover: @escaping () -> Void = { KeychainHelper.remove(Keys.authToken) },
         deviceIdentifierProvider: () -> String = { DeviceIDManager.shared.identifier },
         autoRefresh: Bool = true,
-        clearOrphanedKeyOnFreshDefaults: Bool? = nil
+        clearOrphanedKeyOnFreshDefaults: Bool? = nil,
+        observeAPINotifications: Bool = true
     ) {
         self.api = api
         self.defaults = defaults
-        self.keyReader = keyReader
-        self.keyWriter = keyWriter
-        self.keyRemover = keyRemover
+        self.tokenReader = keyReader
+        self.tokenWriter = keyWriter
+        self.tokenRemover = keyRemover
         self.deviceIdentifier = deviceIdentifierProvider()
 
-        let rawStoredKey = Self.normalizeKey(keyReader() ?? "")
+        defaults.removeObject(forKey: Keys.legacySnapshot)
+        if defaults === UserDefaults.standard {
+            KeychainHelper.remove(Keys.legacyLicenseKey)
+        }
+
+        let rawStoredToken = (keyReader() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = loadSnapshot()
         let hasPriorState = snapshot != nil
             || defaults.bool(forKey: Keys.installInitialized)
@@ -74,31 +79,21 @@ final class LicenseManager: ObservableObject {
         defaults.set(true, forKey: Keys.installInitialized)
 
         let shouldPurgeOrphan = clearOrphanedKeyOnFreshDefaults ?? (defaults === UserDefaults.standard)
-        if shouldPurgeOrphan && !rawStoredKey.isEmpty && !hasPriorState {
-            // Fresh container/UserDefaults install (app was deleted & reinstalled):
-            // clear orphaned Keychain license key so ActivationView is shown again.
+        if shouldPurgeOrphan && !rawStoredToken.isEmpty && !hasPriorState {
             keyRemover()
-            self.licenseKey = ""
+            self.authToken = ""
         } else {
-            self.licenseKey = rawStoredKey
+            self.authToken = rawStoredToken
         }
 
-        if !self.licenseKey.isEmpty {
+        if !self.authToken.isEmpty {
             if let snapshot,
-               snapshot.licenseKey == self.licenseKey,
+               snapshot.token == self.authToken,
                snapshot.deviceIdentifier == nil || snapshot.deviceIdentifier == self.deviceIdentifier {
-                if let expiresAt = snapshot.expiresAt, expiresAt <= Date() {
-                    self.status = .unlicensed
-                } else {
-                    self.status = .active(
-                        expiresAt: snapshot.expiresAt,
-                        remaining: snapshot.remaining,
-                        dailyQuota: snapshot.dailyQuota
-                    )
-                }
+                self.currentUser = snapshot.user
+                self.status = .authenticated(user: snapshot.user)
             } else {
-                // No valid cached snapshot for this key + UDID: require server verification before entering main UI.
-                self.status = .unlicensed
+                self.status = .signedOut
             }
             if autoRefresh {
                 Task(priority: .background) { [weak self] in
@@ -106,46 +101,156 @@ final class LicenseManager: ObservableObject {
                 }
             }
         }
-    }
 
-    var hasStoredKey: Bool {
-        !licenseKey.isEmpty
-    }
-
-    func activate(_ rawKey: String) async {
-        let key = Self.normalizeKey(rawKey)
-        guard !key.isEmpty else {
-            status = .rejected("Vui lòng nhập License Key.")
-            return
+        if observeAPINotifications {
+            let unauthObserver = NotificationCenter.default.addObserver(
+                forName: APIService.sessionUnauthorizedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                let message = note.object as? String
+                Task { @MainActor [weak self] in
+                    self?.handleSessionEvicted(message: message)
+                }
+            }
+            let profileObserver = NotificationCenter.default.addObserver(
+                forName: APIService.userProfileUpdatedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let user = note.object as? UserProfile else { return }
+                Task { @MainActor [weak self] in
+                    self?.applyUserProfile(user)
+                }
+            }
+            notificationObservers = [unauthObserver, profileObserver]
         }
+    }
 
-        inFlightRefreshTask?.cancel()
-        inFlightRefreshTask = nil
-        isRefreshing = false
-        status = .activating
-        switch await api.activate(licenseKey: key, hwid: deviceIdentifier) {
-        case .success(let activation):
-            licenseKey = key
-            keyWriter(key)
-            saveSnapshot(
-                CachedLicenseSnapshot(
-                    licenseKey: key,
-                    deviceIdentifier: deviceIdentifier,
-                    expiresAt: activation.expiresAt,
-                    remaining: nil,
-                    dailyQuota: nil
-                )
-            )
-            defaults.set(true, forKey: Keys.installInitialized)
-            status = .active(
-                expiresAt: activation.expiresAt,
-                remaining: nil,
-                dailyQuota: nil
-            )
-            await refresh()
+    deinit {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    var hasStoredSession: Bool {
+        !authToken.isEmpty
+    }
+
+    var isAuthenticated: Bool {
+        !authToken.isEmpty && status.isAuthenticated
+    }
+
+    var username: String {
+        currentUser?.username ?? ""
+    }
+
+    var expiresAt: Date? {
+        currentUser?.expiresDate
+    }
+
+    var maxUses: Int {
+        currentUser?.maxUses ?? 0
+    }
+
+    var usedCount: Int {
+        currentUser?.usedCount ?? 0
+    }
+
+    var remainingUses: Int {
+        guard hasActivePlan, let user = currentUser else { return 0 }
+        return user.remainingUses
+    }
+
+    var isUnlimited: Bool {
+        hasActivePlan && (currentUser?.isUnlimited ?? false)
+    }
+
+    var hasActivePlan: Bool {
+        guard let user = currentUser, user.hasActivePlan else { return false }
+        if let exp = user.expiresDate, exp <= Date() {
+            return false
+        }
+        return true
+    }
+
+    func formattedExpiry(language: AppLanguage, short: Bool = false) -> String {
+        guard let user = currentUser else { return "—" }
+        guard let exp = user.expiresDate else {
+            return language.text("account.no_plan")
+        }
+        if exp <= Date() {
+            return language.text("account.plan_expired")
+        }
+        let formatter = DateFormatter()
+        formatter.locale = language.locale
+        formatter.dateStyle = short ? .short : .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: exp)
+    }
+
+    func formattedRemainingUses(language: AppLanguage) -> String {
+        guard hasActivePlan, let user = currentUser else {
+            return language.text("account.uses_none")
+        }
+        if user.isUnlimited {
+            return language.text("account.uses_unlimited")
+        }
+        let remaining = max(0, user.remainingUses)
+        let total = max(0, user.maxUses)
+        return language.text("account.uses_remaining_fmt", remaining, total)
+    }
+
+    // MARK: - Auth Actions
+
+    func register(username: String, password: String) async -> Bool {
+        let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanUser.isEmpty, !password.isEmpty else {
+            status = .rejected(AppLanguage.current.text("auth.error.missing_credentials"))
+            return false
+        }
+        cancelRefresh()
+        status = .authenticating
+        switch await api.register(username: cleanUser, password: password, udid: deviceIdentifier) {
+        case .success(let session):
+            storeAuthenticatedSession(token: session.token, user: session.user)
+            return true
         case .failure(let error):
             status = .rejected(error.localizedDescription)
+            return false
         }
+    }
+
+    func login(username: String, password: String) async -> Bool {
+        let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanUser.isEmpty, !password.isEmpty else {
+            status = .rejected(AppLanguage.current.text("auth.error.missing_credentials"))
+            return false
+        }
+        cancelRefresh()
+        status = .authenticating
+        switch await api.login(username: cleanUser, password: password, udid: deviceIdentifier) {
+        case .success(let session):
+            storeAuthenticatedSession(token: session.token, user: session.user)
+            return true
+        case .failure(let error):
+            status = .rejected(error.localizedDescription)
+            return false
+        }
+    }
+
+    func redeem(code: String) async -> Result<RedeemCodeResponse, APIServiceError> {
+        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !authToken.isEmpty else {
+            return .failure(.serverRejected(status: 401, message: AppLanguage.current.text("api.error.unauthorized")))
+        }
+        let result = await api.redeem(code: cleanCode, token: authToken, hwid: deviceIdentifier)
+        if case .success(let resp) = result {
+            applyUserProfile(resp.user)
+        } else if case .failure(let err) = result, Self.isUnauthorized(err) {
+            handleSessionEvicted(message: err.localizedDescription)
+        }
+        return result
     }
 
     func refresh() async {
@@ -164,89 +269,112 @@ final class LicenseManager: ObservableObject {
         isRefreshing = false
     }
 
-    private func performRefresh() async {
-        let keyAtStart = licenseKey
-        let hwidAtStart = deviceIdentifier
-        guard !keyAtStart.isEmpty else {
-            clearSnapshot()
-            status = .unlicensed
-            return
-        }
-
-        switch await api.verify(licenseKey: keyAtStart, hwid: hwidAtStart) {
-        case .success(let resp):
-            guard !Task.isCancelled, licenseKey == keyAtStart else { return }
-            if resp.error != nil || resp.status != 200 {
-                clearSnapshot()
-                keyRemover()
-                licenseKey = ""
-                if let message = resp.error, !message.isEmpty {
-                    status = .rejected(message)
-                } else {
-                    status = .unlicensed
-                }
-            } else {
-                saveSnapshot(
-                    CachedLicenseSnapshot(
-                        licenseKey: keyAtStart,
-                        deviceIdentifier: hwidAtStart,
-                        expiresAt: resp.expiresAt,
-                        remaining: resp.remaining,
-                        dailyQuota: resp.dailyQuota
-                    )
-                )
-                defaults.set(true, forKey: Keys.installInitialized)
-                status = .active(
-                    expiresAt: resp.expiresAt,
-                    remaining: resp.remaining,
-                    dailyQuota: resp.dailyQuota
-                )
-            }
-        case .failure(let error):
-            guard !Task.isCancelled, licenseKey == keyAtStart else { return }
-            if Self.isAuthorizationRejection(error) {
-                clearSnapshot()
-                keyRemover()
-                licenseKey = ""
-                status = .rejected(error.localizedDescription)
-            } else if !status.isActive {
-                status = .rejected(error.localizedDescription)
-            }
+    func logout() async {
+        let tokenToRevoke = authToken
+        let hwid = deviceIdentifier
+        clearLocalSession(status: .signedOut)
+        if !tokenToRevoke.isEmpty {
+            await api.logout(token: tokenToRevoke, hwid: hwid)
         }
     }
 
     func deactivate() {
+        Task {
+            await logout()
+        }
+    }
+
+    func applyUserProfile(_ user: UserProfile) {
+        guard !authToken.isEmpty else { return }
+        currentUser = user
+        saveSnapshot(
+            CachedSessionSnapshot(
+                token: authToken,
+                deviceIdentifier: deviceIdentifier,
+                user: user
+            )
+        )
+        status = .authenticated(user: user)
+    }
+
+    // MARK: - Internal Helpers
+
+    private func storeAuthenticatedSession(token: String, user: UserProfile) {
+        authToken = token
+        tokenWriter(token)
+        defaults.set(true, forKey: Keys.installInitialized)
+        applyUserProfile(user)
+    }
+
+    private func performRefresh() async {
+        let tokenAtStart = authToken
+        let hwidAtStart = deviceIdentifier
+        guard !tokenAtStart.isEmpty else {
+            clearLocalSession(status: .signedOut)
+            return
+        }
+
+        switch await api.fetchMe(token: tokenAtStart, hwid: hwidAtStart) {
+        case .success(let me):
+            guard !Task.isCancelled, authToken == tokenAtStart else { return }
+            applyUserProfile(me.user)
+        case .failure(let error):
+            guard !Task.isCancelled, authToken == tokenAtStart else { return }
+            if Self.isSessionInvalidation(error) {
+                clearLocalSession(status: .rejected(error.localizedDescription))
+            } else if !status.isAuthenticated {
+                status = .rejected(error.localizedDescription)
+            }
+        }
+    }
+
+    private func handleSessionEvicted(message: String?) {
+        guard !authToken.isEmpty else { return }
+        let msg = (message?.isEmpty == false ? message! : AppLanguage.current.text("api.error.unauthorized"))
+        clearLocalSession(status: .rejected(msg))
+    }
+
+    private func clearLocalSession(status nextStatus: Status) {
+        cancelRefresh()
+        authToken = ""
+        currentUser = nil
+        tokenRemover()
+        clearSnapshot()
+        status = nextStatus
+    }
+
+    private func cancelRefresh() {
         inFlightRefreshTask?.cancel()
         inFlightRefreshTask = nil
         isRefreshing = false
-        licenseKey = ""
-        keyRemover()
-        clearSnapshot()
-        status = .unlicensed
     }
 
-    private static func normalizeKey(_ rawKey: String) -> String {
-        rawKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-    }
-
-    private static func isAuthorizationRejection(_ error: APIServiceError) -> Bool {
-        if case .serverRejected(let statusCode, _) = error {
-            return (400..<500).contains(statusCode)
+    private static func isUnauthorized(_ error: APIServiceError) -> Bool {
+        if case .serverRejected(let code, _) = error {
+            return code == 401
         }
         return false
     }
 
-    private func loadSnapshot() -> CachedLicenseSnapshot? {
-        guard let data = defaults.data(forKey: Keys.licenseSnapshot) else { return nil }
-        return try? JSONDecoder().decode(CachedLicenseSnapshot.self, from: data)
+    private static func isSessionInvalidation(_ error: APIServiceError) -> Bool {
+        if case .serverRejected(let statusCode, _) = error {
+            // 401: bị đá phiên hoặc token hết hạn; 403 trên /auth/me: tài khoản bị khóa.
+            return statusCode == 401 || statusCode == 403
+        }
+        return false
     }
 
-    private func saveSnapshot(_ snapshot: CachedLicenseSnapshot) {
+    private func loadSnapshot() -> CachedSessionSnapshot? {
+        guard let data = defaults.data(forKey: Keys.userSnapshot) else { return nil }
+        return try? JSONDecoder().decode(CachedSessionSnapshot.self, from: data)
+    }
+
+    private func saveSnapshot(_ snapshot: CachedSessionSnapshot) {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        defaults.set(data, forKey: Keys.licenseSnapshot)
+        defaults.set(data, forKey: Keys.userSnapshot)
     }
 
     private func clearSnapshot() {
-        defaults.removeObject(forKey: Keys.licenseSnapshot)
+        defaults.removeObject(forKey: Keys.userSnapshot)
     }
 }

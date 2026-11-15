@@ -10,44 +10,51 @@ enum APIServiceError: Error, Equatable, LocalizedError {
     case serverNotConfigured
 
     var errorDescription: String? {
+        let lang = AppLanguage.current
         switch self {
         case .invalidConfiguration:
-            return "Máy chủ chưa được cấu hình."
+            return lang.text("api.error.invalid_configuration")
         case .payloadTooLarge:
-            return "Tệp vượt quá giới hạn tải lên của máy chủ."
+            return lang.text("api.error.payload_too_large")
         case .serverRejected(let status, let message):
             if let message, !message.isEmpty {
-                return "Máy chủ từ chối (\(status)): \(message)"
+                return lang.text("api.error.server_rejected_detail", status, message)
             }
-            return "Máy chủ từ chối yêu cầu (\(status))."
+            if status == 401 {
+                return lang.text("api.error.unauthorized")
+            }
+            if status == 403 {
+                return lang.text("api.error.forbidden_plan")
+            }
+            if status == 429 {
+                return lang.text("api.error.rate_limited")
+            }
+            return lang.text("api.error.server_rejected", status)
         case .invalidResponse:
-            return "Phản hồi từ máy chủ không hợp lệ."
+            return lang.text("api.error.invalid_response")
         case .transport(let detail):
-            return "Lỗi kết nối: \(detail)"
+            return lang.text("api.error.transport", detail)
         case .ioFailure(let detail):
-            return "Lỗi tệp: \(detail)"
+            return lang.text("api.error.io_failure", detail)
         case .serverNotConfigured:
-            return "Máy chủ chưa được cấu hình."
+            return lang.text("api.error.server_not_configured")
         }
     }
 }
 
-struct LicenseActivation: Equatable, Sendable {
-    let expiresAt: Date?
-    let plan: String?
-}
-
 /// Thin client gọi đúng schema API của `main.py` (Totorox-Backend).
 ///
-/// Mọi request đều yêu cầu 2 header:
-/// - `X-License-Key`
-/// - `X-HWID`
+/// Xác thực bằng `Authorization: Bearer <token>` + `X-HWID`.
 ///
 /// Endpoint mapping:
-/// - POST /api/v1/verify            (JSON body: X-License-Key/X-HWID trong header)
-/// - POST /api/v1/activate          (JSON body: hwid, không gửi license key trong body)
-/// - POST /api/v1/convert-header    (multipart/form-data: mode, password?, file?)
-/// - POST /api/v1/merge-plan        (multipart/form-data: file?, config_json?)
+/// - POST /api/v1/auth/register     (JSON: username, password, udid)
+/// - POST /api/v1/auth/login        (JSON: username, password, udid)
+/// - POST /api/v1/auth/logout       (Bearer)
+/// - POST /api/v1/auth/redeem       (Bearer + JSON: code)
+/// - GET  /api/v1/auth/me           (Bearer)
+/// - POST /api/v1/overwrite-plan    (Bearer + JSON: source_paths, target_paths, ...)
+/// - POST /api/v1/convert-header    (Bearer + multipart/form-data: mode, password?, file?)
+/// - POST /api/v1/merge-plan        (Bearer + multipart/form-data: file?, config_json?)
 ///
 /// Timeout mặc định cho request là 60 giây.
 final class APIService {
@@ -145,14 +152,62 @@ final class APIService {
 
     // MARK: - License
 
-    func verify(
-        licenseKey: String,
-        hwid: String
-    ) async -> Result<VerifyResponse, APIServiceError> {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/verify"))
+    static let sessionUnauthorizedNotification = Notification.Name("totorox.api.sessionUnauthorized")
+    static let userProfileUpdatedNotification = Notification.Name("totorox.api.userProfileUpdated")
+
+    // MARK: - Auth & Redeem Endpoints
+
+    func register(
+        username: String,
+        password: String,
+        udid: String
+    ) async -> Result<AuthSessionResponse, APIServiceError> {
+        let body = AuthCredentialsRequest(username: username, password: password, udid: udid)
+        return await postJSON("api/v1/auth/register", body: body)
+    }
+
+    func login(
+        username: String,
+        password: String,
+        udid: String
+    ) async -> Result<AuthSessionResponse, APIServiceError> {
+        let body = AuthCredentialsRequest(username: username, password: password, udid: udid)
+        return await postJSON("api/v1/auth/login", body: body)
+    }
+
+    func logout(token: String, hwid: String) async {
+        guard !token.isEmpty else { return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/auth/logout"))
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        _ = try? await session.data(for: request)
+    }
+
+    func redeem(
+        code: String,
+        token: String,
+        hwid: String
+    ) async -> Result<RedeemCodeResponse, APIServiceError> {
+        let body = RedeemCodeRequest(code: code)
+        let result: Result<RedeemCodeResponse, APIServiceError> = await postJSON(
+            "api/v1/auth/redeem",
+            body: body,
+            token: token,
+            hwid: hwid
+        )
+        if case .success(let response) = result {
+            notifyUserProfileUpdated(response.user)
+        }
+        return result
+    }
+
+    func fetchMe(
+        token: String,
+        hwid: String
+    ) async -> Result<UserMeResponse, APIServiceError> {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/auth/me"))
+        request.httpMethod = "GET"
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -160,56 +215,37 @@ final class APIService {
                 return .failure(.invalidResponse)
             }
             guard (200..<300).contains(http.statusCode) else {
-                return .failure(.serverRejected(
-                    status: http.statusCode,
-                    message: Self.errorMessage(from: data) ?? "Không phản hồi hợp lệ."
-                ))
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
             }
-            let payload = try parseJSON([String: AnyCodable].self, from: data)
-            return .success(VerifyResponse(
-                status: http.statusCode,
-                expiresAt: payload["expires_at"]?.timestamp,
-                dailyQuota: payload["daily_quota"]?.int,
-                usedToday: payload["used_today"]?.int,
-                remaining: payload["remaining"]?.int,
-                error: payload["error"]?.string
-            ))
+            let decoded = try parseJSON(UserMeResponse.self, from: data)
+            notifyUserProfileUpdated(decoded.user)
+            return .success(decoded)
         } catch {
             return .failure(Self.failure(from: error))
         }
     }
 
-    func activate(
-        licenseKey: String,
-        hwid: String
-    ) async -> Result<LicenseActivation, APIServiceError> {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/activate"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
-        let body = ["hwid": hwid]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    // MARK: - Overwrite-plan
 
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                return .failure(.invalidResponse)
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                return .failure(.serverRejected(
-                    status: http.statusCode,
-                    message: Self.errorMessage(from: data)
-                ))
-            }
-            let payload = try parseJSON([String: AnyCodable].self, from: data)
-            let expiresAt = payload["expires_at"]?.timestamp
-            return .success(LicenseActivation(
-                expiresAt: expiresAt,
-                plan: payload["plan"]?.string
-            ))
-        } catch {
-            return .failure(Self.failure(from: error))
+    func overwritePlan(
+        _ payload: OverwritePlanRequest,
+        token: String,
+        hwid: String
+    ) async -> Result<OverwritePlanResponse, APIServiceError> {
+        let result: Result<OverwritePlanResponse, APIServiceError> = await postJSON(
+            "api/v1/overwrite-plan",
+            body: payload,
+            token: token,
+            hwid: hwid
+        )
+        if case .success(let resp) = result, let user = resp.user {
+            notifyUserProfileUpdated(user)
         }
+        return result
     }
 
     // MARK: - Convert-header
@@ -218,7 +254,7 @@ final class APIService {
         fileURL: URL?,
         mode: String,
         password: String?,
-        licenseKey: String,
+        token: String,
         hwid: String
     ) async -> Result<ConvertHeaderResponse, APIServiceError> {
         let path = "api/v1/convert-header"
@@ -238,20 +274,24 @@ final class APIService {
                 "multipart/form-data; boundary=\(body.boundary)",
                 forHTTPHeaderField: "Content-Type"
             )
-            applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
 
             let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.invalidResponse)
             }
             guard (200..<300).contains(http.statusCode) else {
-                return .failure(.serverRejected(
-                    status: http.statusCode,
-                    message: Self.errorMessage(from: data)
-                ))
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
             }
 
             let raw = try parseJSON(ConvertHeaderResponseBody.self, from: data)
+            if let user = raw.user {
+                notifyUserProfileUpdated(user)
+            }
             return .success(ConvertHeaderResponse(
                 ok: raw.ok,
                 mode: raw.mode,
@@ -270,7 +310,8 @@ final class APIService {
                 kdfSaltB64: raw.kdfSaltB64,
                 kdfIterations: raw.kdfIterations,
                 wrappedContentKeyB64: raw.wrappedContentKeyB64,
-                publicContentKeyB64: raw.publicContentKeyB64
+                publicContentKeyB64: raw.publicContentKeyB64,
+                user: raw.user
             ))
         } catch {
             return .failure(Self.failure(from: error))
@@ -282,7 +323,7 @@ final class APIService {
     func mergePlan(
         fileURL: URL?,
         configJSON: String?,
-        licenseKey: String,
+        token: String,
         hwid: String
     ) async -> Result<MergePlanResponse, APIServiceError> {
         let path = "api/v1/merge-plan"
@@ -307,7 +348,7 @@ final class APIService {
                 "multipart/form-data; boundary=\(body.boundary)",
                 forHTTPHeaderField: "Content-Type"
             )
-            applyAuthHeaders(to: &request, licenseKey: licenseKey, hwid: hwid)
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
             request.timeoutInterval = APIService.mergeTimeout
 
             let (data, response) = try await upload(request, body: body)
@@ -315,32 +356,90 @@ final class APIService {
                 return .failure(.invalidResponse)
             }
             guard (200..<300).contains(http.statusCode) else {
-                return .failure(.serverRejected(
-                    status: http.statusCode,
-                    message: Self.errorMessage(from: data)
-                ))
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
             }
 
             let raw = try parseJSON(MergePlanResponseBody.self, from: data)
+            if let user = raw.user {
+                notifyUserProfileUpdated(user)
+            }
             return .success(MergePlanResponse(
                 ok: raw.ok,
                 acceptedBytes: raw.acceptedBytes,
                 mergePlan: raw.mergePlan,
                 configFiles: raw.configFiles,
                 zipBytesB64: raw.zipBytesB64,
-                note: raw.note
+                note: raw.note,
+                user: raw.user
             ))
         } catch {
             return .failure(Self.failure(from: error))
         }
     }
 
-    // MARK: - Auth headers trên mỗi request
+    // MARK: - JSON + Auth Helpers
 
-    private func applyAuthHeaders(to request: inout URLRequest, licenseKey: String, hwid: String) {
-        request.setValue(licenseKey, forHTTPHeaderField: "X-License-Key")
-        request.setValue(hwid, forHTTPHeaderField: "X-HWID")
+    private func postJSON<Req: Encodable, Res: Decodable>(
+        _ path: String,
+        body: Req,
+        token: String? = nil,
+        hwid: String? = nil
+    ) async -> Result<Res, APIServiceError> {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token, !token.isEmpty {
+            applyAuthHeaders(to: &request, token: token, hwid: hwid ?? "")
+        } else {
+            request.timeoutInterval = APIService.requestTimeout
+        }
+        do {
+            request.httpBody = try JSONEncoder().encode(body)
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if token != nil, http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            return .success(try parseJSON(Res.self, from: data))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    private func applyAuthHeaders(to request: inout URLRequest, token: String, hwid: String) {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !hwid.isEmpty {
+            request.setValue(hwid, forHTTPHeaderField: "X-HWID")
+        }
         request.timeoutInterval = APIService.requestTimeout
+    }
+
+    private func notifyUnauthorized(_ message: String?) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: APIService.sessionUnauthorizedNotification,
+                object: message
+            )
+        }
+    }
+
+    private func notifyUserProfileUpdated(_ user: UserProfile) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: APIService.userProfileUpdatedNotification,
+                object: user
+            )
+        }
     }
 
     // MARK: - Multipart builder (nhẹ, dùng cho 1-2 file nhỏ)
@@ -552,13 +651,113 @@ struct AnyCodable: Codable, Equatable {
     var nestedString: String? { value as? String }
 }
 
-struct VerifyResponse {
-    let status: Int
-    let expiresAt: Date?
-    let dailyQuota: Int?
-    let usedToday: Int?
-    let remaining: Int?
-    let error: String?
+struct AuthCredentialsRequest: Encodable, Equatable, Sendable {
+    let username: String
+    let password: String
+    let udid: String
+}
+
+struct RedeemCodeRequest: Encodable, Equatable, Sendable {
+    let code: String
+}
+
+struct UserProfile: Codable, Equatable, Sendable {
+    let id: Int
+    let username: String
+    let expiresAt: Int?
+    let maxUses: Int
+    let usedCount: Int
+    let remainingUses: Int
+    let hasActivePlan: Bool
+    let dailyUsed: Int?
+    let dailyCap: Int?
+    let hwid: String?
+    let isBanned: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, username, hwid
+        case expiresAt = "expires_at"
+        case maxUses = "max_uses"
+        case usedCount = "used_count"
+        case remainingUses = "remaining_uses"
+        case hasActivePlan = "has_active_plan"
+        case dailyUsed = "daily_used"
+        case dailyCap = "daily_cap"
+        case isBanned = "is_banned"
+    }
+
+    var expiresDate: Date? {
+        guard let expiresAt else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(expiresAt))
+    }
+
+    var isUnlimited: Bool {
+        hasActivePlan && (maxUses == -1 || remainingUses == -1)
+    }
+}
+
+struct AuthSessionResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let message: String?
+    let token: String
+    let user: UserProfile
+}
+
+struct UserMeResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let user: UserProfile
+}
+
+struct RedeemCodeResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let message: String?
+    let code: String?
+    let addedDays: Int?
+    let addedUses: Int?
+    let user: UserProfile
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, message, code, user
+        case addedDays = "added_days"
+        case addedUses = "added_uses"
+    }
+}
+
+struct OverwritePlanRequest: Encodable, Equatable, Sendable {
+    let sourcePaths: [String]
+    let targetPaths: [String]
+    let targetBundleId: String?
+    let targetSubfolder: String?
+    let sourceSizes: [String: Int]?
+
+    private enum CodingKeys: String, CodingKey {
+        case sourcePaths = "source_paths"
+        case targetPaths = "target_paths"
+        case targetBundleId = "target_bundle_id"
+        case targetSubfolder = "target_subfolder"
+        case sourceSizes = "source_sizes"
+    }
+}
+
+struct OverwriteMapping: Decodable, Equatable, Sendable {
+    let source: String
+    let destination: String
+}
+
+struct OverwritePlanResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let mappings: [OverwriteMapping]
+    let skipped: [String]?
+    let detectedSourceVersion: String?
+    let resolvedTargetVersion: String?
+    let note: String?
+    let user: UserProfile?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, mappings, skipped, note, user
+        case detectedSourceVersion = "detected_source_version"
+        case resolvedTargetVersion = "resolved_target_version"
+    }
 }
 
 struct ConvertHeaderResponseBody: Decodable {
@@ -580,6 +779,7 @@ struct ConvertHeaderResponseBody: Decodable {
     let kdfIterations: Int?
     let wrappedContentKeyB64: String?
     let publicContentKeyB64: String?
+    let user: UserProfile?
 
     private enum CodingKeys: String, CodingKey {
         case ok
@@ -600,6 +800,7 @@ struct ConvertHeaderResponseBody: Decodable {
         case kdfIterations = "kdf_iterations"
         case wrappedContentKeyB64 = "wrapped_content_key_b64"
         case publicContentKeyB64 = "public_content_key_b64"
+        case user
     }
 }
 
@@ -622,6 +823,7 @@ struct ConvertHeaderResponse {
     let kdfIterations: Int?
     let wrappedContentKeyB64: String?
     let publicContentKeyB64: String?
+    let user: UserProfile?
 }
 
 struct MergePlanResponseBody: Decodable {
@@ -631,6 +833,7 @@ struct MergePlanResponseBody: Decodable {
     let configFiles: [String]?
     let zipBytesB64: String?
     let note: String?
+    let user: UserProfile?
 
     private enum CodingKeys: String, CodingKey {
         case ok
@@ -639,6 +842,7 @@ struct MergePlanResponseBody: Decodable {
         case configFiles = "config_files"
         case zipBytesB64 = "zip_bytes_b64"
         case note
+        case user
     }
 }
 
@@ -704,4 +908,5 @@ struct MergePlanResponse {
     let configFiles: [String]?
     let zipBytesB64: String?
     let note: String?
+    let user: UserProfile?
 }

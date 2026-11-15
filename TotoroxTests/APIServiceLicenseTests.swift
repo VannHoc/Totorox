@@ -26,47 +26,179 @@ final class APIServiceLicenseTests: XCTestCase {
         XCTAssertEqual(String(decoding: encoded, as: UTF8.self), #"{"a":null}"#)
     }
 
-    func testActivateAcceptsNullDailyCap() async {
+    func testRegisterAndLoginDecodeUserProfileAndToken() async {
         let body = #"""
         {
-          "status": "activated",
-          "expires_at": 1794736390,
-          "used_count": 0,
-          "max_uses": 5,
-          "remaining_uses": 5,
-          "daily_used": 0,
-          "daily_cap": null,
-          "daily_quota": 5,
-          "used_today": 0,
-          "remaining": 5
+          "ok": true,
+          "message": "Đăng nhập thành công",
+          "token": "tok_session_123",
+          "user": {
+            "id": 42,
+            "username": "player1",
+            "expires_at": 1794736390,
+            "max_uses": 5,
+            "used_count": 1,
+            "remaining_uses": 4,
+            "has_active_plan": true,
+            "daily_used": 1,
+            "daily_cap": null,
+            "hwid": "TEST-UDID",
+            "is_banned": false
+          }
         }
         """#
         let session = StubURLProtocol.makeSession(statusCode: 200, body: body)
         let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
 
-        let result = await api.activate(licenseKey: "TEST-KEY", hwid: "TEST-HWID")
-
-        switch result {
-        case .success(let activation):
-            XCTAssertEqual(activation.expiresAt, Date(timeIntervalSince1970: 1794736390))
+        switch await api.register(username: "player1", password: "secret123", udid: "TEST-UDID") {
+        case .success(let auth):
+            XCTAssertEqual(auth.token, "tok_session_123")
+            XCTAssertEqual(auth.user.username, "player1")
+            XCTAssertEqual(auth.user.remainingUses, 4)
+            XCTAssertNil(auth.user.dailyCap)
+            XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/auth/register")
         case .failure(let error):
-            XCTFail("Activate phải giải mã được payload có null: \(error.localizedDescription)")
+            XCTFail("Register phải giải mã được payload tài khoản: \(error.localizedDescription)")
+        }
+
+        switch await api.login(username: "player1", password: "secret123", udid: "TEST-UDID") {
+        case .success(let auth):
+            XCTAssertTrue(auth.user.hasActivePlan)
+            XCTAssertEqual(auth.user.expiresDate, Date(timeIntervalSince1970: 1794736390))
+            XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/auth/login")
+        case .failure(let error):
+            XCTFail("Login phải giải mã được payload tài khoản: \(error.localizedDescription)")
         }
     }
 
-    func testVerifyUsesExpiresAtTimestamp() async {
-        let body = #"{"status": 200, "expires_at": 1794736390, "daily_cap": null, "remaining": 5}"#
+    func testRedeemAndFetchMeIncludeBearerTokenHeader() async {
+        let redeemBody = #"""
+        {
+          "ok": true,
+          "message": "Nạp thành công",
+          "code": "TOTOROX-ABCD-1234",
+          "added_days": 30,
+          "added_uses": -1,
+          "user": {
+            "id": 42,
+            "username": "player1",
+            "expires_at": 1794736390,
+            "max_uses": -1,
+            "used_count": 0,
+            "remaining_uses": -1,
+            "has_active_plan": true,
+            "daily_used": 0,
+            "daily_cap": 300,
+            "hwid": "TEST-UDID",
+            "is_banned": false
+          }
+        }
+        """#
+        let apiRedeem = APIService(
+            baseURL: URL(string: "https://example.test")!,
+            session: StubURLProtocol.makeSession(statusCode: 200, body: redeemBody)
+        )
+        switch await apiRedeem.redeem(code: "TOTOROX-ABCD-1234", token: "tok_abc", hwid: "TEST-UDID") {
+        case .success(let resp):
+            XCTAssertEqual(resp.addedDays, 30)
+            XCTAssertTrue(resp.user.isUnlimited)
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_abc")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Device-ID"), "TEST-UDID")
+        case .failure(let error):
+            XCTFail("Redeem failed: \(error.localizedDescription)")
+        }
+
+        let meBody = #"""
+        {
+          "ok": true,
+          "user": {
+            "id": 42,
+            "username": "player1",
+            "expires_at": 1794736390,
+            "max_uses": 30,
+            "used_count": 2,
+            "remaining_uses": 28,
+            "has_active_plan": true,
+            "daily_used": 2,
+            "daily_cap": null
+          }
+        }
+        """#
+        let apiMe = APIService(
+            baseURL: URL(string: "https://example.test")!,
+            session: StubURLProtocol.makeSession(statusCode: 200, body: meBody)
+        )
+        switch await apiMe.fetchMe(token: "tok_xyz", hwid: "TEST-UDID") {
+        case .success(let me):
+            XCTAssertEqual(me.user.expiresDate, Date(timeIntervalSince1970: 1794736390))
+            XCTAssertEqual(me.user.remainingUses, 28)
+            XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/auth/me")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_xyz")
+        case .failure(let error):
+            XCTFail("fetchMe phải giải mã được payload có null: \(error.localizedDescription)")
+        }
+    }
+
+    func testOverwritePlanSendsBearerHeaderAndDecodesMappings() async {
+        let body = #"""
+        {
+          "ok": true,
+          "mappings": [
+            {"source": "1.64.1/Databin/Client/HeroSkin.bytes", "destination": "Resources/1.64.1/Databin/Client/HeroSkin.bytes"}
+          ],
+          "skipped": ["README.txt"],
+          "detected_source_version": "1.64.1",
+          "resolved_target_version": "1.64.1",
+          "note": "ok"
+        }
+        """#
         let session = StubURLProtocol.makeSession(statusCode: 200, body: body)
         let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        let req = OverwritePlanRequest(
+            sourcePaths: ["1.64.1/Databin/Client/HeroSkin.bytes", "README.txt"],
+            targetPaths: ["Resources/1.64.1/Databin/Client/"],
+            targetBundleId: "com.garena.game.kgvn",
+            targetSubfolder: "Documents",
+            sourceSizes: ["1.64.1/Databin/Client/HeroSkin.bytes": 128]
+        )
 
-        let result = await api.verify(licenseKey: "TEST-KEY", hwid: "TEST-HWID")
-
-        switch result {
-        case .success(let response):
-            XCTAssertEqual(response.expiresAt, Date(timeIntervalSince1970: 1794736390))
-            XCTAssertEqual(response.remaining, 5)
+        switch await api.overwritePlan(req, token: "tok_ovw", hwid: "TEST-UDID") {
+        case .success(let plan):
+            XCTAssertEqual(plan.mappings.count, 1)
+            XCTAssertEqual(plan.mappings.first?.destination, "Resources/1.64.1/Databin/Client/HeroSkin.bytes")
+            XCTAssertEqual(plan.resolvedTargetVersion, "1.64.1")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/overwrite-plan")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_ovw")
         case .failure(let error):
-            XCTFail("Verify phải giải mã được payload có null: \(error.localizedDescription)")
+            XCTFail("overwritePlan failed: \(error.localizedDescription)")
+        }
+    }
+
+    func testConvertHeaderSendsBearerTokenHeader() async throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("hdr_\(UUID().uuidString).zip")
+        try Data("PK\u{03}\u{04}".utf8).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let body = #"""
+        {
+          "ok": true,
+          "mode": "zip_to_3105",
+          "password_protected": false,
+          "header": {"schemaVersion": 9},
+          "toc": [],
+          "note": "ok"
+        }
+        """#
+        let session = StubURLProtocol.makeSession(statusCode: 200, body: body)
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        switch await api.convertHeader(fileURL: tmp, mode: "zip_to_3105", password: nil, token: "tok_conv", hwid: "TEST-UDID") {
+        case .success(let resp):
+            XCTAssertTrue(resp.ok)
+            XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/convert-header")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_conv")
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Device-ID"), "TEST-UDID")
+        case .failure(let error):
+            XCTFail("convertHeader failed: \(error.localizedDescription)")
         }
     }
 
@@ -122,119 +254,155 @@ final class APIServiceLicenseTests: XCTestCase {
     }
 
     @MainActor
-    func testLicenseManagerColdLaunchWithCachedSnapshotHasZeroFlashAndSurvivesOffline() async throws {
+    func testLicenseManagerColdLaunchWithCachedSessionSurvivesOfflineAndEvictsOn401() async throws {
         let suiteName = "LicenseManagerTest.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        var storedKey: String? = nil
-        let session = StubURLProtocol.makeSession(
+        var storedToken: String? = nil
+        let loginSession = StubURLProtocol.makeSession(
             statusCode: 200,
-            body: #"{"status":"activated","expires_at":4102444800,"remaining":9,"daily_quota":10}"#
+            body: #"""
+            {
+              "ok": true,
+              "token": "tok_active_1",
+              "user": {
+                "id": 10,
+                "username": "tester",
+                "expires_at": 4102444800,
+                "max_uses": 30,
+                "used_count": 1,
+                "remaining_uses": 29,
+                "has_active_plan": true,
+                "daily_used": 1,
+                "daily_cap": null
+              }
+            }
+            """#
         )
-        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: loginSession)
 
         let initialManager = LicenseManager(
             api: api,
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "TEST-UDID-001" },
-            autoRefresh: false
+            autoRefresh: false,
+            observeAPINotifications: false
         )
-        XCTAssertFalse(initialManager.status.isActive)
+        XCTAssertFalse(initialManager.isAuthenticated)
 
-        await initialManager.activate("totorox-abcd-1234-ef56")
-        XCTAssertTrue(initialManager.status.isActive)
-        XCTAssertEqual(storedKey, "TOTOROX-ABCD-1234-EF56")
+        let loggedIn = await initialManager.login(username: "tester", password: "password123")
+        XCTAssertTrue(loggedIn)
+        XCTAssertTrue(initialManager.isAuthenticated)
+        XCTAssertEqual(storedToken, "tok_active_1")
+        XCTAssertEqual(initialManager.username, "tester")
+        XCTAssertEqual(initialManager.remainingUses, 29)
 
-        // Cold relaunch with transient 503 should start immediately active (no flash) and stay active on refresh error
+        // Cold relaunch with transient 503 must preserve cached session offline
         let offlineSession = StubURLProtocol.makeSession(statusCode: 503, body: #"{"error":"unavailable"}"#)
-        let offlineAPI = APIService(baseURL: URL(string: "https://example.test")!, session: offlineSession)
         let relaunched = LicenseManager(
-            api: offlineAPI,
+            api: APIService(baseURL: URL(string: "https://example.test")!, session: offlineSession),
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "TEST-UDID-001" },
-            autoRefresh: false
+            autoRefresh: false,
+            observeAPINotifications: false
         )
-        XCTAssertTrue(relaunched.status.isActive, "Phải active ngay lập tức lúc khởi động lại, không nháy màn hình nhập key")
-
+        XCTAssertTrue(relaunched.isAuthenticated)
         await relaunched.refresh()
-        XCTAssertTrue(relaunched.status.isActive, "Lỗi tạm thời 5xx/mất mạng không được đá người dùng ra màn hình nhập key")
+        XCTAssertTrue(relaunched.isAuthenticated, "Lỗi tạm thời 5xx/mất mạng không được đăng xuất người dùng")
 
-        // Server 403 rejection must deactivate, clear snapshot/key, and show rejected
-        let rejectedSession = StubURLProtocol.makeSession(statusCode: 403, body: #"{"detail":"Sai thiết bị"}"#)
-        let rejectedAPI = APIService(baseURL: URL(string: "https://example.test")!, session: rejectedSession)
-        let revokedManager = LicenseManager(
-            api: rejectedAPI,
+        // Server 401 eviction (signed in elsewhere) must clear session token and kick back to login
+        let evictedSession = StubURLProtocol.makeSession(statusCode: 401, body: #"{"detail":"Tài khoản đã đăng nhập trên thiết bị khác"}"#)
+        let evictedManager = LicenseManager(
+            api: APIService(baseURL: URL(string: "https://example.test")!, session: evictedSession),
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "TEST-UDID-001" },
-            autoRefresh: false
+            autoRefresh: false,
+            observeAPINotifications: false
         )
-        await revokedManager.refresh()
-        XCTAssertFalse(revokedManager.status.isActive)
-        XCTAssertNil(storedKey, "Key bị từ chối 403 phải bị xóa khỏi Keychain để không vượt cổng lần sau")
-        XCTAssertEqual(revokedManager.licenseKey, "")
+        await evictedManager.refresh()
+        XCTAssertFalse(evictedManager.isAuthenticated)
+        XCTAssertNil(storedToken, "Token bị đá phiên (401) phải bị xóa khỏi Keychain")
+        XCTAssertEqual(evictedManager.authToken, "")
     }
 
     @MainActor
-    func testLicenseManagerRequiresValidSnapshotAndPurgesOrphanKeychainOnFreshInstall() async throws {
+    func testLicenseManagerFreshInstallPurgesOrphanTokenAndDeviceSwitchRequiresReauth() async throws {
         let suiteName = "LicenseManagerFreshTest.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        var storedKey: String? = "TOTOROX-ORPHAN-1234"
-        let session = StubURLProtocol.makeSession(statusCode: 503, body: #"{"error":"offline"}"#)
-        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        var storedToken: String? = "orphan_token_999"
+        let offlineSession = StubURLProtocol.makeSession(statusCode: 503, body: #"{"error":"offline"}"#)
+        let offlineAPI = APIService(baseURL: URL(string: "https://example.test")!, session: offlineSession)
 
-        // Simulates fresh install (UserDefaults wiped) while Keychain still retained old key
+        // Simulates fresh install (UserDefaults wiped) while Keychain still retained old token
         let freshInstall = LicenseManager(
-            api: api,
+            api: offlineAPI,
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "NEW-UDID-999" },
             autoRefresh: false,
-            clearOrphanedKeyOnFreshDefaults: true
+            clearOrphanedKeyOnFreshDefaults: true,
+            observeAPINotifications: false
         )
-        XCTAssertFalse(freshInstall.status.isActive, "Cài mới khi UserDefaults trống phải hiện ActivationView")
-        XCTAssertNil(storedKey, "Phải xóa key mồ côi còn sót trong Keychain khi cài mới")
+        XCTAssertFalse(freshInstall.isAuthenticated)
+        XCTAssertNil(storedToken, "Phải xóa token mồ côi còn sót trong Keychain khi cài mới")
 
-        // Also ensure changing UDID invalidates an old cached snapshot for immediate entry
-        let activateSession = StubURLProtocol.makeSession(
+        // Login succeeds on device A, switching to device B must invalidate cached snapshot
+        let okSession = StubURLProtocol.makeSession(
             statusCode: 200,
-            body: #"{"status":"activated","expires_at":4102444800,"remaining":5,"daily_quota":5}"#
+            body: #"""
+            {
+              "ok": true,
+              "token": "tok_dev_a",
+              "user": {
+                "id": 11,
+                "username": "tester",
+                "expires_at": 4102444800,
+                "max_uses": 5,
+                "used_count": 0,
+                "remaining_uses": 5,
+                "has_active_plan": true
+              }
+            }
+            """#
         )
         let activeManager = LicenseManager(
-            api: APIService(baseURL: URL(string: "https://example.test")!, session: activateSession),
+            api: APIService(baseURL: URL(string: "https://example.test")!, session: okSession),
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "OLD-UUID-111" },
-            autoRefresh: false
+            autoRefresh: false,
+            observeAPINotifications: false
         )
-        await activeManager.activate("TOTOROX-VALID-0001")
-        XCTAssertTrue(activeManager.status.isActive)
+        _ = await activeManager.login(username: "tester", password: "password123")
+        XCTAssertTrue(activeManager.isAuthenticated)
 
         let changedDeviceManager = LicenseManager(
-            api: api,
+            api: offlineAPI,
             defaults: defaults,
-            keyReader: { storedKey },
-            keyWriter: { storedKey = $0 },
-            keyRemover: { storedKey = nil },
+            keyReader: { storedToken },
+            keyWriter: { storedToken = $0 },
+            keyRemover: { storedToken = nil },
             deviceIdentifierProvider: { "NEW-UDID-222" },
-            autoRefresh: false
+            autoRefresh: false,
+            observeAPINotifications: false
         )
-        XCTAssertFalse(changedDeviceManager.status.isActive, "Đổi từ UUID cũ sang UDID mới không được vào thẳng không cần xác minh")
+        XCTAssertFalse(changedDeviceManager.isAuthenticated, "Đổi từ UUID cũ sang UDID mới không được vào thẳng không cần xác minh")
     }
 }
 
@@ -248,6 +416,20 @@ private final class StubURLProtocol: URLProtocol {
 
     private static let lock = NSLock()
     private static var _handler: ((URLRequest) -> Stub)?
+    private static var _lastRequest: URLRequest?
+
+    static var lastRequest: URLRequest? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _lastRequest
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _lastRequest = newValue
+        }
+    }
 
     static var handler: ((URLRequest) -> Stub)? {
         get {
@@ -263,6 +445,7 @@ private final class StubURLProtocol: URLProtocol {
     }
 
     static func makeSession(statusCode: Int, body: String) -> URLSession {
+        lastRequest = nil
         handler = { _ in Stub(statusCode: statusCode, body: body) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -273,6 +456,7 @@ private final class StubURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        Self.lastRequest = request
         guard let stub = Self.handler?(request) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
