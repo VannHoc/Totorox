@@ -429,8 +429,10 @@
 "merge.list.title" = "Mod Archives (.zip)";
 "merge.list.file_count" = "%lld files";
 "merge.list.empty_hint" = "Select 2 or more hero .zip mod packs to merge into one complete archive.";
+"merge.list.multi_hint" = "Tip: In Files, tap ••• → Select to pick multiple files at once, or tap Add multiple times.";
 "merge.button.add_first" = "Select .zip Mod Files";
 "merge.button.add_more" = "Add More .zip Mod Files";
+"merge.button.importing" = "Loading mod files...";
 "merge.button.clear_all" = "Clear All";
 "merge.button.merging" = "Merging mod files...";
 "merge.button.start" = "Start Merging (%lld files)";
@@ -479,6 +481,7 @@
 "merge.error.size_limit" = "Merged archive exceeds the 3.6 GB size limit.";
 "merge.error.build_config" = "Could not package configuration bundle for server upload.";
 "merge.error.open_source_mod" = "Failed to open source mod '%@' for reading.";
+"merge.error.duplicate_mod" = "Skipped '%@' because its contents are identical to an already selected file.";
 
 /* --- Tab 1: Overwrite File & Outcome Modal --- */
 "common.items_paren_count" = "(%lld items)";

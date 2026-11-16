@@ -26,6 +26,7 @@ struct MergeFileView: View {
     @State private var modContentHashes: [URL: String] = [:]
 
     @State private var showMultiZipPicker: Bool = false
+    @State private var isImportingMods: Bool = false
     @State private var isMerging: Bool = false
     @State private var progressStatus: String = ""
     @State private var progressValue: Double = 0.0
@@ -71,11 +72,6 @@ struct MergeFileView: View {
         .background(TotoroxTheme.pageBackground)
         .onAppear {
             loadPersistedHistory()
-        }
-        .sheet(isPresented: $showMultiZipPicker) {
-            MultiZipDocumentPicker { urls in
-                handlePickedModURLs(urls)
-            }
         }
         .sheet(item: $activeShareItem) { item in
             ActivityShareSheet(items: [item.url])
@@ -266,7 +262,7 @@ struct MergeFileView: View {
                                     .font(.system(size: 18))
                                     .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
                             }
-                            .disabled(isMerging)
+                            .disabled(isMerging || isImportingMods)
                         }
                         .padding(10)
                         .background(TotoroxTheme.searchBackground.opacity(0.65))
@@ -280,8 +276,15 @@ struct MergeFileView: View {
                     showMultiZipPicker = true
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "plus.circle.fill")
-                        Text(language.text(selectedMods.isEmpty ? "merge.button.add_first" : "merge.button.add_more"))
+                        if isImportingMods {
+                            ProgressView()
+                                .tint(TotoroxTheme.mintAccent)
+                                .scaleEffect(0.85)
+                            Text(language.text("merge.button.importing"))
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                            Text(language.text(selectedMods.isEmpty ? "merge.button.add_first" : "merge.button.add_more"))
+                        }
                     }
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(TotoroxTheme.mintAccent)
@@ -290,7 +293,7 @@ struct MergeFileView: View {
                     .background(TotoroxTheme.mintAccent.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .disabled(isMerging)
+                .disabled(isMerging || isImportingMods)
 
                 if !selectedMods.isEmpty {
                     Button {
@@ -307,11 +310,28 @@ struct MergeFileView: View {
                         .background(Color.red.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .disabled(isMerging)
+                    .disabled(isMerging || isImportingMods)
                 }
             }
+
+            Text(language.text("merge.list.multi_hint"))
+                .font(.system(size: 11.5))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
+        .fileImporter(
+            isPresented: $showMultiZipPicker,
+            allowedContentTypes: [UTType.zip, UTType.archive],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                handlePickedModURLs(urls)
+            case .failure(let error):
+                alertMessage = error.localizedDescription
+            }
+        }
     }
 
     // MARK: - Card 3: Nút Gộp & Tiến trình
@@ -342,7 +362,7 @@ struct MergeFileView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
 
-            let canMerge = selectedMods.count >= 2 && !isMerging
+            let canMerge = selectedMods.count >= 2 && !isMerging && !isImportingMods
             Button {
                 executeSmartMerge()
             } label: {
@@ -630,11 +650,40 @@ struct MergeFileView: View {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let magic = try? handle.read(upToCount: 4), magic.count == 4 else { return false }
-        return magic == Data([0x50, 0x4B, 0x03, 0x04])
+        return magic == Data([0x50, 0x4B, 0x03, 0x04]) || magic == Data([0x50, 0x4B, 0x05, 0x06])
+    }
+
+    private static func copyPickedFile(from url: URL, to localCopy: URL, fileManager: FileManager) -> Bool {
+        var coordError: NSError?
+        var didCopy = false
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordError) { readableURL in
+            do {
+                try fileManager.copyItem(at: readableURL, to: localCopy)
+                didCopy = true
+            } catch {
+                didCopy = false
+            }
+        }
+        if didCopy {
+            return true
+        }
+        return (try? fileManager.copyItem(at: url, to: localCopy)) != nil
+    }
+
+    private struct ScopedPickedURL: Sendable {
+        let url: URL
+        let hasAccess: Bool
     }
 
     private func handlePickedModURLs(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
         let activeLanguage = language
+        let scopedEntries: [ScopedPickedURL] = urls.map { url in
+            ScopedPickedURL(url: url, hasAccess: url.startAccessingSecurityScopedResource())
+        }
+        isImportingMods = true
+
         Task.detached(priority: .userInitiated) {
             struct PickedItem: Sendable {
                 let summary: AovModSummary
@@ -643,7 +692,13 @@ struct MergeFileView: View {
 
             var newlyInspected: [PickedItem] = []
             var rejectedDetails: [String] = []
-            for url in urls {
+            for entry in scopedEntries {
+                let url = entry.url
+                let hasSecurity = entry.hasAccess
+                defer {
+                    if hasSecurity { url.stopAccessingSecurityScopedResource() }
+                }
+
                 if url.pathExtension.lowercased() == "3105" {
                     rejectedDetails.append("• \(activeLanguage.text("merge.error.only_zip_entry", url.lastPathComponent))")
                     continue
@@ -651,10 +706,6 @@ struct MergeFileView: View {
 
                 // Copy picked file into isolated UUID workspace so duplicate filenames don't collide and security scope doesn't expire
                 let fm = FileManager.default
-                let hasSecurity = url.startAccessingSecurityScopedResource()
-                defer {
-                    if hasSecurity { url.stopAccessingSecurityScopedResource() }
-                }
                 let importDir = fm.temporaryDirectory
                     .appendingPathComponent("AovModImports", isDirectory: true)
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -662,7 +713,7 @@ struct MergeFileView: View {
                 let localCopy = importDir.appendingPathComponent(url.lastPathComponent)
                 try? fm.removeItem(at: localCopy)
 
-                if (try? fm.copyItem(at: url, to: localCopy)) != nil {
+                if Self.copyPickedFile(from: url, to: localCopy, fileManager: fm) {
                     guard Self.isZipArchiveFile(at: localCopy) else {
                         rejectedDetails.append("• \(activeLanguage.text("merge.error.not_valid_zip_entry", url.lastPathComponent))")
                         try? fm.removeItem(at: importDir)
@@ -683,7 +734,9 @@ struct MergeFileView: View {
             }
 
             await MainActor.run {
+                self.isImportingMods = false
                 var addedHashes = Set(self.modContentHashes.values)
+                var feedbackDetails = rejectedDetails
                 for item in newlyInspected {
                     let isDuplicate: Bool
                     if let h = item.sha256 {
@@ -696,6 +749,7 @@ struct MergeFileView: View {
 
                     if isDuplicate {
                         Self.cleanupStagedDirectoryIfNeeded(for: item.summary.url)
+                        feedbackDetails.append("• \(activeLanguage.text("merge.error.duplicate_mod", item.summary.fileName))")
                     } else {
                         self.selectedMods.append(item.summary)
                         if let h = item.sha256 {
@@ -704,11 +758,11 @@ struct MergeFileView: View {
                         }
                     }
                 }
-                if !rejectedDetails.isEmpty {
+                if !feedbackDetails.isEmpty {
                     self.alertMessage = self.language.text(
                         "merge.alert.invalid_mods_skipped",
-                        rejectedDetails.count,
-                        rejectedDetails.joined(separator: "\n")
+                        feedbackDetails.count,
+                        feedbackDetails.joined(separator: "\n")
                     )
                 }
             }
@@ -828,40 +882,6 @@ struct MergeFileView: View {
         guard let entries = try? fm.contentsOfDirectory(at: mergedDir, includingPropertiesForKeys: nil) else { return }
         for entry in entries where !retained.contains(entry.standardizedFileURL.path) {
             try? fm.removeItem(at: entry)
-        }
-    }
-}
-
-// MARK: - Multi-file ZIP Document Picker
-
-private struct MultiZipDocumentPicker: UIViewControllerRepresentable {
-    var onPick: ([URL]) -> Void
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: [UTType.zip, UTType.archive],
-            asCopy: true
-        )
-        picker.allowsMultipleSelection = true
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
-    }
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: ([URL]) -> Void
-
-        init(onPick: @escaping ([URL]) -> Void) {
-            self.onPick = onPick
-        }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            onPick(urls)
         }
     }
 }
