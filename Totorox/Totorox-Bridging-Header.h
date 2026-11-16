@@ -8,3 +8,4 @@
 #import "helpers/AppIconHelper.h"
 #import "helpers/DisplayIdentity.h"
 #import "helpers/DeviceUDIDHelper.h"
+#import "helpers/RuntimeIntegrity.h"

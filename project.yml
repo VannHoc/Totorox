@@ -45,6 +45,15 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/Frameworks"
+      configs:
+        Release:
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: all
+          DEAD_CODE_STRIPPING: YES
+          DEPLOYMENT_POSTPROCESSING: YES
+          SWIFT_OPTIMIZATION_LEVEL: -O
+          SWIFT_COMPILATION_MODE: wholemodule
+          ENABLE_TESTABILITY: NO
   TotoroxTests:
     type: bundle.unit-test
     platform: iOS
