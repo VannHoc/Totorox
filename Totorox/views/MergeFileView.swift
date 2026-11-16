@@ -15,9 +15,18 @@ struct MergeHistoryItem: Identifiable, Codable, Equatable {
     let timestamp: Date
 }
 
-private struct MergeShareURLItem: Identifiable {
-    let id = UUID()
-    let url: URL
+private enum ActiveMergeSheet: Identifiable {
+    case multiZipPicker
+    case share(URL)
+
+    var id: String {
+        switch self {
+        case .multiZipPicker:
+            return "multiZipPicker"
+        case .share(let url):
+            return "share:\(url.path)"
+        }
+    }
 }
 
 struct MergeFileView: View {
@@ -25,13 +34,12 @@ struct MergeFileView: View {
     @State private var selectedMods: [AovModSummary] = []
     @State private var modContentHashes: [URL: String] = [:]
 
-    @State private var showMultiZipPicker: Bool = false
+    @State private var activeSheet: ActiveMergeSheet? = nil
     @State private var isImportingMods: Bool = false
     @State private var isMerging: Bool = false
     @State private var progressStatus: String = ""
     @State private var progressValue: Double = 0.0
     @State private var mergeResult: AovMergeResult? = nil
-    @State private var activeShareItem: MergeShareURLItem? = nil
     @State private var showLogsDetail: Bool = false
     @State private var alertMessage: String? = nil
     @State private var mergeHistory: [MergeHistoryItem] = []
@@ -73,8 +81,15 @@ struct MergeFileView: View {
         .onAppear {
             loadPersistedHistory()
         }
-        .sheet(item: $activeShareItem) { item in
-            ActivityShareSheet(items: [item.url])
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .multiZipPicker:
+                MultiZipDocumentPicker { urls in
+                    handlePickedModURLs(urls)
+                }
+            case .share(let url):
+                ActivityShareSheet(items: [url])
+            }
         }
         .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
@@ -273,7 +288,7 @@ struct MergeFileView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    showMultiZipPicker = true
+                    activeSheet = .multiZipPicker
                 } label: {
                     HStack(spacing: 6) {
                         if isImportingMods {
@@ -320,18 +335,6 @@ struct MergeFileView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
-        .fileImporter(
-            isPresented: $showMultiZipPicker,
-            allowedContentTypes: [UTType.zip, UTType.archive],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                handlePickedModURLs(urls)
-            case .failure(let error):
-                alertMessage = error.localizedDescription
-            }
-        }
     }
 
     // MARK: - Card 3: Nút Gộp & Tiến trình
@@ -471,7 +474,7 @@ struct MergeFileView: View {
 
                 // Nút Lưu / Chia sẻ file .zip
                 Button {
-                    activeShareItem = MergeShareURLItem(url: result.outputZipURL)
+                    activeSheet = .share(result.outputZipURL)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.and.arrow.up")
@@ -565,7 +568,7 @@ struct MergeFileView: View {
                             Button {
                                 let target = URL(fileURLWithPath: item.targetPath)
                                 if FileManager.default.fileExists(atPath: target.path) {
-                                    activeShareItem = MergeShareURLItem(url: target)
+                                    activeSheet = .share(target)
                                 } else {
                                     loadPersistedHistory()
                                 }
@@ -654,6 +657,9 @@ struct MergeFileView: View {
     }
 
     private static func copyPickedFile(from url: URL, to localCopy: URL, fileManager: FileManager) -> Bool {
+        if (try? fileManager.copyItem(at: url, to: localCopy)) != nil {
+            return true
+        }
         var coordError: NSError?
         var didCopy = false
         let coordinator = NSFileCoordinator()
@@ -665,10 +671,7 @@ struct MergeFileView: View {
                 didCopy = false
             }
         }
-        if didCopy {
-            return true
-        }
-        return (try? fileManager.copyItem(at: url, to: localCopy)) != nil
+        return didCopy
     }
 
     private struct ScopedPickedURL: Sendable {
@@ -882,6 +885,40 @@ struct MergeFileView: View {
         guard let entries = try? fm.contentsOfDirectory(at: mergedDir, includingPropertiesForKeys: nil) else { return }
         for entry in entries where !retained.contains(entry.standardizedFileURL.path) {
             try? fm.removeItem(at: entry)
+        }
+    }
+}
+
+// MARK: - Multi-file ZIP Document Picker
+
+private struct MultiZipDocumentPicker: UIViewControllerRepresentable {
+    var onPick: ([URL]) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [UTType.zip, UTType.archive],
+            asCopy: true
+        )
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+
+        init(onPick: @escaping ([URL]) -> Void) {
+            self.onPick = onPick
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onPick(urls)
         }
     }
 }
