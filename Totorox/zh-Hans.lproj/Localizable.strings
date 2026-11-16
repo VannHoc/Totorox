@@ -429,8 +429,10 @@
 "merge.list.title" = "Mod 压缩包列表 (.zip)";
 "merge.list.file_count" = "%lld 个文件";
 "merge.list.empty_hint" = "请选择至少 2 个英雄 .zip Mod 文件以合并为一个完整包。";
+"merge.list.multi_hint" = "提示：在文件选择器中点击 ••• → 选择可一次多选文件，或分次点击添加。";
 "merge.button.add_first" = "选择 .zip Mod 文件";
 "merge.button.add_more" = "添加更多 .zip Mod 文件";
+"merge.button.importing" = "正在导入 Mod 文件...";
 "merge.button.clear_all" = "清空全部";
 "merge.button.merging" = "正在合并 Mod 文件...";
 "merge.button.start" = "开始合并 (%lld 个文件)";
@@ -479,6 +481,7 @@
 "merge.error.size_limit" = "合并后的文件包超出 3.6 GB 大小限制。";
 "merge.error.build_config" = "无法打包待上传的配置数据包。";
 "merge.error.open_source_mod" = "无法打开源 Mod 文件“%@”进行读取。";
+"merge.error.duplicate_mod" = "已跳过“%@”，其内容与已选文件完全相同。";
 
 /* --- Tab 1: Overwrite File & Outcome Modal --- */
 "common.items_paren_count" = "(%lld 项)";

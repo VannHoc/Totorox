@@ -429,8 +429,10 @@
 "merge.list.title" = "Danh sách tệp Mod (.zip)";
 "merge.list.file_count" = "%lld tệp";
 "merge.list.empty_hint" = "Chọn từ 2 tệp mod (.zip) trở lên để bắt đầu gộp.";
+"merge.list.multi_hint" = "Mẹo: Trong trình chọn tệp, bấm ••• → Chọn để chọn nhiều tệp cùng lúc, hoặc bấm Thêm nhiều lần.";
 "merge.button.add_first" = "Thêm tệp mod (.zip)";
 "merge.button.add_more" = "Thêm tệp mod (.zip)";
+"merge.button.importing" = "Đang nạp tệp mod...";
 "merge.button.clear_all" = "Xóa hết";
 "merge.button.merging" = "Đang gộp tệp mod...";
 "merge.button.start" = "Bắt đầu gộp (%lld tệp)";
@@ -479,6 +481,7 @@
 "merge.error.size_limit" = "Dung lượng gộp dự kiến vượt quá giới hạn 3.6 GB.";
 "merge.error.build_config" = "Không thể đóng gói dữ liệu cấu hình gửi lên máy chủ.";
 "merge.error.open_source_mod" = "Không thể mở tệp nguồn mod '%@' để đọc dữ liệu.";
+"merge.error.duplicate_mod" = "Đã bỏ qua '%@' vì trùng hoàn toàn nội dung với tệp đã chọn.";
 
 /* --- Tab 1: Overwrite File & Outcome Modal --- */
 "common.items_paren_count" = "(%lld mục)";
