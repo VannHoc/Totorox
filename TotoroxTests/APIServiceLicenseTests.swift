@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import Totorox
 
@@ -57,6 +58,9 @@ final class APIServiceLicenseTests: XCTestCase {
             XCTAssertEqual(auth.user.remainingUses, 4)
             XCTAssertNil(auth.user.dailyCap)
             XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/v1/auth/register")
+            XCTAssertNotNil(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Timestamp"))
+            XCTAssertNotNil(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Nonce"))
+            XCTAssertEqual(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Signature")?.count, 64)
         case .failure(let error):
             XCTFail("Register phải giải mã được payload tài khoản: \(error.localizedDescription)")
         }
@@ -517,6 +521,81 @@ final class APIServiceLicenseTests: XCTestCase {
         XCTAssertEqual(manager.deviceIdentifier, "00008110-001C12345678901E")
         XCTAssertTrue(manager.isDeviceVerified)
         XCTAssertTrue(manager.hasActivePackage)
+    }
+
+    func testHMACSecretAndSignatureMatchBackendReferenceVector() async throws {
+        XCTAssertEqual(
+            String(decoding: APIService.hmacSecretData(), as: UTF8.self),
+            "d0b244628b4dc78ed0fd7097f188cb1dca7c5b8644ca84d2"
+        )
+        let refSig = APIService.computeHMACSignature(
+            method: "POST",
+            path: "/api/v1/auth/login",
+            timestamp: "1794835200",
+            nonce: "test-nonce-1234",
+            hwid: "TEST-UDID",
+            authorization: "Bearer tok_123"
+        )
+        XCTAssertEqual(refSig, "ffc879d62726b79bde3c26820a4d7be1e3f113e30d8b79d94849bed928bccf0f")
+
+        let session = StubURLProtocol.makeSession(
+            statusCode: 200,
+            body: #"{"ok":true,"user":{"id":1,"username":"u","expires_at":null,"max_uses":0,"used_count":0,"remaining_uses":0,"has_active_plan":false}}"#
+        )
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        _ = await api.fetchMe(token: "tok_xyz", hwid: "TEST-UDID")
+        let req = try XCTUnwrap(StubURLProtocol.lastRequest)
+        let ts = try XCTUnwrap(req.value(forHTTPHeaderField: "X-Timestamp"))
+        let nonce = try XCTUnwrap(req.value(forHTTPHeaderField: "X-Nonce"))
+        let sig = try XCTUnwrap(req.value(forHTTPHeaderField: "X-Signature"))
+        let expected = APIService.computeHMACSignature(
+            method: "GET",
+            path: "/api/v1/auth/me",
+            timestamp: ts,
+            nonce: nonce,
+            hwid: "TEST-UDID",
+            authorization: "Bearer tok_xyz"
+        )
+        XCTAssertEqual(sig, expected)
+    }
+
+    func testSSLPinningMatchesOfficialRootsAndRejectsMITM() throws {
+        XCTAssertTrue(SSLPinningDelegate.matchesPinnedHash(["leaf_unpinned", "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M="]))
+        XCTAssertTrue(SSLPinningDelegate.matchesPinnedHash(["s/tdAOmUzd8syaTuqfgGvFcn6DzA5Cmb+Vby1ST+U3Y="]))
+        XCTAssertTrue(SSLPinningDelegate.matchesPinnedHash(["mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c="]))
+        XCTAssertFalse(SSLPinningDelegate.matchesPinnedHash(["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]))
+        XCTAssertFalse(SSLPinningDelegate.matchesPinnedHash([]))
+
+        let p256Raw = Data(repeating: 0x04, count: 65)
+        let p256SPKI = try XCTUnwrap(
+            SSLPinningDelegate.spkiData(
+                fromRawKey: p256Raw,
+                keyType: kSecAttrKeyTypeECSECPrimeRandom as String,
+                keySizeBits: 256
+            )
+        )
+        XCTAssertEqual(p256SPKI.count, 26 + 65)
+
+        let p384Raw = Data(repeating: 0x04, count: 97)
+        let p384SPKI = try XCTUnwrap(
+            SSLPinningDelegate.spkiData(
+                fromRawKey: p384Raw,
+                keyType: kSecAttrKeyTypeECSECPrimeRandom as String,
+                keySizeBits: 384
+            )
+        )
+        XCTAssertEqual(p384SPKI.count, 23 + 97)
+
+        let rsaRaw = Data(repeating: 0x30, count: 270)
+        let rsaSPKI = try XCTUnwrap(
+            SSLPinningDelegate.spkiData(
+                fromRawKey: rsaRaw,
+                keyType: kSecAttrKeyTypeRSA as String,
+                keySizeBits: 2048
+            )
+        )
+        XCTAssertEqual(rsaSPKI.prefix(2), Data([0x30, 0x82]))
+        XCTAssertTrue(rsaSPKI.suffix(270) == rsaRaw)
     }
 }
 
