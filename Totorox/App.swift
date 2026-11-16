@@ -11,6 +11,9 @@ struct TotoroxApp: App {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init() {
+        #if !DEBUG
+        totorox_harden_runtime()
+        #endif
         setupLogCapture()
         log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
         AppState.runEarlyPrivilegeInit()
