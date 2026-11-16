@@ -41,7 +41,7 @@ struct ActivationView: View {
 
                 authCard
 
-                telegramSupportCard
+                supportLinksSection
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 32)
@@ -202,30 +202,60 @@ struct ActivationView: View {
         return userOK && passOK
     }
 
-    // MARK: - Support Card
+    // MARK: - Support Cards
 
-    private var telegramSupportCard: some View {
-        Link(destination: URL(string: "https://t.me/milototoro")!) {
+    private var supportLinksSection: some View {
+        VStack(spacing: 12) {
+            supportLinkCard(
+                url: URL(string: "https://totorox.io.vn")!,
+                icon: "globe",
+                accentColor: TotoroxTheme.mintAccent,
+                title: language.text("activation.web_store_title"),
+                subtitle: language.text("activation.web_store_subtitle")
+            )
+
+            supportLinkCard(
+                url: URL(string: "https://t.me/milototoro")!,
+                icon: "paperplane.fill",
+                accentColor: .blue,
+                title: language.text("activation.buy_support_title"),
+                subtitle: language.text("activation.buy_support_subtitle")
+            )
+        }
+    }
+
+    private func supportLinkCard(
+        url: URL,
+        icon: String,
+        accentColor: Color,
+        title: String,
+        subtitle: String
+    ) -> some View {
+        Link(destination: url) {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.blue.opacity(0.14))
+                        .fill(accentColor.opacity(0.14))
                         .frame(width: 40, height: 40)
-                    Image(systemName: "paperplane.fill")
+                    Image(systemName: icon)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.blue)
+                        .foregroundStyle(accentColor)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(language.text("activation.buy_support_title"))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
-                    Text(language.text("activation.buy_support_subtitle"))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(TotoroxTheme.textSecondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 13, weight: .semibold))

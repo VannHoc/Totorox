@@ -287,8 +287,10 @@
 "account.logout_button" = "Đăng xuất";
 "account.logout_confirm_title" = "Đăng xuất tài khoản?";
 "account.logout_confirm_msg" = "Phiên đăng nhập hiện tại sẽ bị xóa khỏi thiết bị này.";
-"activation.buy_support_title" = "Kênh Telegram mua mã & hỗ trợ";
-"activation.buy_support_subtitle" = "Liên hệ để mua mã kích hoạt (Redeem Code) & bảo hành";
+"activation.web_store_title" = "Web mua key";
+"activation.web_store_subtitle" = "Mua gói tự động nhanh chóng 24/7";
+"activation.buy_support_title" = "Telegram hỗ trợ";
+"activation.buy_support_subtitle" = "Liên hệ mua key nếu web lỗi hoặc cần hỗ trợ";
 "server.config_title" = "Cấu hình Máy chủ";
 "search.default_placeholder" = "Tìm kiếm...";
 "settings.founder_subtitle" = "Phạm Văn Học";
