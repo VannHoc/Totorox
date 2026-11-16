@@ -310,7 +310,7 @@
 "auth.register_button" = "Create Account";
 "auth.error.missing_credentials" = "Please enter both username and password.";
 "auth.error.username_short" = "Username must be at least 3 characters.";
-"auth.error.password_short" = "Password must be at least 4 characters.";
+"auth.error.password_short" = "Password must be at least 6 characters.";
 "auth.error.password_mismatch" = "Passwords do not match.";
 "redeem.nav_title" = "Redeem Code";
 "redeem.title" = "Redeem Activation Code";
