@@ -1485,7 +1485,7 @@ struct OverwriteFileView: View {
                             guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
                                 throw ZIPArchiveExtractorError.expandedTooLarge
                             }
-                            let zipData = try Data(contentsOf: patchURL)
+                            let zipData = try Data(contentsOf: patchURL, options: .alwaysMapped)
                             let entries = try PatchZipConverter.shared.parseZipArchive(zipData, password: currentPassword)
                             for (relPath, fileData) in entries {
                                 let normalized = relPath.replacingOccurrences(of: "\\", with: "/")

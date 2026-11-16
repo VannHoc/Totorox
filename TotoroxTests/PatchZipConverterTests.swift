@@ -591,6 +591,54 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertTrue(summary.isPasswordProtected)
     }
 
+    func testInspectLargeOver64MBPatchPackageReadsBplistHeaderWithoutServer() async throws {
+        // Mô phỏng gói `.3105` > 64 MB (như gói skin 130-300 MB): offset table nằm ở cuối file,
+        // inspect(patchURL:) vẫn phải đọc được metadata mà không bị cắt ở slice 4 MB đầu.
+        let packageID = UUID()
+        let contentKey = Data(repeating: 0x22, count: 32)
+        let project = PatchProject(
+            id: packageID,
+            name: "LargeSkinPack",
+            author: "Tester",
+            isPrivate: false,
+            bundleIdentifiers: ["com.garena.game.kgvn"],
+            rules: [
+                PatchRule(
+                    bundleID: "com.garena.game.kgvn",
+                    relativePath: "Documents/Resources/1.64.1/LargeBlob.bytes",
+                    replacementFilename: "LargeBlob.bytes",
+                    replacementData: Data(repeating: 0x5A, count: 66 * 1024 * 1024)
+                )
+            ]
+        )
+        let payloadPlist = try PatchZipConverter.native3105PayloadPlist(project: project, packageID: packageID)
+        let payloadAAD = Data("3105PATCH/v9/payload/\(packageID.uuidString)".utf8)
+        let sealedPayload = try XCTUnwrap(AES.GCM.seal(payloadPlist, using: SymmetricKey(data: contentKey), authenticating: payloadAAD).combined)
+        let wrappedKey = try XCTUnwrap(AES.GCM.seal(Data(repeating: 0x33, count: 32), using: SymmetricKey(size: .bits256)).combined)
+        let envelope: [String: Any] = [
+            "schemaVersion": 9,
+            "keyAADVersion": 9,
+            "packageID": packageID.uuidString,
+            "isPasswordProtected": false,
+            "keyFingerprint": Data(SHA256.hash(data: contentKey)),
+            "publicContentKey": contentKey,
+            "wrappedContentKey": wrappedKey,
+            "encryptedPayload": sealedPayload
+        ]
+        let plist = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+        let patchURL = tempDirectory.appendingPathComponent("large_over_64mb.3105")
+        try (Data("3105PATCH\0".utf8) + plist).write(to: patchURL)
+
+        let summary = try await converter.inspect(patchURL: patchURL)
+        XCTAssertEqual(summary.packageID, packageID)
+        XCTAssertEqual(summary.schemaVersion, 9)
+        XCTAssertFalse(summary.isPasswordProtected)
+
+        let metadata = converter.inspectProjectMetadataLocally(patchURL: patchURL)
+        XCTAssertEqual(metadata?.name, "LargeSkinPack")
+        XCTAssertEqual(metadata?.rules.count, 1)
+    }
+
     func testBuildPatchProject_3105FolderStructureWithApplicationAppGroupAndSettings() throws {
         let entries: [(path: String, data: Data)] = [
             ("ABC/settings.json", Data("{}".utf8)),
