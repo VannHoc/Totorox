@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import Security
 
 enum APIServiceError: Error, Equatable, LocalizedError {
     case invalidConfiguration
@@ -79,12 +81,15 @@ final class APIService {
     /// Timeout cho `merge-plan` — server phải chạy toàn bộ pipeline UnityFS/MSES/HeroSkin.
     static let mergeTimeout: TimeInterval = 300
 
-    /// Session mặc định: timeout theo từng request, không chặn cứng ở 60 giây.
+    /// Delegate kiểm tra SSL Pinning (SPKI SHA-256) cho `api.totorox.io.vn`.
+    private static let pinningDelegate = SSLPinningDelegate()
+
+    /// Session mặc định: timeout theo từng request, bật SSL Pinning cho `api.totorox.io.vn`.
     static let defaultSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = requestTimeout
         configuration.timeoutIntervalForResource = mergeTimeout
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: pinningDelegate, delegateQueue: nil)
     }()
 
     private let session: URLSession
@@ -181,6 +186,7 @@ final class APIService {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/auth/logout"))
         request.httpMethod = "POST"
         applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
         _ = try? await session.data(for: request)
     }
 
@@ -209,6 +215,7 @@ final class APIService {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/auth/me"))
         request.httpMethod = "GET"
         applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -290,6 +297,7 @@ final class APIService {
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            signRequest(&request)
 
             let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
@@ -369,6 +377,7 @@ final class APIService {
             )
             applyAuthHeaders(to: &request, token: token, hwid: hwid)
             request.timeoutInterval = APIService.mergeTimeout
+            signRequest(&request)
 
             let (data, response) = try await upload(request, body: body)
             guard let http = response as? HTTPURLResponse else {
@@ -416,6 +425,7 @@ final class APIService {
         } else {
             request.timeoutInterval = APIService.requestTimeout
         }
+        signRequest(&request)
         do {
             request.httpBody = try JSONEncoder().encode(body)
             let (data, response) = try await session.data(for: request)
@@ -441,6 +451,76 @@ final class APIService {
             request.setValue(hwid, forHTTPHeaderField: "X-HWID")
         }
         request.timeoutInterval = APIService.requestTimeout
+    }
+
+    // MARK: - HMAC-SHA256 Request Signing
+
+    private static let hmacMaskBytes: [UInt8] = [
+        0x46, 0xdf, 0xaf, 0x0b, 0x94, 0xcc, 0x07, 0x07, 0x9b, 0x7e, 0x5e, 0x77,
+        0x0a, 0x65, 0xff, 0x05, 0xf0, 0x4d, 0x5a, 0x57, 0xbd, 0xe0, 0x86, 0x2c,
+        0xfe, 0x4e, 0x3f, 0x19, 0x45, 0x4f, 0x5c, 0x5a, 0xb1, 0x02, 0x89, 0x0e,
+        0x05, 0x1e, 0x54, 0xad, 0xa0, 0xc3, 0x4c, 0x77, 0xb2, 0x4b, 0x16, 0x27
+    ]
+
+    private static let hmacXordBytes: [UInt8] = [
+        0x22, 0xef, 0xcd, 0x39, 0xa0, 0xf8, 0x31, 0x35, 0xa3, 0x1c, 0x6a, 0x13,
+        0x69, 0x52, 0xc7, 0x60, 0x94, 0x7d, 0x3c, 0x33, 0x8a, 0xd0, 0xbf, 0x1b,
+        0x98, 0x7f, 0x07, 0x21, 0x26, 0x2d, 0x6d, 0x3e, 0xd2, 0x63, 0xbe, 0x6d,
+        0x30, 0x7c, 0x6c, 0x9b, 0x94, 0xf7, 0x2f, 0x16, 0x8a, 0x7f, 0x72, 0x15
+    ]
+
+    static func hmacSecretData() -> Data {
+        var out = [UInt8]()
+        out.reserveCapacity(hmacMaskBytes.count)
+        for (m, x) in zip(hmacMaskBytes, hmacXordBytes) {
+            out.append(m ^ x)
+        }
+        return Data(out)
+    }
+
+    static func computeHMACSignature(
+        method: String,
+        path: String,
+        timestamp: String,
+        nonce: String,
+        hwid: String = "",
+        authorization: String = ""
+    ) -> String {
+        let canonical = [
+            method.uppercased(),
+            path,
+            timestamp.trimmingCharacters(in: .whitespacesAndNewlines),
+            nonce.trimmingCharacters(in: .whitespacesAndNewlines),
+            hwid.trimmingCharacters(in: .whitespacesAndNewlines),
+            authorization.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].joined(separator: "\n")
+        let key = SymmetricKey(data: hmacSecretData())
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(canonical.utf8), using: key)
+        return mac.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func signRequest(
+        _ request: inout URLRequest,
+        now: Date = Date(),
+        nonce: String = UUID().uuidString.lowercased()
+    ) {
+        let method = (request.httpMethod ?? "GET").uppercased()
+        let rawPath = request.url?.path ?? ""
+        let path = rawPath.isEmpty ? "/" : rawPath
+        let timestamp = String(Int(now.timeIntervalSince1970))
+        let hwid = request.value(forHTTPHeaderField: "X-HWID") ?? ""
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let signature = Self.computeHMACSignature(
+            method: method,
+            path: path,
+            timestamp: timestamp,
+            nonce: nonce,
+            hwid: hwid,
+            authorization: auth
+        )
+        request.setValue(timestamp, forHTTPHeaderField: "X-Timestamp")
+        request.setValue(nonce, forHTTPHeaderField: "X-Nonce")
+        request.setValue(signature, forHTTPHeaderField: "X-Signature")
     }
 
     private func notifyUnauthorized(_ message: String?) {
@@ -563,6 +643,166 @@ final class APIService {
             return message
         }
         return payload["error"] as? String
+    }
+}
+
+// MARK: - SSL Pinning (SPKI SHA-256 cho api.totorox.io.vn qua Cloudflare)
+
+final class SSLPinningDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+    static let pinnedHost = "api.totorox.io.vn"
+
+    /// Danh sách SPKI SHA-256 (Base64) của Intermediate/Root CA được phép cho `api.totorox.io.vn`
+    /// (Let's Encrypt / ISRG, Google Trust Services, SSL.com, DigiCert — hỗ trợ Cloudflare rotation,
+    /// đồng thời chặn các MITM Root CA tự ký của Proxyman / Charles / mitmproxy).
+    static let pinnedSPKIHashes: Set<String> = [
+        // Let's Encrypt / ISRG
+        "s/tdAOmUzd8syaTuqfgGvFcn6DzA5Cmb+Vby1ST+U3Y=", // Let's Encrypt YE2
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=", // ISRG Root YE
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=", // ISRG Root X2
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=", // ISRG Root X1
+        // Google Trust Services (Cloudflare Universal SSL)
+        "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=", // GTS Root R1
+        "QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=", // GTS Root R3
+        "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=", // GTS Root R4
+        // SSL.com & DigiCert (Cloudflare backup CAs)
+        "K89VOmb1cJAN3TK6bf4ezAbJGC1mLcG2Dh97dnwr3VQ=", // SSL.com TLS RSA Root CA 2022
+        "G/ANXI8TwJTdF+AFBM8IiIUPEv0Gf6H5LA/b9guG4yE=", // SSL.com TLS ECC Root CA 2022
+        "0cRTd+vc1hjNFlHcLgLCHXUeWqn80bNDH/bs9qMTSPo=", // SSL.com Root Certification Authority RSA
+        "oyD01TTXvpfBro3QSZc1vIlcMjrdLTiL/M9mLCPX+Zo=", // SSL.com Root Certification Authority ECC
+        "i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl/s2uC/CY=", // DigiCert Global Root G2
+        "uUwZgwDOxcBXrQcntwu+kYFpkiVkOaezL0WYEZ3anJc="  // DigiCert Global Root G3
+    ]
+
+    private static let ecP256SPKIHeader: [UInt8] = [
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+        0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00
+    ]
+
+    private static let ecP384SPKIHeader: [UInt8] = [
+        0x30, 0x76, 0x30, 0x10, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+        0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22, 0x03, 0x62, 0x00
+    ]
+
+    private static let rsaAlgorithmIdentifier: [UInt8] = [
+        0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05, 0x00
+    ]
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        handleChallenge(challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        handleChallenge(challenge, completionHandler: completionHandler)
+    }
+
+    private func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let host = challenge.protectionSpace.host.lowercased()
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        guard host == Self.pinnedHost else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        let policy = SecPolicyCreateSSL(true, host as CFString)
+        SecTrustSetPolicies(serverTrust, policy)
+
+        var trustError: CFError?
+        guard SecTrustEvaluateWithError(serverTrust, &trustError) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              !chain.isEmpty else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        let chainHashes = chain.compactMap(Self.spkiSHA256Base64(for:))
+        guard Self.matchesPinnedHash(chainHashes) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+    }
+
+    static func matchesPinnedHash(_ chainHashes: [String]) -> Bool {
+        chainHashes.contains { pinnedSPKIHashes.contains($0) }
+    }
+
+    static func spkiSHA256Base64(for certificate: SecCertificate) -> String? {
+        guard let publicKey = SecCertificateCopyKey(certificate),
+              let attributes = SecKeyCopyAttributes(publicKey) as? [String: Any],
+              let keyType = attributes[kSecAttrKeyType as String] as? String,
+              let keySizeBits = attributes[kSecAttrKeySizeInBits as String] as? Int,
+              let rawKey = SecKeyCopyExternalRepresentation(publicKey, nil) as Data?,
+              let spki = spkiData(fromRawKey: rawKey, keyType: keyType, keySizeBits: keySizeBits) else {
+            return nil
+        }
+        let digest = SHA256.hash(data: spki)
+        return Data(digest).base64EncodedString()
+    }
+
+    static func spkiData(fromRawKey rawKey: Data, keyType: String, keySizeBits: Int) -> Data? {
+        if keyType == (kSecAttrKeyTypeECSECPrimeRandom as String) || keyType == (kSecAttrKeyTypeEC as String) {
+            if keySizeBits == 256 {
+                var data = Data(ecP256SPKIHeader)
+                data.append(rawKey)
+                return data
+            }
+            if keySizeBits == 384 {
+                var data = Data(ecP384SPKIHeader)
+                data.append(rawKey)
+                return data
+            }
+            return nil
+        }
+
+        if keyType == (kSecAttrKeyTypeRSA as String) {
+            var bitString = Data([0x03])
+            bitString.append(derLength(1 + rawKey.count))
+            bitString.append(0x00)
+            bitString.append(rawKey)
+
+            var spki = Data([0x30])
+            spki.append(derLength(rsaAlgorithmIdentifier.count + bitString.count))
+            spki.append(contentsOf: rsaAlgorithmIdentifier)
+            spki.append(bitString)
+            return spki
+        }
+
+        return nil
+    }
+
+    private static func derLength(_ length: Int) -> Data {
+        if length < 0x80 {
+            return Data([UInt8(length)])
+        }
+        var bytes: [UInt8] = []
+        var value = length
+        while value > 0 {
+            bytes.insert(UInt8(value & 0xFF), at: 0)
+            value >>= 8
+        }
+        return Data([0x80 | UInt8(bytes.count)] + bytes)
     }
 }
 
