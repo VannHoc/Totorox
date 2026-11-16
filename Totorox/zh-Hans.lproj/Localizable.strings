@@ -287,8 +287,10 @@
 "account.logout_button" = "退出登录";
 "account.logout_confirm_title" = "确认退出登录？";
 "account.logout_confirm_msg" = "当前登录会话将从此设备上清除。";
-"activation.buy_support_title" = "Telegram 购码与售后支持频道";
-"activation.buy_support_subtitle" = "联系购买激活码 (Redeem Code) 与售后服务";
+"activation.web_store_title" = "在线购卡网站";
+"activation.web_store_subtitle" = "24 小时自动购买与即时开通套餐";
+"activation.buy_support_title" = "Telegram 客服支持";
+"activation.buy_support_subtitle" = "若网页异常购卡或需要帮助请联系";
 "server.config_title" = "服务器配置";
 "search.default_placeholder" = "搜索...";
 "settings.founder_subtitle" = "Phạm Văn Học";

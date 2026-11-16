@@ -287,8 +287,10 @@
 "account.logout_button" = "Sign Out";
 "account.logout_confirm_title" = "Sign Out of Account?";
 "account.logout_confirm_msg" = "Your current session will be cleared from this device.";
-"activation.buy_support_title" = "Telegram Channel for Codes & Support";
-"activation.buy_support_subtitle" = "Contact for activation codes (Redeem Code) & warranty";
+"activation.web_store_title" = "Key Store Website";
+"activation.web_store_subtitle" = "Fast automatic 24/7 plan purchase";
+"activation.buy_support_title" = "Telegram Support";
+"activation.buy_support_subtitle" = "Contact to buy a key if the website fails or for help";
 "server.config_title" = "Server Configuration";
 "search.default_placeholder" = "Search...";
 "settings.founder_subtitle" = "Pham Van Hoc";
