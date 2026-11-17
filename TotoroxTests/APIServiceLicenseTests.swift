@@ -662,7 +662,7 @@ final class APIServiceLicenseTests: XCTestCase {
     func testMergePlanWithQueueUploadsLargeFileInChunks() async throws {
         let tempFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("chunk_test_\(UUID().uuidString).zip")
-        let fileData = Data(repeating: 0x41, count: (4 * 1024 * 1024) + 512)
+        let fileData = Data(repeating: 0x41, count: APIService.mergeChunkBytes + 512)
         try fileData.write(to: tempFile)
         defer { try? FileManager.default.removeItem(at: tempFile) }
 
