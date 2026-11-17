@@ -395,7 +395,12 @@ public final class AovModMergerEngine: @unchecked Sendable {
             }
         }
 
-        let configBundleData = try PatchZipConverter.shared.buildZipArchive(entries: configBundleEntries)
+        // Nén Deflate riêng cho gói vận chuyển `config_bundle.zip` gửi lên server
+        // (file mod thành phẩm & `.pkg.bytes` đầu ra ở Bước 6 vẫn giữ nguyên STORE method 0).
+        let configBundleData = try PatchZipConverter.shared.buildZipArchive(
+            entries: configBundleEntries,
+            compress: true
+        )
         let workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("TotoroxMerge_\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)

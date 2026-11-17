@@ -46,6 +46,29 @@ final class PatchZipConverterTests: XCTestCase {
         }
     }
 
+    func testBuildZipArchive_CompressedRoundTripShrinksAndPreservesBytes() throws {
+        let repetitiveXML = Data(String(repeating: "<Track name=\"skill_101\" eventType=\"PlayAnim\" />\n", count: 200).utf8)
+        let incompressible = Data((0..<256).map { UInt8(($0 * 73 + 19) & 0xFF) })
+        let entries: [(path: String, data: Data)] = [
+            ("mod_0/Resources/1.64.1/CommonActions/action.xml", repetitiveXML),
+            ("mod_0/Resources/1.64.1/random.bin", incompressible),
+            ("mod_0/Resources/1.64.1/empty.txt", Data())
+        ]
+        let compressedArchive = try converter.buildZipArchive(entries: entries, compress: true)
+        let storedArchive = try converter.buildZipArchive(entries: entries, compress: false)
+
+        XCTAssertLessThan(compressedArchive.count, storedArchive.count)
+        let headers = try converter.readZipArchiveHeaders(from: compressedArchive)
+        XCTAssertEqual(headers["mod_0/Resources/1.64.1/CommonActions/action.xml"]?.compressionMethod, 8)
+        XCTAssertEqual(headers["mod_0/Resources/1.64.1/empty.txt"]?.compressionMethod, 0)
+
+        let parsed = try converter.parseZipArchive(compressedArchive)
+        XCTAssertEqual(parsed.count, entries.count)
+        for entry in entries {
+            XCTAssertEqual(parsed[entry.path], entry.data)
+        }
+    }
+
     func testParseZipArchive_IsoLatin1FilenameFallback() throws {
         // Minimal STORE ZIP with an ISO-Latin-1 filename (0xE9 = 'é'); UTF-8 flag unset.
         let latinNameData = Data([0x6D, 0x6F, 0x64, 0xE9, 0x2E, 0x74, 0x78, 0x74]) // "mod\xE9.txt"
