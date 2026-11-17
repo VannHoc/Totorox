@@ -384,10 +384,10 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         // BƯỚC 3: Chọn lọc file cấu hình cần gửi lên máy chủ để chạy pipeline merge đầy đủ:
         // - Luôn gửi metadata build/version (version.txt, ResourcePackerInfoSetAll, ResourceVerificationInfoSetAll)
-        //   để server phát hiện chính xác build version cho từng mod khi so khớp xung đột.
+        //   và languageMap.txt để server phát hiện build version + chuẩn hóa watermark Totorox.
         // - Luôn gửi /Thanos/ (HeroSkin_1..4) và Lua pkg lõi (KernelLua, HeroInfoLua, StableSystems_*)
         //   cộng với .pkg.bytes khi có Thanos để server giải mã/cập nhật IFix + MD5 + STORE method=0.
-        // - Các file cấu hình còn lại (CommonActions, Databin, XML, MSES, languageMap, ...) chỉ gửi
+        // - Các file cấu hình còn lại (CommonActions, Databin, XML, MSES, ...) chỉ gửi
         //   khi có >= 2 mod chạm cùng đường dẫn với nội dung khác nhau.
         var collidingRefs: [ModHeaderRef] = []
         var detectedConflicts = 0
@@ -403,13 +403,15 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 || normalizedKey == "version.txt"
                 || normalizedKey.hasSuffix("resourcepackerinfosetall.assetbundle")
                 || normalizedKey.hasSuffix("resourceverificationinfosetall.assetbundle")
+            let isLanguageMap = normalizedKey.hasSuffix("/languagemap.txt")
+                || normalizedKey == "languagemap.txt"
             let isCorePkg = normalizedKey.hasSuffix("kernellua.pkg.bytes")
                 || normalizedKey.hasSuffix("heroinfolua.pkg.bytes")
                 || (normalizedKey.contains("stablesystems_") && normalizedKey.hasSuffix(".pkg.bytes"))
             let isThanosConfig = normalizedKey.contains("/thanos/")
             let isPkgWithThanos = hasThanosFile && normalizedKey.hasSuffix(".pkg.bytes")
 
-            if isBuildMetadata || isCorePkg || isThanosConfig || isPkgWithThanos {
+            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos {
                 if distinctMods.count >= 2 && uniqueVariants.count >= 2 {
                     detectedConflicts += 1
                 } else if isThanosConfig || isCorePkg {
