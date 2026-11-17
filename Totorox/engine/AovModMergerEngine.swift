@@ -434,17 +434,28 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         progress(AppLanguage.current.text("merge.progress.uploading_server"), 0.5)
 
-        let planResult = await APIService.shared.mergePlan(
+        let planResult = await APIService.shared.mergePlanWithQueue(
             fileURL: configBundleURL,
             configJSON: configJSON,
             token: LicenseManager.shared.authToken,
             hwid: LicenseManager.shared.deviceIdentifier
-        )
+        ) { stage in
+            switch stage {
+            case .queued(let position, _):
+                progress(AppLanguage.current.text("merge.progress.queued", position), 0.54)
+            case .processing:
+                progress(AppLanguage.current.text("merge.progress.processing"), 0.62)
+            case .downloadingResult:
+                progress(AppLanguage.current.text("merge.progress.downloading_result"), 0.70)
+            }
+        }
 
         let plan: MergePlanResponse
+        let downloadedBundleData: Data?
         switch planResult {
-        case .success(let response):
-            plan = response
+        case .success(let executionResult):
+            plan = executionResult.response
+            downloadedBundleData = executionResult.resultBundleData
         case .failure(let error):
             throw AovModMergerError.invalidArchive(AppLanguage.current.text("merge.error.server_prefix", error.localizedDescription))
         }
@@ -456,9 +467,16 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         // BƯỚC 5: Nhận và giải nén các file server đã merge (nếu có)
         var serverMergedEntries: [String: Data] = [:]
-        if let encoded = plan.zipBytesB64,
-           let bundle = Data(base64Encoded: encoded),
-           !bundle.isEmpty {
+        let resolvedBundleData: Data? = {
+            if let downloadedBundleData, !downloadedBundleData.isEmpty {
+                return downloadedBundleData
+            }
+            if let encoded = plan.zipBytesB64, let decoded = Data(base64Encoded: encoded), !decoded.isEmpty {
+                return decoded
+            }
+            return nil
+        }()
+        if let bundle = resolvedBundleData {
             let outerEntries = (try? PatchZipConverter.shared.parseZipArchive(bundle)) ?? [:]
             let rawMergedEntries: [String: Data]
             if let innerResultData = outerEntries["result.zip"]
