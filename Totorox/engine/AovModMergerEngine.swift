@@ -189,6 +189,70 @@ public final class AovModMergerEngine: @unchecked Sendable {
         try Self.validatedHeadersAndSummary(at: url).summary
     }
 
+    /// Nếu người dùng chọn một file `.zip` bọc ngoài (ví dụ `IOS-Cam xa 20%.zip` chứa `mod_.../Resources.zip`),
+    /// tự động giải nén tệp `.zip` AOV bên trong ra `directory` để nạp trực tiếp vào luồng gộp.
+    public static func unwrapNestedModArchiveIfNeeded(at url: URL, into directory: URL) throws -> URL {
+        do {
+            _ = try validatedHeadersAndSummary(at: url)
+            return url
+        } catch AovModMergerError.missingResourceStructure {
+            let headers = try PatchZipConverter.shared.readZipArchiveHeaders(from: url)
+            let nestedCandidates = headers.filter { rawPath, header in
+                let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
+                let lower = normalized.lowercased()
+                let fileName = (normalized as NSString).lastPathComponent.lowercased()
+                return !lower.hasPrefix("__macosx/")
+                    && !lower.contains("/__macosx/")
+                    && !fileName.hasPrefix("._")
+                    && fileName.hasSuffix(".zip")
+                    && (header.compressionMethod == 0 || header.compressionMethod == 8)
+                    && header.uncompressedSize > 0
+                    && header.uncompressedSize <= 250 * 1024 * 1024
+            }
+
+            let preferred: (key: String, value: PatchZipConverter.ZipArchiveEntryHeader)?
+            if let resourcesZip = nestedCandidates.first(where: {
+                ($0.key.replacingOccurrences(of: "\\", with: "/") as NSString).lastPathComponent.lowercased() == "resources.zip"
+            }) {
+                preferred = (resourcesZip.key, resourcesZip.value)
+            } else if nestedCandidates.count == 1, let onlyZip = nestedCandidates.first {
+                preferred = (onlyZip.key, onlyZip.value)
+            } else {
+                preferred = nil
+            }
+
+            guard let chosen = preferred else {
+                throw AovModMergerError.missingResourceStructure(url.lastPathComponent)
+            }
+
+            let innerData = try PatchZipConverter.shared.extractZipEntry(header: chosen.value, from: url)
+            guard innerData.count >= 4 else {
+                throw AovModMergerError.invalidArchive(
+                    AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
+                )
+            }
+            let magic = innerData.prefix(4)
+            guard magic == Data([0x50, 0x4B, 0x03, 0x04]) || magic == Data([0x50, 0x4B, 0x05, 0x06]) else {
+                throw AovModMergerError.invalidArchive(
+                    AppLanguage.current.text("merge.error.not_valid_zip_entry", url.lastPathComponent)
+                )
+            }
+
+            let outerStem = url.deletingPathExtension().lastPathComponent
+            let innerName = (chosen.key.replacingOccurrences(of: "\\", with: "/") as NSString).lastPathComponent
+            var destName = outerStem.isEmpty ? innerName : "\(outerStem)_\(innerName)"
+            var destURL = directory.appendingPathComponent(destName)
+            if destURL.standardizedFileURL == url.standardizedFileURL {
+                destName = "unwrapped_\(innerName)"
+                destURL = directory.appendingPathComponent(destName)
+            }
+            try? FileManager.default.removeItem(at: destURL)
+            try innerData.write(to: destURL, options: .atomic)
+            _ = try validatedHeadersAndSummary(at: destURL)
+            return destURL
+        }
+    }
+
     /// Dựng `AovModSummary` từ danh sách đường dẫn đã có sẵn, tránh đọc lại gói mod
     /// (mỗi gói có thể 150 MB nên đọc hai lần là lãng phí I/O và bộ nhớ).
     static func summary(url: URL, fileSize: Int64, entryNames: [String]) -> AovModSummary {
