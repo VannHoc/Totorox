@@ -729,7 +729,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
     /// cho asset mới). Mọi file khác do client giữ nguyên và ghép local.
     private static let aovKnownRootDirectories: Set<String> = [
         "ages", "assetrefs", "databin", "assetbundle", "sound",
-        "thanos", "prefab_characters", "behaviac", "lua_signed", "languages"
+        "thanos", "prefab_characters", "behaviac", "lua_signed", "languages", "camera"
     ]
 
     private static let aovKnownRootFiles: Set<String> = [
