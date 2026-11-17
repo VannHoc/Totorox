@@ -75,8 +75,8 @@ final class APIService {
     /// để toàn bộ HTTP request body luôn nằm gọn dưới trần 100 MB của Cloudflare.
     static let maximumMergeBundleBytes: Int64 = 92 * 1024 * 1024
 
-    /// Kích thước mỗi mảnh khi chia nhỏ upload `config_bundle.zip` (4 MiB).
-    static let mergeChunkBytes: Int = 4 * 1024 * 1024
+    /// Kích thước mỗi mảnh khi chia nhỏ upload `config_bundle.zip` (1 MiB để máy mạng yếu/chậm không vượt timeout).
+    static let mergeChunkBytes: Int = 1 * 1024 * 1024
 
     /// Ngưỡng tối đa ưu tiên upload từ `Data` trong bộ nhớ (tránh bug chậm `fromFile:` trên một số bản CFNetwork).
     private static let directMemoryUploadLimit: Int64 = 16 * 1024 * 1024
@@ -725,7 +725,7 @@ final class APIService {
                 request.httpMethod = "POST"
                 request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
                 applyAuthHeaders(to: &request, token: token, hwid: hwid)
-                request.timeoutInterval = APIService.requestTimeout
+                request.timeoutInterval = 180
                 signRequest(&request)
 
                 do {
