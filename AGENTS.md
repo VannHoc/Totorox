@@ -95,6 +95,14 @@ Công cụ dòng lệnh dự phòng dùng chung file SQLite `licenses.db` với 
 ### `database.py` — Lớp Dữ liệu SQLite WAL
 Cung cấp `get_connection()`, `init_db()`, cơ chế tự động migration cột thiếu, `register_user()`, `login_user()`, `logout_user()`, `get_user_by_username()`, `bind_device_udid()`, `authenticate_token()`, `consume_user_usage()`, `redeem_code()`.
 
+
+### `store.py` & `store.html` — Web Store bán key tự động (`totorox.io.vn`)
+- `store.py`: `register_store(app, limiter)` (gọi trong `main.py`) gắn middleware `/` -> `store.html` cho host `totorox.io.vn`/`www` (cấu hình `TOTOROX_STORE_HOSTS`; `/store` dùng để test local), API `GET /api/v1/store/packages`, `POST /api/v1/store/login` (token `st.` stateless, KHÔNG đổi `users.active_token` của app iOS), `GET /api/v1/store/me`, `POST /api/v1/store/create-order`, `GET /api/v1/store/orders/{order_code}`, `GET /api/v1/store/my-orders`, webhook `POST /api/v1/payment/payos-webhook` (HMAC-SHA256 trên `data`) và `POST /api/v1/payment/oxapay-webhook` (HMAC-SHA512 raw body, header `HMAC`, chỉ `status == "Paid"`).
+- Biến môi trường: `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY`, `OXAPAY_MERCHANT_API_KEY`, `TOTOROX_STORE_URL`.
+- `database.py`: bảng `orders` (`_ensure_orders_table`), `STORE_PACKAGES` (chỉnh giá/gói tại đây), `create_order`, `fulfill_order` (idempotent, cộng hạn/lượt vào `users`), `admin_list_orders`.
+- Admin: `GET /admin/api/orders` + tab "Đơn hàng" trong `admin.html`; CLI `admin_keys.py orders`.
+- Subdomain Isolation giữ nguyên: `/admin*` trên host store/api vẫn `404`; `/` trên host api vẫn `404`.
+
 ---
 
 ## 4. Schema SQLite Hiện Tại (`licenses.db`)

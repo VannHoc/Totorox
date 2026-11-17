@@ -34,6 +34,7 @@ final class LicenseManager: ObservableObject {
         static let authToken = "totorox.authToken"
         static let userSnapshot = "totorox.userSnapshot"
         static let installInitialized = "totorox.accountInstallInitialized"
+        static let pendingUDIDClaim = "totorox.pendingUDIDClaim"
         // Legacy keys cleaned up on migration/reinstall
         static let legacyLicenseKey = "totorox.licenseKey"
         static let legacySnapshot = "totorox.licenseSnapshot"
@@ -211,6 +212,12 @@ final class LicenseManager: ObservableObject {
         api.deviceProfileURL(username: username)
     }
 
+    func prepareDeviceProfileURL() -> URL? {
+        let claim = UUID().uuidString.lowercased()
+        defaults.set(claim, forKey: Keys.pendingUDIDClaim)
+        return api.deviceProfileURL(username: username, claim: claim)
+    }
+
     func formattedExpiry(language: AppLanguage, short: Bool = false) -> String {
         guard let user = currentUser else { return "—" }
         guard let exp = user.expiresDate else {
@@ -360,6 +367,7 @@ final class LicenseManager: ObservableObject {
 
             // Hủy refresh nền (ví dụ từ scenePhase == .active) để tránh gửi request cũ thiếu X-HWID.
             cancelRefresh()
+            defaults.removeObject(forKey: Keys.pendingUDIDClaim)
             deviceIdentifierSaver(cleanUDID)
             deviceIdentifier = cleanUDID
 
@@ -404,10 +412,29 @@ final class LicenseManager: ObservableObject {
 
     private func performRefresh() async {
         let tokenAtStart = authToken
-        let hwidAtStart = deviceIdentifier
+        var hwidAtStart = deviceIdentifier
         guard !tokenAtStart.isEmpty else {
             clearLocalSession(status: .signedOut)
             return
+        }
+
+        if hwidAtStart.isEmpty,
+           let pendingClaim = defaults.string(forKey: Keys.pendingUDIDClaim),
+           !pendingClaim.isEmpty,
+           case .success(let claimedUDID?) = await api.claimDeviceUDID(
+               claim: pendingClaim,
+               token: tokenAtStart,
+               hwid: hwidAtStart
+           ) {
+            guard !Task.isCancelled, authToken == tokenAtStart else { return }
+            defaults.removeObject(forKey: Keys.pendingUDIDClaim)
+            deviceIdentifierSaver(claimedUDID)
+            deviceIdentifier = claimedUDID
+            hwidAtStart = claimedUDID
+            udidVerificationAlert = UDIDVerificationAlert(
+                title: AppLanguage.current.text("udid.verify.alert.success_title"),
+                message: AppLanguage.current.text("udid.verify.alert.success_fmt", claimedUDID)
+            )
         }
 
         switch await api.fetchMe(token: tokenAtStart, hwid: hwidAtStart) {
