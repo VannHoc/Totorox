@@ -441,10 +441,13 @@ public final class AovModMergerEngine: @unchecked Sendable {
             hwid: LicenseManager.shared.deviceIdentifier
         ) { stage in
             switch stage {
+            case .uploadingChunk(let index, let total):
+                let frac = 0.45 + (0.08 * Double(index) / Double(max(1, total)))
+                progress(AppLanguage.current.text("merge.progress.uploading_chunk", index, total), frac)
             case .queued(let position, _):
-                progress(AppLanguage.current.text("merge.progress.queued", position), 0.54)
+                progress(AppLanguage.current.text("merge.progress.queued", position), 0.56)
             case .processing:
-                progress(AppLanguage.current.text("merge.progress.processing"), 0.62)
+                progress(AppLanguage.current.text("merge.progress.processing"), 0.63)
             case .downloadingResult:
                 progress(AppLanguage.current.text("merge.progress.downloading_result"), 0.70)
             }

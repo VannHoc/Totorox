@@ -440,6 +440,7 @@
 "merge.progress.reading_catalog" = "正在读取 Mod 压缩包目录...";
 "merge.progress.extracting_configs" = "正在提取冲突配置文件（%lld 处冲突）...";
 "merge.progress.uploading_server" = "正在上传配置包到服务器...";
+"merge.progress.uploading_chunk" = "正在上传分片 %lld/%lld...";
 "merge.progress.queued" = "正在服务器排队处理（第 %lld 位）...";
 "merge.progress.processing" = "正在云端智能合并冲突配置...";
 "merge.progress.downloading_result" = "正在下载合并后的配置包...";
