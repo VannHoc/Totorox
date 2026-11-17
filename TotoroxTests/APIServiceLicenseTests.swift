@@ -641,6 +641,7 @@ final class APIServiceLicenseTests: XCTestCase {
             hwid: "TEST-UDID"
         ) { stage in
             switch stage {
+            case .uploadingChunk(let i, let t): seenStages.append("chunk:\(i)/\(t)")
             case .queued(let pos, _): seenStages.append("queued:\(pos)")
             case .processing: seenStages.append("processing")
             case .downloadingResult: seenStages.append("downloading")
@@ -655,6 +656,68 @@ final class APIServiceLicenseTests: XCTestCase {
             XCTAssertEqual(seenStages, ["queued:2", "processing", "downloading"])
         case .failure(let err):
             XCTFail("Expected queue success, got \(err.localizedDescription)")
+        }
+    }
+
+    func testMergePlanWithQueueUploadsLargeFileInChunks() async throws {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chunk_test_\(UUID().uuidString).zip")
+        let fileData = Data(repeating: 0x41, count: (4 * 1024 * 1024) + 512)
+        try fileData.write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        var chunkPathsSeen = 0
+        var seenStages: [String] = []
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        StubURLProtocol.handler = { req in
+            let path = req.url?.path ?? ""
+            if path == "/api/v1/merge-plan/chunks" && req.httpMethod == "POST" {
+                chunkPathsSeen += 1
+                return StubURLProtocol.Stub(
+                    statusCode: 200,
+                    data: Data(#"{"ok":true,"upload_id":"0123456789abcdef0123456789abcdef","chunk_index":0,"received_bytes":100}"#.utf8)
+                )
+            }
+            if path == "/api/v1/merge-plan/jobs" && req.httpMethod == "POST" {
+                return StubURLProtocol.Stub(
+                    statusCode: 200,
+                    data: Data(#"{"ok":true,"job_id":"job_chunk_001","status":"processing","position":0,"queue_length":1,"poll_interval_ms":800}"#.utf8)
+                )
+            }
+            if path == "/api/v1/merge-plan/jobs" && req.httpMethod == "GET" {
+                return StubURLProtocol.Stub(
+                    statusCode: 200,
+                    data: Data(#"{"ok":true,"job_id":"job_chunk_001","status":"done","has_result_zip":false,"accepted_bytes":4194816}"#.utf8)
+                )
+            }
+            return StubURLProtocol.Stub(statusCode: 404, data: Data())
+        }
+
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        let res = await api.mergePlanWithQueue(
+            fileURL: tempFile,
+            configJSON: #"{"mods":[]}"#,
+            token: "tok_chunk",
+            hwid: "TEST-UDID"
+        ) { stage in
+            switch stage {
+            case .uploadingChunk(let i, let t): seenStages.append("chunk:\(i)/\(t)")
+            case .queued(let pos, _): seenStages.append("queued:\(pos)")
+            case .processing: seenStages.append("processing")
+            case .downloadingResult: seenStages.append("downloading")
+            }
+        }
+
+        switch res {
+        case .success(let exec):
+            XCTAssertTrue(exec.response.ok)
+            XCTAssertEqual(chunkPathsSeen, 2)
+            XCTAssertEqual(seenStages, ["chunk:1/2", "chunk:2/2", "processing"])
+        case .failure(let err):
+            XCTFail("Expected chunked queue success, got \(err.localizedDescription)")
         }
     }
 }

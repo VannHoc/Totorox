@@ -75,6 +75,12 @@ final class APIService {
     /// để toàn bộ HTTP request body luôn nằm gọn dưới trần 100 MB của Cloudflare.
     static let maximumMergeBundleBytes: Int64 = 92 * 1024 * 1024
 
+    /// Kích thước mỗi mảnh khi chia nhỏ upload `config_bundle.zip` (4 MiB).
+    static let mergeChunkBytes: Int = 4 * 1024 * 1024
+
+    /// Ngưỡng tối đa ưu tiên upload từ `Data` trong bộ nhớ (tránh bug chậm `fromFile:` trên một số bản CFNetwork).
+    private static let directMemoryUploadLimit: Int64 = 16 * 1024 * 1024
+
     /// Timeout cho request metadata thông thường.
     static let requestTimeout: TimeInterval = 60
 
@@ -410,6 +416,7 @@ final class APIService {
     }
 
     enum MergeQueueStage: Sendable {
+        case uploadingChunk(index: Int, total: Int)
         case queued(position: Int, queueLength: Int)
         case processing
         case downloadingResult
@@ -417,7 +424,8 @@ final class APIService {
 
     /// Gửi tác vụ gộp vào hàng đợi bất đồng bộ trên server rồi poll trạng thái tới khi xong,
     /// giúp miễn nhiễm hoàn toàn giới hạn timeout 100s của Cloudflare và tải thẳng binary ZIP.
-    /// Tự động fallback sang `/api/v1/merge-plan` cũ nếu server trả 404.
+    /// Khi `config_bundle.zip` > 4 MiB, tự động chia thành các mảnh 4 MiB (upload trực tiếp từ Data,
+    /// tránh bug `fromFile:` chậm trên iOS) kèm retry từng mảnh.
     func mergePlanWithQueue(
         fileURL: URL?,
         configJSON: String?,
@@ -427,10 +435,13 @@ final class APIService {
     ) async -> Result<MergePlanExecutionResult, APIServiceError> {
         let submitPath = ObfuscatedStrings.mergePlanJobs
         do {
+            var fileSize: Int64 = 0
             if let fileURL,
-               let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize),
-               Int64(size) > APIService.maximumMergeBundleBytes {
-                return .failure(.payloadTooLarge)
+               let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) {
+                fileSize = Int64(size)
+                if fileSize > APIService.maximumMergeBundleBytes {
+                    return .failure(.payloadTooLarge)
+                }
             }
 
             var fields = [
@@ -439,9 +450,32 @@ final class APIService {
             if !hwid.isEmpty {
                 fields["udid"] = hwid
             }
+
+            var attachedFileURL: URL? = fileURL
+            if let fileURL, fileSize > Int64(APIService.mergeChunkBytes) {
+                let uploadID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                switch await uploadMergeChunks(
+                    fileURL: fileURL,
+                    fileSize: fileSize,
+                    uploadID: uploadID,
+                    token: token,
+                    hwid: hwid,
+                    onStage: onStage
+                ) {
+                case .success(let totalChunks):
+                    if let totalChunks {
+                        fields["upload_id"] = uploadID
+                        fields["total_chunks"] = String(totalChunks)
+                        attachedFileURL = nil
+                    }
+                case .failure(let err):
+                    return .failure(err)
+                }
+            }
+
             let body = try buildMultipartBody(
                 fields: fields,
-                fileURLs: fileURL.map { [$0] } ?? [],
+                fileURLs: attachedFileURL.map { [$0] } ?? [],
                 fileFieldName: "file"
             )
 
@@ -630,6 +664,104 @@ final class APIService {
             }
         }
         return .failure(lastError)
+    }
+
+    private func uploadMergeChunks(
+        fileURL: URL,
+        fileSize: Int64,
+        uploadID: String,
+        token: String,
+        hwid: String,
+        onStage: @escaping @Sendable (MergeQueueStage) -> Void
+    ) async -> Result<Int?, APIServiceError> {
+        let chunkSize = APIService.mergeChunkBytes
+        let totalChunks = Int((fileSize + Int64(chunkSize) - 1) / Int64(chunkSize))
+        guard totalChunks > 0 else { return .success(nil) }
+
+        let hasScope = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasScope { fileURL.stopAccessingSecurityScopedResource() }
+        }
+
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: fileURL)
+        } catch {
+            return .failure(.ioFailure(error.localizedDescription))
+        }
+        defer { try? handle.close() }
+
+        let chunksPath = ObfuscatedStrings.mergePlanChunks
+        for index in 0..<totalChunks {
+            let chunkData: Data
+            do {
+                chunkData = try handle.read(upToCount: chunkSize) ?? Data()
+            } catch {
+                return .failure(.ioFailure(error.localizedDescription))
+            }
+            guard !chunkData.isEmpty else { break }
+
+            onStage(.uploadingChunk(index: index + 1, total: totalChunks))
+
+            let boundary = "Totorox-\(UUID().uuidString)"
+            var payload = Data()
+            let fields: [(String, String)] = [
+                ("upload_id", uploadID),
+                ("chunk_index", String(index)),
+                ("total_chunks", String(totalChunks)),
+                ("udid", hwid),
+            ]
+            for (name, value) in fields where !value.isEmpty {
+                payload.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
+            }
+            payload.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"chunk\"; filename=\"part_\(index).bin\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
+            payload.append(chunkData)
+            payload.append(Data("\r\n--\(boundary)--\r\n".utf8))
+
+            var sent = false
+            var lastError: APIServiceError = .invalidResponse
+            for attempt in 0..<3 {
+                var request = URLRequest(url: baseURL.appendingPathComponent(chunksPath))
+                request.httpMethod = "POST"
+                request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+                applyAuthHeaders(to: &request, token: token, hwid: hwid)
+                request.timeoutInterval = APIService.requestTimeout
+                signRequest(&request)
+
+                do {
+                    let (data, response) = try await upload(
+                        request,
+                        body: MultipartBody(boundary: boundary, fileURL: nil, data: payload)
+                    )
+                    guard let http = response as? HTTPURLResponse else {
+                        lastError = .invalidResponse
+                        continue
+                    }
+                    if http.statusCode == 404 {
+                        // Server chưa bật chunked upload -> fallback về luồng gửi thẳng 1 cục.
+                        return .success(nil)
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        let msg = Self.errorMessage(from: data)
+                        if http.statusCode == 401 {
+                            notifyUnauthorized(msg)
+                        }
+                        return .failure(.serverRejected(status: http.statusCode, message: msg))
+                    }
+                    sent = true
+                    break
+                } catch {
+                    lastError = Self.failure(from: error)
+                    if attempt < 2 {
+                        try? await Task.sleep(nanoseconds: 800_000_000)
+                    }
+                }
+            }
+            if !sent {
+                return .failure(lastError)
+            }
+        }
+        return .success(totalChunks)
     }
 
     // MARK: - JSON + Auth Helpers
@@ -859,10 +991,20 @@ final class APIService {
             }
         }
 
-        if let fileURL = body.fileURL {
-            return try await session.upload(for: request, fromFile: fileURL)
+        var tunedRequest = request
+        if #available(iOS 14.5, *) {
+            tunedRequest.assumesHTTP3Capable = false
         }
-        return try await session.upload(for: request, from: body.data)
+
+        if let fileURL = body.fileURL {
+            let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            if fileSize > 0, fileSize <= APIService.directMemoryUploadLimit,
+               let memData = try? Data(contentsOf: fileURL) {
+                return try await session.upload(for: tunedRequest, from: memData)
+            }
+            return try await session.upload(for: tunedRequest, fromFile: fileURL)
+        }
+        return try await session.upload(for: tunedRequest, from: body.data)
     }
 
     // MARK: - Parsing helpers
@@ -989,6 +1131,13 @@ private enum ObfuscatedStrings {
         decode(
             [0x5c, 0xaa, 0x67, 0x43, 0x83, 0x49, 0x96, 0x0c, 0xf1, 0x7a, 0xa3, 0xda, 0x13, 0xcb, 0xdc, 0xe6, 0xae, 0x73, 0x4c, 0x90, 0xa1, 0x42, 0x52, 0x6d, 0x9b, 0x19, 0x9e, 0xe8, 0x38, 0x03],
             [0x73, 0xcb, 0x17, 0x2a, 0xac, 0x3f, 0xa7, 0x23, 0x9c, 0x1f, 0xd1, 0xbd, 0x76, 0xe6, 0xac, 0x8a, 0xcf, 0x1d, 0x63, 0xfa, 0xce, 0x20, 0x21, 0x42, 0xe9, 0x7c, 0xed, 0x9d, 0x54, 0x77]
+        )
+    }
+
+    static var mergePlanChunks: String {
+        decode(
+            [0x7d, 0x41, 0x54, 0x9a, 0x62, 0xdd, 0xc5, 0xe5, 0x3c, 0x59, 0xd4, 0xe4, 0xd9, 0x65, 0x16, 0xf0, 0x8f, 0xbb, 0x09, 0x75, 0xf3, 0x28, 0xfb, 0xc7, 0x34],
+            [0x52, 0x20, 0x24, 0xf3, 0x4d, 0xab, 0xf4, 0xca, 0x51, 0x3c, 0xa6, 0x83, 0xbc, 0x48, 0x66, 0x9c, 0xee, 0xd5, 0x26, 0x16, 0x9b, 0x5d, 0x95, 0xac, 0x47]
         )
     }
 }

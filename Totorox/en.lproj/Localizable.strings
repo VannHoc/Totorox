@@ -440,6 +440,7 @@
 "merge.progress.reading_catalog" = "Reading mod archive catalogs...";
 "merge.progress.extracting_configs" = "Extracting overlapping config files (%lld conflicts)...";
 "merge.progress.uploading_server" = "Uploading config bundle to server...";
+"merge.progress.uploading_chunk" = "Uploading chunk %lld/%lld...";
 "merge.progress.queued" = "Queued on server (position #%lld)...";
 "merge.progress.processing" = "Smart-merging config conflicts on server...";
 "merge.progress.downloading_result" = "Downloading merged config bundle...";

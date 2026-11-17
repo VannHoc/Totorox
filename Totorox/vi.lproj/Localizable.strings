@@ -440,6 +440,7 @@
 "merge.progress.reading_catalog" = "Đang đọc mục lục các gói mod...";
 "merge.progress.extracting_configs" = "Đang trích xuất tệp cấu hình trùng (%lld xung đột)...";
 "merge.progress.uploading_server" = "Đang gửi cấu hình lên máy chủ...";
+"merge.progress.uploading_chunk" = "Đang tải lên phần %lld/%lld...";
 "merge.progress.queued" = "Đang xếp hàng trên máy chủ (vị trí #%lld)...";
 "merge.progress.processing" = "Máy chủ đang xử lý gộp thông minh...";
 "merge.progress.downloading_result" = "Đang tải gói cấu hình đã gộp...";
