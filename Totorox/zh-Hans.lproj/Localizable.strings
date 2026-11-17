@@ -439,7 +439,10 @@
 "merge.progress.initializing" = "正在初始化合并流程...";
 "merge.progress.reading_catalog" = "正在读取 Mod 压缩包目录...";
 "merge.progress.extracting_configs" = "正在提取冲突配置文件（%lld 处冲突）...";
-"merge.progress.uploading_server" = "正在云端智能合并冲突配置...";
+"merge.progress.uploading_server" = "正在上传配置包到服务器...";
+"merge.progress.queued" = "正在服务器排队处理（第 %lld 位）...";
+"merge.progress.processing" = "正在云端智能合并冲突配置...";
+"merge.progress.downloading_result" = "正在下载合并后的配置包...";
 "merge.progress.packing_zip" = "正在流式打包输出 ZIP 压缩包...";
 "merge.progress.done" = "合并完成！";
 "merge.result.success" = "Mod 合并成功！";

@@ -597,6 +597,66 @@ final class APIServiceLicenseTests: XCTestCase {
         XCTAssertEqual(rsaSPKI.prefix(2), Data([0x30, 0x82]))
         XCTAssertTrue(rsaSPKI.suffix(270) == rsaRaw)
     }
+
+    func testMergePlanWithQueuePollsAndDownloadsBinaryResult() async {
+        let bundlePayload = Data([0x50, 0x4B, 0x05, 0x06] + Array(repeating: 0x00, count: 18))
+        var pollCount = 0
+        var seenStages: [String] = []
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        StubURLProtocol.handler = { req in
+            let path = req.url?.path ?? ""
+            if path == "/api/v1/merge-plan/jobs" && req.httpMethod == "POST" {
+                return StubURLProtocol.Stub(
+                    statusCode: 200,
+                    data: Data(#"{"ok":true,"job_id":"job_abc12345","status":"queued","position":2,"queue_length":2,"poll_interval_ms":800}"#.utf8)
+                )
+            }
+            if path == "/api/v1/merge-plan/jobs" && req.httpMethod == "GET" {
+                pollCount += 1
+                if pollCount == 1 {
+                    return StubURLProtocol.Stub(
+                        statusCode: 200,
+                        data: Data(#"{"ok":true,"job_id":"job_abc12345","status":"processing","position":0,"queue_length":1}"#.utf8)
+                    )
+                }
+                return StubURLProtocol.Stub(
+                    statusCode: 200,
+                    data: Data(#"{"ok":true,"job_id":"job_abc12345","status":"done","has_result_zip":true,"accepted_bytes":128,"note":"done"}"#.utf8)
+                )
+            }
+            if path == "/api/v1/merge-plan/jobs/result" && req.httpMethod == "GET" {
+                return StubURLProtocol.Stub(statusCode: 200, data: bundlePayload)
+            }
+            return StubURLProtocol.Stub(statusCode: 404, data: Data())
+        }
+
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+        let res = await api.mergePlanWithQueue(
+            fileURL: nil,
+            configJSON: #"{"mods":[]}"#,
+            token: "tok_queue",
+            hwid: "TEST-UDID"
+        ) { stage in
+            switch stage {
+            case .queued(let pos, _): seenStages.append("queued:\(pos)")
+            case .processing: seenStages.append("processing")
+            case .downloadingResult: seenStages.append("downloading")
+            }
+        }
+
+        switch res {
+        case .success(let exec):
+            XCTAssertTrue(exec.response.ok)
+            XCTAssertEqual(exec.response.acceptedBytes, 128)
+            XCTAssertEqual(exec.resultBundleData, bundlePayload)
+            XCTAssertEqual(seenStages, ["queued:2", "processing", "downloading"])
+        case .failure(let err):
+            XCTFail("Expected queue success, got \(err.localizedDescription)")
+        }
+    }
 }
 
 // MARK: - URLProtocol stub
@@ -604,7 +664,17 @@ final class APIServiceLicenseTests: XCTestCase {
 private final class StubURLProtocol: URLProtocol {
     struct Stub {
         let statusCode: Int
-        let body: String
+        let data: Data
+
+        init(statusCode: Int, body: String) {
+            self.statusCode = statusCode
+            self.data = Data(body.utf8)
+        }
+
+        init(statusCode: Int, data: Data) {
+            self.statusCode = statusCode
+            self.data = data
+        }
     }
 
     private static let lock = NSLock()
@@ -661,7 +731,7 @@ private final class StubURLProtocol: URLProtocol {
             headerFields: ["Content-Type": "application/json"]
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(stub.body.utf8))
+        client?.urlProtocol(self, didLoad: stub.data)
         client?.urlProtocolDidFinishLoading(self)
     }
 

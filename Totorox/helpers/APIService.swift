@@ -409,6 +409,229 @@ final class APIService {
         }
     }
 
+    enum MergeQueueStage: Sendable {
+        case queued(position: Int, queueLength: Int)
+        case processing
+        case downloadingResult
+    }
+
+    /// Gửi tác vụ gộp vào hàng đợi bất đồng bộ trên server rồi poll trạng thái tới khi xong,
+    /// giúp miễn nhiễm hoàn toàn giới hạn timeout 100s của Cloudflare và tải thẳng binary ZIP.
+    /// Tự động fallback sang `/api/v1/merge-plan` cũ nếu server trả 404.
+    func mergePlanWithQueue(
+        fileURL: URL?,
+        configJSON: String?,
+        token: String,
+        hwid: String,
+        onStage: @escaping @Sendable (MergeQueueStage) -> Void
+    ) async -> Result<MergePlanExecutionResult, APIServiceError> {
+        let submitPath = ObfuscatedStrings.mergePlanJobs
+        do {
+            if let fileURL,
+               let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+               Int64(size) > APIService.maximumMergeBundleBytes {
+                return .failure(.payloadTooLarge)
+            }
+
+            var fields = [
+                "config_json": configJSON ?? "{}",
+            ]
+            if !hwid.isEmpty {
+                fields["udid"] = hwid
+            }
+            let body = try buildMultipartBody(
+                fields: fields,
+                fileURLs: fileURL.map { [$0] } ?? [],
+                fileFieldName: "file"
+            )
+
+            var submitReq = URLRequest(url: baseURL.appendingPathComponent(submitPath))
+            submitReq.httpMethod = "POST"
+            submitReq.setValue(
+                "multipart/form-data; boundary=\(body.boundary)",
+                forHTTPHeaderField: "Content-Type"
+            )
+            applyAuthHeaders(to: &submitReq, token: token, hwid: hwid)
+            submitReq.timeoutInterval = APIService.mergeTimeout
+            signRequest(&submitReq)
+
+            let (submitData, submitResp) = try await upload(submitReq, body: body)
+            guard let submitHTTP = submitResp as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            if submitHTTP.statusCode == 404 {
+                switch await mergePlan(fileURL: fileURL, configJSON: configJSON, token: token, hwid: hwid) {
+                case .success(let legacy):
+                    return .success(MergePlanExecutionResult(response: legacy, resultBundleData: nil))
+                case .failure(let err):
+                    return .failure(err)
+                }
+            }
+            guard (200..<300).contains(submitHTTP.statusCode) else {
+                let msg = Self.errorMessage(from: submitData)
+                if submitHTTP.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: submitHTTP.statusCode, message: msg))
+            }
+
+            let submitted = try parseJSON(MergeJobSubmitBody.self, from: submitData)
+            guard submitted.ok, !submitted.jobId.isEmpty else {
+                return .failure(.invalidResponse)
+            }
+
+            let initialPos = max(1, submitted.position ?? 1)
+            let initialQLen = max(initialPos, submitted.queueLength ?? initialPos)
+            if submitted.status == "processing" {
+                onStage(.processing)
+            } else {
+                onStage(.queued(position: initialPos, queueLength: initialQLen))
+            }
+
+            let pollIntervalNs = UInt64(max(800, submitted.pollIntervalMs ?? 1500)) * 1_000_000
+            let deadline = Date().addingTimeInterval(600)
+            var transientFailures = 0
+
+            while Date() < deadline {
+                try await Task.sleep(nanoseconds: pollIntervalNs)
+
+                switch await fetchMergeJobStatus(jobID: submitted.jobId, token: token, hwid: hwid) {
+                case .success(let statusBody):
+                    transientFailures = 0
+                    switch statusBody.status {
+                    case "queued":
+                        onStage(.queued(
+                            position: max(1, statusBody.position ?? 1),
+                            queueLength: max(1, statusBody.queueLength ?? 1)
+                        ))
+                    case "processing":
+                        onStage(.processing)
+                    case "failed":
+                        return .failure(.serverRejected(
+                            status: statusBody.errorCode ?? 400,
+                            message: statusBody.detail
+                        ))
+                    case "done":
+                        var bundleData: Data? = nil
+                        if statusBody.hasResultZip == true {
+                            onStage(.downloadingResult)
+                            switch await downloadMergeJobResult(jobID: submitted.jobId, token: token, hwid: hwid) {
+                            case .success(let raw):
+                                bundleData = raw
+                            case .failure(let err):
+                                return .failure(err)
+                            }
+                        }
+                        if let user = statusBody.user {
+                            notifyUserProfileUpdated(user)
+                        }
+                        let response = MergePlanResponse(
+                            ok: statusBody.ok,
+                            acceptedBytes: statusBody.acceptedBytes ?? 0,
+                            mergePlan: statusBody.mergePlan,
+                            configFiles: statusBody.configFiles,
+                            zipBytesB64: statusBody.zipBytesB64,
+                            note: statusBody.note,
+                            user: statusBody.user
+                        )
+                        return .success(MergePlanExecutionResult(response: response, resultBundleData: bundleData))
+                    default:
+                        return .failure(.invalidResponse)
+                    }
+                case .failure(let err):
+                    if case .transport = err, transientFailures < 5 {
+                        transientFailures += 1
+                        continue
+                    }
+                    return .failure(err)
+                }
+            }
+
+            return .failure(.transport("Quá thời gian chờ máy chủ xử lý tác vụ gộp."))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    private func fetchMergeJobStatus(
+        jobID: String,
+        token: String,
+        hwid: String
+    ) async -> Result<MergeJobStatusBody, APIServiceError> {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent(ObfuscatedStrings.mergePlanJobs),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "job_id", value: jobID)]
+        guard let url = components?.url else {
+            return .failure(.invalidConfiguration)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            return .success(try parseJSON(MergeJobStatusBody.self, from: data))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    private func downloadMergeJobResult(
+        jobID: String,
+        token: String,
+        hwid: String
+    ) async -> Result<Data, APIServiceError> {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent(ObfuscatedStrings.mergePlanJobResult),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "job_id", value: jobID)]
+        guard let url = components?.url else {
+            return .failure(.invalidConfiguration)
+        }
+        var lastError: APIServiceError = .invalidResponse
+        for attempt in 0..<2 {
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            request.timeoutInterval = APIService.mergeTimeout
+            signRequest(&request)
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    lastError = .invalidResponse
+                    continue
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    let msg = Self.errorMessage(from: data)
+                    if http.statusCode == 401 {
+                        notifyUnauthorized(msg)
+                    }
+                    return .failure(.serverRejected(status: http.statusCode, message: msg))
+                }
+                return .success(data)
+            } catch {
+                lastError = Self.failure(from: error)
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+        return .failure(lastError)
+    }
+
     // MARK: - JSON + Auth Helpers
 
     private func postJSON<Req: Encodable, Res: Decodable>(
@@ -752,6 +975,20 @@ private enum ObfuscatedStrings {
         decode(
             [0xb4, 0x4e, 0x2d, 0xe1, 0xa8, 0xb2, 0x73, 0x56, 0x98, 0xe4, 0x31, 0xaa, 0x95, 0x1f, 0xe7, 0x0d, 0xf6],
             [0xd5, 0x3e, 0x44, 0xce, 0xde, 0x83, 0x5c, 0x3b, 0xfd, 0x96, 0x56, 0xcf, 0xb8, 0x6f, 0x8b, 0x6c, 0x98]
+        )
+    }
+
+    static var mergePlanJobs: String {
+        decode(
+            [0x5b, 0x33, 0xd2, 0x6a, 0x2d, 0x8b, 0xb8, 0xd6, 0x51, 0xdf, 0x04, 0xf7, 0xb3, 0x64, 0x9d, 0x92, 0xac, 0x34, 0xcc, 0xfb, 0xc0, 0x9d, 0xe3],
+            [0x74, 0x52, 0xa2, 0x03, 0x02, 0xfd, 0x89, 0xf9, 0x3c, 0xba, 0x76, 0x90, 0xd6, 0x49, 0xed, 0xfe, 0xcd, 0x5a, 0xe3, 0x91, 0xaf, 0xff, 0x90]
+        )
+    }
+
+    static var mergePlanJobResult: String {
+        decode(
+            [0x5c, 0xaa, 0x67, 0x43, 0x83, 0x49, 0x96, 0x0c, 0xf1, 0x7a, 0xa3, 0xda, 0x13, 0xcb, 0xdc, 0xe6, 0xae, 0x73, 0x4c, 0x90, 0xa1, 0x42, 0x52, 0x6d, 0x9b, 0x19, 0x9e, 0xe8, 0x38, 0x03],
+            [0x73, 0xcb, 0x17, 0x2a, 0xac, 0x3f, 0xa7, 0x23, 0x9c, 0x1f, 0xd1, 0xbd, 0x76, 0xe6, 0xac, 0x8a, 0xcf, 0x1d, 0x63, 0xfa, 0xce, 0x20, 0x21, 0x42, 0xe9, 0x7c, 0xed, 0x9d, 0x54, 0x77]
         )
     }
 }
@@ -1323,4 +1560,61 @@ struct MergePlanResponse {
     let zipBytesB64: String?
     let note: String?
     let user: UserProfile?
+}
+
+struct MergePlanExecutionResult {
+    let response: MergePlanResponse
+    let resultBundleData: Data?
+}
+
+struct MergeJobSubmitBody: Decodable {
+    let ok: Bool
+    let jobId: String
+    let status: String
+    let position: Int?
+    let queueLength: Int?
+    let pollIntervalMs: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case jobId = "job_id"
+        case status
+        case position
+        case queueLength = "queue_length"
+        case pollIntervalMs = "poll_interval_ms"
+    }
+}
+
+struct MergeJobStatusBody: Decodable {
+    let ok: Bool
+    let jobId: String?
+    let status: String
+    let position: Int?
+    let queueLength: Int?
+    let errorCode: Int?
+    let detail: String?
+    let hasResultZip: Bool?
+    let acceptedBytes: Int?
+    let mergePlan: MergePlanBody?
+    let configFiles: [String]?
+    let zipBytesB64: String?
+    let note: String?
+    let user: UserProfile?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case jobId = "job_id"
+        case status
+        case position
+        case queueLength = "queue_length"
+        case errorCode = "error_code"
+        case detail
+        case hasResultZip = "has_result_zip"
+        case acceptedBytes = "accepted_bytes"
+        case mergePlan = "merge_plan"
+        case configFiles = "config_files"
+        case zipBytesB64 = "zip_bytes_b64"
+        case note
+        case user
+    }
 }
