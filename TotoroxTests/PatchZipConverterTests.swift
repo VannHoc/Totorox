@@ -509,8 +509,8 @@ final class PatchZipConverterTests: XCTestCase {
         let parsedZip = try converter.parseZipArchive(projectZip)
         XCTAssertNil(parsedZip["patch.json"], "Không được xuất hiện patch.json trong gói .zip")
         XCTAssertNotNil(
-            parsedZip["com.garena.game.kgvn/Documents/Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"],
-            "Phải ánh xạ trực tiếp theo bundle ID của app mà không có tiền tố payload/"
+            parsedZip["Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes"],
+            "Phải xuất bắt đầu trực tiếp từ Resources/ mà không có tiền tố bundle ID hay Documents/"
         )
     }
 
