@@ -143,7 +143,7 @@ final class APIService {
     }
 
     /// URL Safari `.mobileconfig` để xác minh UDID phần cứng thật qua Apple OTA.
-    func deviceProfileURL(username: String) -> URL? {
+    func deviceProfileURL(username: String, claim: String? = nil) -> URL? {
         let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanUser.isEmpty,
               var components = URLComponents(
@@ -152,8 +152,57 @@ final class APIService {
               ) else {
             return nil
         }
-        components.queryItems = [URLQueryItem(name: "username", value: cleanUser)]
+        var items = [URLQueryItem(name: "username", value: cleanUser)]
+        if let cleanClaim = claim?.trimmingCharacters(in: .whitespacesAndNewlines), !cleanClaim.isEmpty {
+            items.append(URLQueryItem(name: "claim", value: cleanClaim))
+        }
+        components.queryItems = items
         return components.url
+    }
+
+    /// Lấy UDID đã xác minh qua Apple OTA bằng `claim` token một lần (không phụ thuộc URL scheme).
+    func claimDeviceUDID(
+        claim: String,
+        token: String,
+        hwid: String
+    ) async -> Result<String?, APIServiceError> {
+        let cleanClaim = claim.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanClaim.isEmpty,
+              var components = URLComponents(
+                  url: baseURL.appendingPathComponent("api/v1/device/claim"),
+                  resolvingAgainstBaseURL: false
+              ) else {
+            return .success(nil)
+        }
+        components.queryItems = [URLQueryItem(name: "claim", value: cleanClaim)]
+        guard let url = components.url else { return .success(nil) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            struct ClaimResponse: Decodable {
+                let ok: Bool
+                let udid: String?
+            }
+            let decoded = try parseJSON(ClaimResponse.self, from: data)
+            let cleanUDID = decoded.udid?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .success((decoded.ok && cleanUDID?.isEmpty == false) ? cleanUDID : nil)
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
     }
 
     /// Giữ API tương thích nội bộ nhưng luôn cố định về `defaultBaseURL`.

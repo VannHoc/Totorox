@@ -210,7 +210,7 @@ struct DeviceVerificationCard: View {
             }
 
             Button {
-                guard let url = license.deviceProfileURL() else { return }
+                guard let url = license.prepareDeviceProfileURL() else { return }
                 openURL(url)
             } label: {
                 HStack(spacing: 8) {
