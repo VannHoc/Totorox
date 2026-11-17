@@ -2480,8 +2480,11 @@ public final class PatchZipConverter {
         } else if relativePath.hasPrefix("\(bundleID)/") {
             relativePath = String(relativePath.dropFirst("\(bundleID)/".count))
         }
+        if relativePath.lowercased().hasPrefix("documents/resources/") {
+            relativePath = String(relativePath.dropFirst("documents/".count))
+        }
         guard !relativePath.isEmpty else { return nil }
-        return "\(bundleID)/\(relativePath)"
+        return relativePath
     }
 
     func buildProjectZip(_ project: PatchProject, password: String? = nil) throws -> Data {
