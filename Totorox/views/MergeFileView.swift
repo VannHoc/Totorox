@@ -723,8 +723,15 @@ struct MergeFileView: View {
                         continue
                     }
                     do {
-                        let summary = try AovModMergerEngine.shared.inspectModArchive(at: localCopy)
-                        let hash = Self.sha256Hex(forFileAt: localCopy)
+                        let resolvedURL = try AovModMergerEngine.unwrapNestedModArchiveIfNeeded(
+                            at: localCopy,
+                            into: importDir
+                        )
+                        if resolvedURL != localCopy {
+                            try? fm.removeItem(at: localCopy)
+                        }
+                        let summary = try AovModMergerEngine.shared.inspectModArchive(at: resolvedURL)
+                        let hash = Self.sha256Hex(forFileAt: resolvedURL)
                         newlyInspected.append(PickedItem(summary: summary, sha256: hash))
                     } catch {
                         rejectedDetails.append("• \(error.localizedDescription)")

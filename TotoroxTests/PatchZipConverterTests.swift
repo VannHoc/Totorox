@@ -989,4 +989,34 @@ final class PatchZipConverterTests: XCTestCase {
         let third = AovModMergerEngine.uniqueOutputURL(in: tempDirectory, preferredName: "AOV_Mod_2Heroes_abcd.zip")
         XCTAssertEqual(third.lastPathComponent, "AOV_Mod_2Heroes_abcd_3.zip")
     }
+
+    func testAovModMerger_UnwrapNestedResourcesZipForCamMod() throws {
+        let camCommonActions = try converter.buildZipArchive(entries: [
+            ("PassiveResource/junglemark.xml", Data("<Project><Action><Track trackName=\"SetCameraHeightDuration0\" eventType=\"SetCameraHeightDuration\" guid=\"9489c796-894b-4c2e-9a95-acf27873964a\"></Track></Action></Project>".utf8))
+        ])
+        let innerResourcesZip = try converter.buildZipArchive(
+            entries: [
+                ("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/CommonActions.pkg.bytes", camCommonActions),
+                ("Resources/1.64.1/KernelLua.pkg.bytes", Data("PK".utf8)),
+                ("Resources/1.64.1/version.txt", Data("1.64.1.13|1802180".utf8))
+            ],
+            compress: true
+        )
+        let outerWrapperURL = tempDirectory.appendingPathComponent("IOS-Cam xa 20%.zip")
+        try converter.buildZipArchive(
+            entries: [
+                ("__MACOSX/._Resources.zip", Data("junk".utf8)),
+                ("mod_20261117_071521_74da8bfd/Resources.zip", innerResourcesZip)
+            ],
+            compress: true
+        ).write(to: outerWrapperURL)
+
+        let unwrappedURL = try AovModMergerEngine.unwrapNestedModArchiveIfNeeded(at: outerWrapperURL, into: tempDirectory)
+        XCTAssertNotEqual(unwrappedURL, outerWrapperURL)
+        XCTAssertTrue(unwrappedURL.lastPathComponent.hasSuffix("_Resources.zip"))
+
+        let summary = try AovModMergerEngine.shared.inspectModArchive(at: unwrappedURL)
+        XCTAssertEqual(summary.resourceVersion, "1.64.1")
+        XCTAssertTrue(summary.heroIDs.isEmpty)
+    }
 }
