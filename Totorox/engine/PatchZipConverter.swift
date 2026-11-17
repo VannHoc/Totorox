@@ -1239,7 +1239,7 @@ public final class PatchZipConverter {
         }
     }
 
-    func buildZipArchive(entries: [(path: String, data: Data)], password: String? = nil) throws -> Data {
+    func buildZipArchive(entries: [(path: String, data: Data)], password: String? = nil, compress: Bool = false) throws -> Data {
         let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
         let bitFlags: UInt16 = cleanPassword != nil ? ((1 << 11) | 0x0001) : (1 << 11)
 
@@ -1265,12 +1265,16 @@ public final class PatchZipConverter {
             let localHeaderOffset = UInt32(archive.count)
             let entryCRC = crc32Checksum(entry.data)
             let uncompressedSize = UInt32(entry.data.count)
+            var compressionMethod: UInt16 = 0
             let storedPayload: Data
             if let zipPassword = cleanPassword {
                 guard entry.data.count <= Int(UInt32.max) - 12 else {
                     throw PatchZipConverterError.sizeLimitExceeded
                 }
                 storedPayload = ZipCryptoCodec.encrypt(entry.data, crc32: entryCRC, password: zipPassword)
+            } else if compress, let deflated = compressDeflate(entry.data) {
+                compressionMethod = 8
+                storedPayload = deflated
             } else {
                 storedPayload = entry.data
             }
@@ -1280,7 +1284,7 @@ public final class PatchZipConverter {
             archive.appendUInt32(0x04034b50) // Local file header signature
             archive.appendUInt16(20)         // Version needed to extract (2.0)
             archive.appendUInt16(bitFlags)   // General purpose bit flag (UTF-8 + optional ZipCrypto)
-            archive.appendUInt16(0)          // Compression method: 0 (Stored)
+            archive.appendUInt16(compressionMethod) // Compression method: 0 (Stored) or 8 (Deflate)
             archive.appendUInt16(0)          // Last mod file time
             archive.appendUInt16(0x0021)     // Last mod file date (DOS 1980-01-01)
             archive.appendUInt32(entryCRC)   // CRC-32
@@ -1289,14 +1293,14 @@ public final class PatchZipConverter {
             archive.appendUInt16(UInt16(pathBytes.count)) // File name length
             archive.appendUInt16(0)          // Extra field length
             archive.append(pathBytes)        // File name
-            archive.append(storedPayload)    // File data (plaintext or ZipCrypto payload)
+            archive.append(storedPayload)    // File data (plaintext, Deflate, or ZipCrypto payload)
 
             // 2. Central Directory Header
             centralDirectory.appendUInt32(0x02014b50) // Central file header signature
             centralDirectory.appendUInt16(20)         // Version made by
             centralDirectory.appendUInt16(20)         // Version needed to extract
             centralDirectory.appendUInt16(bitFlags)   // Bit flag
-            centralDirectory.appendUInt16(0)          // Compression method (Stored)
+            centralDirectory.appendUInt16(compressionMethod) // Compression method (Stored / Deflate)
             centralDirectory.appendUInt16(0)          // Last mod time
             centralDirectory.appendUInt16(0x0021)     // Last mod date (DOS 1980-01-01)
             centralDirectory.appendUInt32(entryCRC)   // CRC-32
@@ -1900,6 +1904,27 @@ public final class PatchZipConverter {
         guard status == 0 else {
             throw PatchZipConverterError.corruptedArchive("Deflate decompression failed (code \(status))")
         }
+        return destination
+    }
+
+    private func compressDeflate(_ data: Data) -> Data? {
+        guard !data.isEmpty, data.count <= Int(UInt32.max) else { return nil }
+        let capacity = data.count + (data.count / 1000) + 64
+        var destination = Data(count: capacity)
+        var outSize = capacity
+        let status: Int32 = destination.withUnsafeMutableBytes { dstBuf in
+            data.withUnsafeBytes { srcBuf in
+                guard let src = srcBuf.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let dst = dstBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return -1
+                }
+                return totorox_compress_deflate(src, data.count, dst, &outSize)
+            }
+        }
+        guard status == 0, outSize > 0, outSize < data.count else {
+            return nil
+        }
+        destination.count = outSize
         return destination
     }
 

@@ -71,9 +71,9 @@ final class APIService {
     /// Giới hạn tổng kích thước upload cho `convert-header` (khớp mặc định 100 MB của server).
     static let maximumUploadBytes: Int64 = 100 * 1024 * 1024
 
-    /// Giới hạn cho `merge-plan`: `config_bundle.zip` chứa file cấu hình
-    /// (`CommonActions` / `Databin` / `Thanos`); metadata RP/RV lớn nên khớp server 100 MB.
-    static let maximumMergeBundleBytes: Int64 = 100 * 1024 * 1024
+    /// Giới hạn cho `merge-plan`: chừa dư địa cho `config_json` và multipart header
+    /// để toàn bộ HTTP request body luôn nằm gọn dưới trần 100 MB của Cloudflare.
+    static let maximumMergeBundleBytes: Int64 = 92 * 1024 * 1024
 
     /// Timeout cho request metadata thông thường.
     static let requestTimeout: TimeInterval = 60
@@ -551,50 +551,75 @@ final class APIService {
         let data: Data
     }
 
-    private func buildMultipartBody(
+    private func writeMultipart(
         fields: [String: String],
         fileURLs: [URL],
-        fileFieldName: String
-    ) throws -> MultipartBody {
-        let boundary = "Totorox-\(UUID().uuidString)"
-        var body = Data()
-
-        func append(_ string: String) {
-            body.append(Data(string.utf8))
-        }
-
+        fileFieldName: String,
+        boundary: String,
+        emit: (Data) throws -> Void,
+        emitFile: (URL) throws -> Void
+    ) throws {
         for (name, value) in fields {
-            append("--\(boundary)\r\n")
-            append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
-            append("\(value)\r\n")
+            try emit(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
         }
-
         for fileURL in fileURLs {
             // URL lấy từ DocumentPicker là security-scoped: phải mở quyền trước khi đọc.
             let hasScope = fileURL.startAccessingSecurityScopedResource()
             defer {
                 if hasScope { fileURL.stopAccessingSecurityScopedResource() }
             }
-
             let filename = fileURL.lastPathComponent
-            append("--\(boundary)\r\n")
-            append("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\n")
-            append("Content-Type: application/octet-stream\r\n\r\n")
-            body.append(try Data(contentsOf: fileURL))
-            append("\r\n")
+            try emit(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
+            try emitFile(fileURL)
+            try emit(Data("\r\n".utf8))
         }
+        try emit(Data("--\(boundary)--\r\n".utf8))
+    }
 
-        append("--\(boundary)--\r\n")
-
-        // Ưu tiên ghi ra tệp tạm để `upload(for:fromFile:)` stream thay vì giữ body trong RAM.
+    private func buildMultipartBody(
+        fields: [String: String],
+        fileURLs: [URL],
+        fileFieldName: String
+    ) throws -> MultipartBody {
+        let boundary = "Totorox-\(UUID().uuidString)"
         let tempDirectory = FileManager.default.temporaryDirectory
         let tempURL = tempDirectory.appendingPathComponent("totorox-\(UUID().uuidString).tmp")
+
         do {
             try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
-            try body.write(to: tempURL, options: .atomic)
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: tempURL)
+            defer { try? handle.close() }
+
+            try writeMultipart(
+                fields: fields,
+                fileURLs: fileURLs,
+                fileFieldName: fileFieldName,
+                boundary: boundary,
+                emit: { try handle.write(contentsOf: $0) },
+                emitFile: { url in
+                    let inputHandle = try FileHandle(forReadingFrom: url)
+                    defer { try? inputHandle.close() }
+                    let chunkSize = 1024 * 1024
+                    while true {
+                        let chunk = try inputHandle.read(upToCount: chunkSize) ?? Data()
+                        if chunk.isEmpty { break }
+                        try handle.write(contentsOf: chunk)
+                    }
+                }
+            )
             return MultipartBody(boundary: boundary, fileURL: tempURL, data: Data())
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
+            var body = Data()
+            try writeMultipart(
+                fields: fields,
+                fileURLs: fileURLs,
+                fileFieldName: fileFieldName,
+                boundary: boundary,
+                emit: { body.append($0) },
+                emitFile: { body.append(try Data(contentsOf: $0)) }
+            )
             return MultipartBody(boundary: boundary, fileURL: nil, data: body)
         }
     }
