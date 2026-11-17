@@ -855,6 +855,9 @@ final class APIService {
             request.setValue(hwid, forHTTPHeaderField: "X-HWID")
         }
         request.timeoutInterval = APIService.requestTimeout
+        if #available(iOS 14.5, *) {
+            request.assumesHTTP3Capable = false
+        }
     }
 
     // MARK: - HMAC-SHA256 Request Signing
