@@ -45,7 +45,7 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ForEach(OnboardingStep.allCases, id: \.rawValue) { s in
                     Capsule()
-                        .fill(s.rawValue <= step.rawValue ? AppTheme.accent : Color.secondary.opacity(0.22))
+                        .fill(s.rawValue <= step.rawValue ? AppTheme.accent : TotoroxTheme.textSecondary.opacity(0.22))
                         .frame(height: 4)
                         .frame(maxWidth: s == step ? 28 : 18)
                         .animation(motionAnimation, value: step)
@@ -57,7 +57,7 @@ struct OnboardingView: View {
 
             Text(language.text("onboarding.step", "\(step.rawValue + 1)", "\(OnboardingStep.allCases.count)"))
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TotoroxTheme.textSecondary)
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         }
         .padding(.top, 16)
@@ -115,11 +115,12 @@ struct OnboardingView: View {
             VStack(spacing: 8) {
                 Text(language.text("onboarding.language_title"))
                     .font(.title2.weight(.bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(language.text("onboarding.language_subtitle"))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -133,7 +134,7 @@ struct OnboardingView: View {
                         HStack(spacing: 12) {
                             Text(option.displayName)
                                 .font(.body.weight(.semibold))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(TotoroxTheme.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer()
                             if isSelected {
@@ -143,17 +144,17 @@ struct OnboardingView: View {
                                     .transition(.scale.combined(with: .opacity))
                             } else {
                                 Image(systemName: "circle")
-                                    .foregroundStyle(.secondary.opacity(0.5))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
                             }
                         }
                         .padding(.horizontal, 16)
                         .frame(minHeight: 56)
                         .background(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color(uiColor: .secondarySystemBackground))
+                                .fill(TotoroxTheme.cardBackground)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .stroke(isSelected ? AppTheme.accent : Color.secondary.opacity(0.12), lineWidth: 1)
+                                        .stroke(isSelected ? AppTheme.accent : TotoroxTheme.cardBorderColor, lineWidth: 1)
                                 )
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -166,7 +167,7 @@ struct OnboardingView: View {
 
             Text(language.text("onboarding.language_hint", language.displayName))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TotoroxTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -180,11 +181,12 @@ struct OnboardingView: View {
             VStack(spacing: 10) {
                 Text(language.text("onboarding.welcome_title"))
                     .font(.title2.weight(.bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(language.text("onboarding.welcome_message"))
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -197,7 +199,7 @@ struct OnboardingView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
-                    Color(uiColor: .secondarySystemBackground),
+                    TotoroxTheme.cardBackground,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
         }
@@ -211,11 +213,12 @@ struct OnboardingView: View {
             VStack(spacing: 8) {
                 Text(language.text("onboarding.versions_title"))
                     .font(.title3.weight(.bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(language.text("onboarding.versions_subtitle"))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -227,9 +230,13 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        Text("iOS 27.0").font(.subheadline.weight(.semibold))
+                        Text("iOS 27.0")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
                         Spacer()
-                        Text(language.text("onboarding.beta")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(language.text("onboarding.beta"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
                     }
                     ForEach(ExploitSupportPolicy.verifiedIOS27Builds, id: \.build) { v in
                         let betaLabel = language.text("onboarding.developer_beta", "\(v.beta)")
@@ -250,20 +257,20 @@ struct OnboardingView: View {
                             }
                         }
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(TotoroxTheme.textSecondary)
                         .padding(.leading, 24)
                     }
                 }
                 .padding(12)
                 .background(
-                    Color(uiColor: .secondarySystemBackground),
+                    TotoroxTheme.cardBackground,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
             }
 
             Text(language.text("onboarding.versions_footer", AppInfo.osVersion, AppInfo.osBuild))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TotoroxTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -277,11 +284,12 @@ struct OnboardingView: View {
             VStack(spacing: 8) {
                 Text(language.text("onboarding.install_title"))
                     .font(.title3.weight(.bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(language.text("onboarding.install_message"))
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -293,13 +301,13 @@ struct OnboardingView: View {
             }
             .padding(14)
             .background(
-                Color(uiColor: .secondarySystemBackground),
+                TotoroxTheme.cardBackground,
                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
 
             Text(language.text("onboarding.install_footer"))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TotoroxTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -309,7 +317,7 @@ struct OnboardingView: View {
     private func featureIcon(systemName: String, color: Color) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemBackground))
+                .fill(TotoroxTheme.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(color.opacity(0.3), lineWidth: 1)
@@ -326,11 +334,13 @@ struct OnboardingView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 Image(systemName: icon).foregroundStyle(color)
-                Text(title).fontWeight(.semibold)
+                Text(title)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(TotoroxTheme.textPrimary)
                 Spacer()
                 Text(value)
                     .font(.subheadline.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 10) {
@@ -338,17 +348,17 @@ struct OnboardingView: View {
                         .foregroundStyle(color)
                     Text(title)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(TotoroxTheme.textPrimary)
                 }
                 Text(value)
                     .font(.subheadline.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TotoroxTheme.textSecondary)
                     .padding(.leading, 26)
             }
         }
         .font(.subheadline)
         .padding(12)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(TotoroxTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func installBullet(icon: String, text: String, color: Color) -> some View {
@@ -360,7 +370,7 @@ struct OnboardingView: View {
                 .accessibilityHidden(true)
             Text(text)
                 .font(.subheadline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(TotoroxTheme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -381,9 +391,9 @@ struct OnboardingView: View {
         .padding(.top, 12)
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity)
-        .background(.bar)
+        .background(TotoroxTheme.cardBackground)
         .overlay(alignment: .top) {
-            Divider()
+            Divider().overlay(TotoroxTheme.dividerColor)
         }
     }
 

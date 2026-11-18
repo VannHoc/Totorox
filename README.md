@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <b>Phiên bản:</b> 1.1 &nbsp;|&nbsp;
+  <b>Phiên bản:</b> 3.0 &nbsp;|&nbsp;
   <b>Người sáng lập:</b> VannHoc &nbsp;|&nbsp;
   <b>Bundle Identifier:</b> <code>com.apple.mobile.MobileHouseArrest</code>
 </p>

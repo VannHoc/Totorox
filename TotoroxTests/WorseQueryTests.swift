@@ -1,0 +1,306 @@
+import XCTest
+@testable import Totorox
+
+/// Tests for the Tier 4 (`worse_query`) path helpers and the Tier 1 -> Tier 4
+/// fallback state machine.
+///
+/// These never touch the private ContainerManager API: the C helpers under test
+/// only manipulate a temporary directory, so everything runs on the simulator.
+final class WorseQueryTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wq-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let root = root {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try super.tearDownWithError()
+    }
+
+    // MARK: - Helpers
+
+    private func cachesPath() -> String {
+        root.appendingPathComponent("group/Library/Caches", isDirectory: true).path
+    }
+
+    private func makeCachesDirectory() throws {
+        try FileManager.default.createDirectory(
+            atPath: cachesPath(),
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func makeTarget(_ name: String) throws -> String {
+        let url = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.path
+    }
+
+    private func swap(_ caches: String, _ target: String, requireExists: Bool) -> Bool {
+        WorseQuery.swapCaches(at: caches, to: target, requireTargetExists: requireExists)
+    }
+
+    private func restore(_ caches: String) -> Bool {
+        WorseQuery.restoreCaches(at: caches)
+    }
+
+    private func recover(_ caches: String) -> Bool {
+        WorseQuery.recoverCaches(at: caches)
+    }
+
+    private func isSymlink(_ path: String) -> Bool {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        return (attributes?[.type] as? FileAttributeType) == .typeSymbolicLink
+    }
+
+    private func isDirectory(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        return exists && isDir.boolValue
+    }
+
+    // MARK: - Swap
+
+    func testSwapCreatesSymlinkToTarget() throws {
+        try makeCachesDirectory()
+        let target = try makeTarget("target")
+
+        XCTAssertTrue(swap(cachesPath(), target, requireExists: true))
+        XCTAssertTrue(isSymlink(cachesPath()))
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: cachesPath()),
+            target
+        )
+    }
+
+    func testSwapRejectsMissingTargetWhenRequired() throws {
+        try makeCachesDirectory()
+
+        let missing = root.appendingPathComponent("does-not-exist").path
+        XCTAssertFalse(swap(cachesPath(), missing, requireExists: true))
+        XCTAssertTrue(isDirectory(cachesPath()))
+        XCTAssertFalse(isSymlink(cachesPath()))
+    }
+
+    func testSwapAllowsMissingTargetWhenNotRequired() throws {
+        try makeCachesDirectory()
+        let missing = root.appendingPathComponent("not-created-yet").path
+
+        XCTAssertTrue(swap(cachesPath(), missing, requireExists: false))
+        XCTAssertTrue(isSymlink(cachesPath()))
+    }
+
+    func testSwapReplacesStaleSymlink() throws {
+        try makeCachesDirectory()
+        let first = try makeTarget("first")
+        let second = try makeTarget("second")
+
+        XCTAssertTrue(swap(cachesPath(), first, requireExists: true))
+        XCTAssertTrue(swap(cachesPath(), second, requireExists: true))
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: cachesPath()),
+            second
+        )
+    }
+
+    func testSwapRejectsRelativePaths() throws {
+        XCTAssertFalse(swap("relative/Caches", "/tmp", requireExists: false))
+        XCTAssertFalse(swap(cachesPath(), "relative", requireExists: false))
+    }
+
+    // MARK: - Restore / recover
+
+    func testRestoreRebuildsRealDirectory() throws {
+        try makeCachesDirectory()
+        let target = try makeTarget("target")
+        XCTAssertTrue(swap(cachesPath(), target, requireExists: true))
+
+        XCTAssertTrue(restore(cachesPath()))
+        XCTAssertTrue(isDirectory(cachesPath()))
+        XCTAssertFalse(isSymlink(cachesPath()))
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: cachesPath()),
+            [String]()
+        )
+    }
+
+    func testRestoreCreatesMissingDirectory() throws {
+        XCTAssertTrue(restore(cachesPath()))
+        XCTAssertTrue(isDirectory(cachesPath()))
+    }
+
+    func testRecoverIsIdempotentOnHealthyDirectory() throws {
+        try makeCachesDirectory()
+
+        XCTAssertTrue(recover(cachesPath()))
+        XCTAssertTrue(recover(cachesPath()))
+        XCTAssertTrue(recover(cachesPath()))
+        XCTAssertTrue(isDirectory(cachesPath()))
+    }
+
+    func testRecoverRepairsStaleSymlink() throws {
+        try makeCachesDirectory()
+        let target = try makeTarget("target")
+        XCTAssertTrue(swap(cachesPath(), target, requireExists: true))
+        XCTAssertTrue(isSymlink(cachesPath()))
+
+        XCTAssertTrue(recover(cachesPath()))
+        XCTAssertTrue(isDirectory(cachesPath()))
+        XCTAssertFalse(isSymlink(cachesPath()))
+    }
+
+    func testRecoverCreatesMissingDirectory() throws {
+        XCTAssertTrue(recover(cachesPath()))
+        XCTAssertTrue(isDirectory(cachesPath()))
+    }
+
+    // MARK: - Error helpers
+
+    func testErrorNamesAreStable() {
+        XCTAssertEqual(WorseQuery.errorName(-1), "WQ_ERR_NO_GROUP_CONTAINER")
+        XCTAssertEqual(WorseQuery.errorName(-2), "WQ_ERR_API_UNAVAILABLE")
+        XCTAssertEqual(WorseQuery.errorName(-4), "WQ_ERR_SYMLINK")
+        XCTAssertEqual(WorseQuery.errorName(0), "OK")
+    }
+
+    // MARK: - Eligibility
+
+    func testEligibilityBoundary() {
+        XCTAssertFalse(WorseQuery.isEligible(majorVersion: 18))
+        XCTAssertFalse(WorseQuery.isEligible(majorVersion: 25))
+        XCTAssertTrue(WorseQuery.isEligible(majorVersion: 26))
+        XCTAssertTrue(WorseQuery.isEligible(majorVersion: 27))
+    }
+
+    // MARK: - bad_query access verification
+
+    func testBadQueryAccessErrorFlagsOnlySandboxDenials() {
+        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: EPERM), -Int64(EPERM))
+        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: EACCES), -Int64(EACCES))
+        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: ENOENT), 0)
+        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: ENOTDIR), 0)
+        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: 0), 0)
+    }
+
+    func testPermissionDeniedKeepsTierOneUnmemoizedUntilTierFourSucceeds() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-Int64(EACCES))
+
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.lastBadQueryError, -Int64(EACCES))
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+
+        state.noteWorseQuerySuccess()
+        XCTAssertTrue(state.badQueryBlocked)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
+    }
+
+    // MARK: - Tier state machine
+
+    func testTierOneFailureAloneDoesNotBlockTierOne() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.lastBadQueryError, -5)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+    }
+
+    func testTierOneIsMemoizedAfterTierFourSucceeds() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+        state.noteWorseQuerySuccess()
+
+        XCTAssertTrue(state.badQueryBlocked)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
+    }
+
+    func testMemoStaysOffWhenTierFourAlsoFails() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+
+        // No noteWorseQuerySuccess() -> Tier 1 keeps being tried.
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+    }
+
+    func testTierFourAbsentKeepsTierOneOnly() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+        state.noteWorseQuerySuccess()
+
+        // Memo is on, but with Tier 4 unusable Tier 1 is the only option left:
+        // the grant must still be attempted instead of failing outright.
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: false), [.badQuery])
+    }
+
+    func testTierOneSuccessClearsStaleFailureEvidence() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+        XCTAssertEqual(state.lastBadQueryError, -5)
+
+        // A later path worked with Tier 1, so the old failure must not be blamed
+        // on a future Tier 4 success.
+        state.noteBadQuerySuccess()
+        XCTAssertEqual(state.lastBadQueryError, 0)
+
+        state.noteWorseQuerySuccess()
+        XCTAssertFalse(state.badQueryBlocked)
+    }
+
+    func testResetClearsMemo() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-5)
+        state.noteWorseQuerySuccess()
+        XCTAssertTrue(state.badQueryBlocked)
+
+        state.reset()
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.lastBadQueryError, 0)
+    }
+
+    // MARK: - Variant retry policy
+
+    func testRetryPolicySkipsDeterministicFailures() {
+        // Retried: missing target, daemon denial without result/token.
+        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-255))
+        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-5))
+        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-6))
+
+        // Not retried: flags cannot fix these.
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-1))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-2))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-3))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-4))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-7))
+
+        // Unknown negatives keep the reference behaviour (retry).
+        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-42))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(0))
+    }
+
+    // MARK: - Ancestor resolution
+
+    func testNearestExistingAncestorWalksUpMissingSubtree() throws {
+        let existingDir = root.appendingPathComponent("container/Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingDir, withIntermediateDirectories: true)
+
+        let missingLeaf = existingDir
+            .appendingPathComponent("Resources/1.64.1/Patch/Hero.bytes")
+        XCTAssertEqual(
+            URL(fileURLWithPath: SandboxGrantRouter.nearestExistingAncestor(of: missingLeaf.path)).standardizedFileURL.path,
+            existingDir.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            URL(fileURLWithPath: SandboxGrantRouter.nearestExistingAncestor(of: existingDir.path + "/")).standardizedFileURL.path,
+            existingDir.standardizedFileURL.path
+        )
+    }
+}

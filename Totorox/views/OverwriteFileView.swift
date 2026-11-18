@@ -42,6 +42,7 @@ struct OverwriteFileView: View {
     // Scanner & Navigation Coordinator
     @ObservedObject private var scanner = AppContainerScanner.shared
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     
     // Form validation
     private var isReadyToExecute: Bool {
@@ -85,9 +86,11 @@ struct OverwriteFileView: View {
         }
         .sheet(isPresented: $showInstalledAppsSheet) {
             installedAppsPickerSheet
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(isPresented: $showCustomFolderSheet) {
             customFolderPickerSheet
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(isPresented: $showDocumentPicker) {
             DocumentPickerWrapper(
@@ -100,11 +103,13 @@ struct OverwriteFileView: View {
             ) { url in
                 handleSelectedPatch(url: url)
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(item: $outcomeResult) { wrapper in
             OverwriteOutcomeView(result: wrapper.result) {
                 outcomeResult = nil
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
@@ -247,10 +252,17 @@ struct OverwriteFileView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(TotoroxTheme.textSecondary)
                         
-                        TextField(language.text("overwrite.target_app.bundle_placeholder"), text: $targetBundleIDInput)
-                            .font(.system(size: 13))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
+                        TextField(
+                            "",
+                            text: $targetBundleIDInput,
+                            prompt: Text(language.text("overwrite.target_app.bundle_placeholder"))
+                                .foregroundColor(TotoroxTheme.textSecondary)
+                        )
+                        .font(.system(size: 13))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .tint(TotoroxTheme.mintAccent)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
                         
                         if !targetBundleIDInput.isEmpty {
                             Button(language.text("overwrite.target_app.find")) {
@@ -470,16 +482,28 @@ struct OverwriteFileView: View {
                                 : "overwrite.patch.password_optional_placeholder"
                         )
                         if isShowPassword {
-                            TextField(pwdPlaceholder, text: $patchPassword)
+                            TextField(
+                                "",
+                                text: $patchPassword,
+                                prompt: Text(pwdPlaceholder).foregroundColor(TotoroxTheme.textSecondary)
+                            )
                             .font(.system(size: 13))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .tint(TotoroxTheme.mintAccent)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
                             .onChange(of: patchPassword) { newPass in
                                 tryAutoDetectBundleID(password: newPass)
                             }
                         } else {
-                            SecureField(pwdPlaceholder, text: $patchPassword)
+                            SecureField(
+                                "",
+                                text: $patchPassword,
+                                prompt: Text(pwdPlaceholder).foregroundColor(TotoroxTheme.textSecondary)
+                            )
                             .font(.system(size: 13))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .tint(TotoroxTheme.mintAccent)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
                             .onChange(of: patchPassword) { newPass in
@@ -602,10 +626,10 @@ struct OverwriteFileView: View {
                         .font(.system(size: 15, weight: .bold))
                 }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle((isReadyToExecute || isExecuting) ? .white : TotoroxTheme.disabledText)
             .frame(maxWidth: .infinity)
             .frame(height: 50)
-            .background(isReadyToExecute ? TotoroxTheme.mintAccent : Color.gray.opacity(0.35))
+            .background((isReadyToExecute || isExecuting) ? TotoroxTheme.mintAccent : TotoroxTheme.disabledBackground)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .shadow(color: isReadyToExecute ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, y: 4)
         }
@@ -620,10 +644,17 @@ struct OverwriteFileView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(TotoroxTheme.textSecondary)
-                    TextField(language.text("overwrite.apps_sheet.search_placeholder"), text: $appSearchQuery)
-                        .font(.system(size: 14))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
+                    TextField(
+                        "",
+                        text: $appSearchQuery,
+                        prompt: Text(language.text("overwrite.apps_sheet.search_placeholder"))
+                            .foregroundColor(TotoroxTheme.textSecondary)
+                    )
+                    .font(.system(size: 14))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .tint(TotoroxTheme.mintAccent)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
                     
                     if !appSearchQuery.isEmpty {
                         Button {
@@ -701,11 +732,16 @@ struct OverwriteFileView: View {
                                 .padding(.vertical, 4)
                             }
                             .buttonStyle(.plain)
+                            .listRowBackground(TotoroxTheme.cardBackground)
+                            .listRowSeparatorTint(TotoroxTheme.dividerColor)
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(TotoroxTheme.pageBackground)
                 }
             }
+            .background(TotoroxTheme.pageBackground)
             .navigationTitle(language.text("overwrite.apps_sheet.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1393,7 +1429,7 @@ struct OverwriteFileView: View {
             var actError: NSString? = nil
             let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
             let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
-            _ = ContainerStore.ensureContainerAccess(for: rootPath)
+            _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
 
             let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().standardizedFileURL
             let destinationDir = containerBase
@@ -1407,7 +1443,7 @@ struct OverwriteFileView: View {
                 }
                 return
             }
-            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
+            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path, requireWrite: true)
 
             // Đảm bảo thư mục đích tồn tại
             do {

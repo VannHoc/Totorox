@@ -5,8 +5,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var license = LicenseManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     @Environment(\.appLanguage) private var language
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
+    @AppStorage(WorseQuery.enabledDefaultsKey) private var useWorseQuery = true
     @State private var showLogs = false
     @State private var showClearCacheAlert = false
     @State private var cacheClearedMessage = false
@@ -15,7 +17,7 @@ struct SettingsView: View {
     @State private var showLogoutConfirm = false
 
     private var appVersionDisplay: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.0"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.0"
         return language.text("common.version", version)
     }
 
@@ -66,8 +68,48 @@ struct SettingsView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    // Language Selection
+                    // Appearance (Light / Dark Mode) & Language Selection
                     VStack(alignment: .leading, spacing: 14) {
+                        Text(language.text("settings.section_appearance"))
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+
+                        HStack(spacing: 10) {
+                            ForEach(AppThemeMode.allCases) { mode in
+                                let isSelected = (themeManager.mode == mode)
+                                Button {
+                                    guard themeManager.mode != mode else { return }
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    withAnimation(.easeInOut(duration: 0.22)) {
+                                        themeManager.mode = mode
+                                    }
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: mode.iconName)
+                                            .font(.system(size: 15, weight: .semibold))
+                                        Text(mode.displayTitle(for: language))
+                                            .font(.system(size: 13.5, weight: .bold))
+                                            .lineLimit(1)
+                                    }
+                                    .foregroundStyle(isSelected ? .white : TotoroxTheme.textPrimary)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 42)
+                                    .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(
+                                                isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.cardBorderColor,
+                                                lineWidth: 1
+                                            )
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        Divider()
+
                         Text(language.text("settings.section_language"))
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textSecondary)
@@ -114,7 +156,14 @@ struct SettingsView: View {
                         Divider()
                         settingsRow(label: language.text("settings.file_io_rule"), value: language.text("settings.file_io_rule_value"), icon: "bolt.fill")
                         Divider()
-                        settingsRow(label: language.text("settings.theme_mode"), value: language.text("settings.theme_mode_value"), icon: "sun.max.fill")
+                        settingsRow(
+                            label: language.text("settings.theme_mode"),
+                            value: themeManager.mode.displayTitle(for: language),
+                            icon: themeManager.mode.iconName,
+                            isAccent: true
+                        )
+                        Divider()
+                        worseQueryRow
                     }
                     .totoroxCard()
 
@@ -213,10 +262,11 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showLogs) {
                 LogView()
+                    .preferredColorScheme(themeManager.mode.colorScheme)
             }
             .sheet(isPresented: $showRedeemSheet) {
                 RedeemCodeSheet()
-                    .preferredColorScheme(.light)
+                    .preferredColorScheme(themeManager.mode.colorScheme)
             }
             .alert(language.text("settings.clear_cache_confirm_title"), isPresented: $showClearCacheAlert) {
                 Button(language.text("common.delete"), role: .destructive) {
@@ -472,6 +522,38 @@ struct SettingsView: View {
         }
     }
 
+    private var worseQueryRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 16))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(language.text("settings.worse_query_label"))
+                    .font(.system(size: 14))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                Text(language.text(WorseQuery.statusLocalizationKey(enabled: useWorseQuery)))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: $useWorseQuery)
+                .labelsHidden()
+                .tint(TotoroxTheme.mintAccent)
+                .onChange(of: useWorseQuery) { _ in
+                    // Re-evaluate Tier 4 immediately and forget the
+                    // "bad_query is blocked" memo, so turning the toggle off
+                    // restores the old behaviour without a relaunch.
+                    // (`resetBlockedState` also drops the cached group.)
+                    SandboxGrantRouter.resetBlockedState()
+                }
+        }
+        .padding(.vertical, 2)
+    }
+
     private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false, isVertical: Bool = false) -> some View {
         Group {
             if isVertical {
@@ -528,6 +610,7 @@ struct SettingsView: View {
                 }
             }
             ContainerMetadataCache.shared.clear()
+            ModStoreCache.shared.clearAll()
             await MainActor.run {
                 self.cacheClearedMessage = true
             }

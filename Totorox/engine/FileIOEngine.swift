@@ -95,6 +95,25 @@ private final class FileIOConflictSession: @unchecked Sendable {
     }
 }
 
+private final class FileIOBatchContext {
+    let bufferSize: Int = 512 * 1024
+    let buffer: UnsafeMutablePointer<UInt8>
+    let syncEachFile: Bool
+    var createdDirectories = Set<String>()
+    var verifiedSafeAncestors = Set<String>()
+    var verifiedReadPaths = Set<String>()
+    var verifiedWritePaths = Set<String>()
+
+    init(syncEachFile: Bool = false) {
+        self.buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 512 * 1024)
+        self.syncEachFile = syncEachFile
+    }
+
+    deinit {
+        buffer.deallocate()
+    }
+}
+
 public final class FileIOEngine: @unchecked Sendable {
     public static let shared = FileIOEngine()
     private let fileManager: FileManager
@@ -146,20 +165,37 @@ public final class FileIOEngine: @unchecked Sendable {
 
         let workerTask = Task.detached(priority: .userInitiated) { [self] () -> FileIOResult in
             var result = FileIOResult()
+            let batchContext = FileIOBatchContext(syncEachFile: false)
             let standardizedSource = sourceURL.standardizedFileURL
             let initialDest = destinationURL.standardizedFileURL
 
-            _ = ContainerStore.ensureContainerAccess(for: standardizedSource.path)
-            _ = ContainerStore.ensureContainerAccess(for: initialDest.path)
+            _ = ContainerStore.ensureContainerAccess(for: standardizedSource.path, requireWrite: false)
+            batchContext.verifiedReadPaths.insert(standardizedSource.path)
+            _ = ContainerStore.ensureContainerAccess(for: initialDest.path, requireWrite: true)
+            batchContext.verifiedWritePaths.insert(initialDest.path)
 
             var isDir: ObjCBool = false
             var st = stat()
             let exists: Bool
-            if self.fileManager.fileExists(atPath: standardizedSource.path, isDirectory: &isDir) {
-                exists = true
-            } else if lstat(standardizedSource.path, &st) == 0 {
+            if lstat(standardizedSource.path, &st) == 0 {
+                if (st.st_mode & S_IFMT) == S_IFLNK {
+                    result.failed.append(FileIOFailureRecord(
+                        url: standardizedSource,
+                        reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                    ))
+                    return result
+                }
                 exists = true
                 isDir = ObjCBool((st.st_mode & S_IFMT) == S_IFDIR)
+            } else if self.fileManager.fileExists(atPath: standardizedSource.path, isDirectory: &isDir) {
+                if Self.isSymbolicLink(at: standardizedSource) {
+                    result.failed.append(FileIOFailureRecord(
+                        url: standardizedSource,
+                        reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                    ))
+                    return result
+                }
+                exists = true
             } else {
                 exists = false
             }
@@ -169,23 +205,22 @@ public final class FileIOEngine: @unchecked Sendable {
                 return result
             }
 
-            if Self.isSymbolicLink(at: standardizedSource) {
-                result.failed.append(FileIOFailureRecord(
-                    url: standardizedSource,
-                    reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
-                ))
-                return result
-            }
-
             // Guard against copying a single file into a parent directory path without appending the filename.
             // Only treat it as a type collision (.fileOverwritingFolder) if the names genuinely collide or
             // destination is NOT a different-named parent directory.
             var resolvedDest = initialDest
             if !isDir.boolValue {
-                var destIsDir: ObjCBool = false
-                if self.fileManager.fileExists(atPath: initialDest.path, isDirectory: &destIsDir),
-                   destIsDir.boolValue,
-                   initialDest.lastPathComponent != standardizedSource.lastPathComponent {
+                var destSt = stat()
+                var destIsDir = false
+                if lstat(initialDest.path, &destSt) == 0 {
+                    destIsDir = (destSt.st_mode & S_IFMT) == S_IFDIR
+                } else {
+                    var fmDir: ObjCBool = false
+                    if self.fileManager.fileExists(atPath: initialDest.path, isDirectory: &fmDir) {
+                        destIsDir = fmDir.boolValue
+                    }
+                }
+                if destIsDir, initialDest.lastPathComponent != standardizedSource.lastPathComponent {
                     resolvedDest = initialDest.appendingPathComponent(standardizedSource.lastPathComponent)
                 }
             }
@@ -226,7 +261,8 @@ public final class FileIOEngine: @unchecked Sendable {
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
-                conflictResolver: conflictResolver
+                conflictResolver: conflictResolver,
+                batchContext: batchContext
             )
 
             return result
@@ -248,7 +284,8 @@ public final class FileIOEngine: @unchecked Sendable {
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
-        conflictResolver: FileIOConflictResolver
+        conflictResolver: FileIOConflictResolver,
+        batchContext: FileIOBatchContext? = nil
     ) async {
         defer {
             let totalDone = result.succeeded.count + result.skipped.count + result.failed.count
@@ -269,40 +306,60 @@ public final class FileIOEngine: @unchecked Sendable {
         }
 
         let exactDestination = destination.standardizedFileURL
-        _ = ContainerStore.ensureContainerAccess(for: exactDestination.path)
-
-        var destIsDir: ObjCBool = false
-        var destStat = stat()
-        let destExists: Bool
-        if fileManager.fileExists(atPath: exactDestination.path, isDirectory: &destIsDir) {
-            destExists = true
-        } else if lstat(exactDestination.path, &destStat) == 0 {
-            destExists = true
-            destIsDir = ObjCBool((destStat.st_mode & S_IFMT) == S_IFDIR)
+        if let ctx = batchContext {
+            let parentPath = exactDestination.deletingLastPathComponent().path
+            if !ctx.verifiedWritePaths.contains(parentPath) {
+                _ = ContainerStore.ensureContainerAccess(for: exactDestination.path, requireWrite: true)
+                ctx.verifiedWritePaths.insert(parentPath)
+            }
         } else {
-            destExists = false
+            _ = ContainerStore.ensureContainerAccess(for: exactDestination.path, requireWrite: true)
         }
 
-        if destExists, Self.isSymbolicLink(at: exactDestination) {
-            result.failed.append(FileIOFailureRecord(
-                url: exactDestination,
-                reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
-            ))
-            return
+        var destIsDir = false
+        var destExists = false
+        var destStat = stat()
+        if lstat(exactDestination.path, &destStat) == 0 {
+            if (destStat.st_mode & S_IFMT) == S_IFLNK {
+                result.failed.append(FileIOFailureRecord(
+                    url: exactDestination,
+                    reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                ))
+                return
+            }
+            destExists = true
+            destIsDir = (destStat.st_mode & S_IFMT) == S_IFDIR
+        } else {
+            var fmDir: ObjCBool = false
+            if fileManager.fileExists(atPath: exactDestination.path, isDirectory: &fmDir) {
+                if Self.isSymbolicLink(at: exactDestination) {
+                    result.failed.append(FileIOFailureRecord(
+                        url: exactDestination,
+                        reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                    ))
+                    return
+                }
+                destExists = true
+                destIsDir = fmDir.boolValue
+            }
         }
-        if Self.isSymbolicLink(at: exactDestination.deletingLastPathComponent()) {
-            result.failed.append(FileIOFailureRecord(
-                url: exactDestination,
-                reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
-            ))
-            return
+
+        let destParent = exactDestination.deletingLastPathComponent()
+        if !(batchContext?.verifiedSafeAncestors.contains(destParent.path) ?? false) {
+            if Self.isSymbolicLink(at: destParent) {
+                result.failed.append(FileIOFailureRecord(
+                    url: exactDestination,
+                    reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                ))
+                return
+            }
         }
 
         if !destExists {
             // Final destination path does NOT exist on disk -> copy/create directly without any conflict prompt
             if sourceIsDir {
                 do {
-                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    try Self.createDirectoryIfNeeded(at: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
@@ -316,11 +373,12 @@ public final class FileIOEngine: @unchecked Sendable {
                     result: &result,
                     cancelState: cancelState,
                     progressHandler: progressHandler,
-                    conflictResolver: conflictResolver
+                    conflictResolver: conflictResolver,
+                    batchContext: batchContext
                 )
             } else {
                 do {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
@@ -330,7 +388,7 @@ public final class FileIOEngine: @unchecked Sendable {
         }
 
         // Exact destination path EXISTS on disk:
-        if sourceIsDir && destIsDir.boolValue {
+        if sourceIsDir && destIsDir {
             // 1. Folder -> Folder: Automatically merge recursively (NEVER prompt for conflict)
             result.succeeded.append(exactDestination)
             await copyChildrenRecursively(
@@ -340,16 +398,17 @@ public final class FileIOEngine: @unchecked Sendable {
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
-                conflictResolver: conflictResolver
+                conflictResolver: conflictResolver,
+                batchContext: batchContext
             )
             return
         }
 
-        if !sourceIsDir && !destIsDir.boolValue {
+        if !sourceIsDir && !destIsDir {
             // 2. File -> File collision
             if conflictSession.shouldReplaceAllConflicts {
                 do {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
@@ -361,7 +420,7 @@ public final class FileIOEngine: @unchecked Sendable {
             switch userChoice {
             case .replace:
                 do {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
@@ -370,7 +429,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 conflictSession.enableReplaceAll()
                 self.shouldReplaceAllConflicts = true
                 do {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
@@ -389,7 +448,7 @@ public final class FileIOEngine: @unchecked Sendable {
             do {
                 try removeExistingItem(at: exactDestination)
                 if sourceIsDir {
-                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    try Self.createDirectoryIfNeeded(at: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                     await copyChildrenRecursively(
                         from: source,
@@ -398,10 +457,11 @@ public final class FileIOEngine: @unchecked Sendable {
                         result: &result,
                         cancelState: cancelState,
                         progressHandler: progressHandler,
-                        conflictResolver: conflictResolver
+                        conflictResolver: conflictResolver,
+                        batchContext: batchContext
                     )
                 } else {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 }
             } catch {
@@ -410,7 +470,7 @@ public final class FileIOEngine: @unchecked Sendable {
             return
         }
 
-        let conflictKind: FileIOConflictKind = (!sourceIsDir && destIsDir.boolValue)
+        let conflictKind: FileIOConflictKind = (!sourceIsDir && destIsDir)
             ? .fileOverwritingFolder
             : .folderOverwritingFile
 
@@ -424,7 +484,7 @@ public final class FileIOEngine: @unchecked Sendable {
             do {
                 try removeExistingItem(at: exactDestination)
                 if sourceIsDir {
-                    try Self.createDirectoryIfNeeded(at: exactDestination)
+                    try Self.createDirectoryIfNeeded(at: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                     await copyChildrenRecursively(
                         from: source,
@@ -433,10 +493,11 @@ public final class FileIOEngine: @unchecked Sendable {
                         result: &result,
                         cancelState: cancelState,
                         progressHandler: progressHandler,
-                        conflictResolver: conflictResolver
+                        conflictResolver: conflictResolver,
+                        batchContext: batchContext
                     )
                 } else {
-                    try copySingleFile(from: source, to: exactDestination)
+                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 }
             } catch {
@@ -457,65 +518,83 @@ public final class FileIOEngine: @unchecked Sendable {
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
-        conflictResolver: FileIOConflictResolver
+        conflictResolver: FileIOConflictResolver,
+        batchContext: FileIOBatchContext? = nil
     ) async {
-        let contents: [URL]
-        if let fmContents = try? fileManager.contentsOfDirectory(
-            at: sourceDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        ) {
-            contents = fmContents
-        } else if let posixDir = opendir(sourceDir.path) {
+        // Fast POSIX opendir/readdir yields child names and d_type in one pass without Foundation URL allocation per attribute.
+        var children: [(url: URL, isDir: Bool, isSymlink: Bool)] = []
+        if let posixDir = opendir(sourceDir.path) {
             defer { closedir(posixDir) }
-            var urls: [URL] = []
             while let dp = readdir(posixDir) {
                 let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
                     String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
                 }
                 if name == "." || name == ".." { continue }
-                urls.append(sourceDir.appendingPathComponent(name))
+                let childURL = sourceDir.appendingPathComponent(name)
+                let dtype = Int32(dp.pointee.d_type)
+                if dtype == Int32(DT_LNK) {
+                    children.append((childURL, false, true))
+                } else if dtype == Int32(DT_DIR) {
+                    children.append((childURL, true, false))
+                } else if dtype == Int32(DT_REG) {
+                    children.append((childURL, false, false))
+                } else {
+                    var st = stat()
+                    if lstat(childURL.path, &st) == 0 {
+                        let ftype = st.st_mode & S_IFMT
+                        children.append((childURL, ftype == S_IFDIR, ftype == S_IFLNK))
+                    } else {
+                        var isDirObj: ObjCBool = false
+                        if fileManager.fileExists(atPath: childURL.path, isDirectory: &isDirObj) {
+                            children.append((childURL, isDirObj.boolValue, Self.isSymbolicLink(at: childURL)))
+                        } else {
+                            result.failed.append(FileIOFailureRecord(url: childURL, reason: "Source child inaccessible."))
+                        }
+                    }
+                }
             }
-            contents = urls
+        } else if let fmContents = try? fileManager.contentsOfDirectory(
+            at: sourceDir,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        ) {
+            for childURL in fmContents {
+                let rv = try? childURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let isLink = rv?.isSymbolicLink ?? Self.isSymbolicLink(at: childURL)
+                let isDir = rv?.isDirectory ?? false
+                children.append((childURL, isDir, isLink))
+            }
         } else {
             result.failed.append(FileIOFailureRecord(url: sourceDir, reason: "Unable to read source directory contents."))
             return
         }
 
-        for childSource in contents {
+        for child in children {
             if cancelState.isCancelled || result.isCancelled {
                 result.isCancelled = true
-                result.skipped.append(childSource)
+                result.skipped.append(child.url)
                 continue
             }
 
-            var isDir: ObjCBool = false
-            var st = stat()
-            let childExists: Bool
-            if fileManager.fileExists(atPath: childSource.path, isDirectory: &isDir) {
-                childExists = true
-            } else if lstat(childSource.path, &st) == 0 {
-                childExists = true
-                isDir = ObjCBool((st.st_mode & S_IFMT) == S_IFDIR)
-            } else {
-                childExists = false
-            }
-
-            guard childExists else {
-                result.failed.append(FileIOFailureRecord(url: childSource, reason: "Source child inaccessible."))
+            if child.isSymlink {
+                result.failed.append(FileIOFailureRecord(
+                    url: child.url,
+                    reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                ))
                 continue
             }
 
-            let childDest = destinationDir.appendingPathComponent(childSource.lastPathComponent)
+            let childDest = destinationDir.appendingPathComponent(child.url.lastPathComponent)
             await processItem(
-                source: childSource,
-                sourceIsDir: isDir.boolValue,
+                source: child.url,
+                sourceIsDir: child.isDir,
                 destination: childDest,
                 conflictSession: conflictSession,
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
-                conflictResolver: conflictResolver
+                conflictResolver: conflictResolver,
+                batchContext: batchContext
             )
 
             if result.isCancelled {
@@ -533,20 +612,43 @@ public final class FileIOEngine: @unchecked Sendable {
         from source: URL,
         to destination: URL
     ) throws {
+        try copySingleFile(from: source, to: destination, batchContext: nil)
+    }
+
+    private func copySingleFile(
+        from source: URL,
+        to destination: URL,
+        batchContext: FileIOBatchContext?
+    ) throws {
         // A copy onto itself must never truncate the source through the staging/overwrite fallbacks.
         guard source.standardizedFileURL != destination.standardizedFileURL else { return }
 
         let parentDir = destination.deletingLastPathComponent()
-        _ = ContainerStore.ensureContainerAccess(for: source.path)
-        _ = ContainerStore.ensureContainerAccess(for: destination.path)
-        _ = ContainerStore.ensureContainerAccess(for: parentDir.path)
-        try Self.validateNoSymbolicLinks(at: source, includeParent: true)
-        try Self.validateNoSymbolicLinks(at: destination, includeParent: true)
-        try Self.createDirectoryIfNeeded(at: parentDir)
+        if let ctx = batchContext {
+            let srcParentPath = source.deletingLastPathComponent().path
+            if !ctx.verifiedReadPaths.contains(srcParentPath) {
+                _ = ContainerStore.ensureContainerAccess(for: source.path, requireWrite: false)
+                ctx.verifiedReadPaths.insert(srcParentPath)
+            }
+            if !ctx.verifiedWritePaths.contains(parentDir.path) {
+                _ = ContainerStore.ensureContainerAccess(for: destination.path, requireWrite: true)
+                _ = ContainerStore.ensureContainerAccess(for: parentDir.path, requireWrite: true)
+                ctx.verifiedWritePaths.insert(parentDir.path)
+            }
+        } else {
+            _ = ContainerStore.ensureContainerAccess(for: source.path, requireWrite: false)
+            _ = ContainerStore.ensureContainerAccess(for: destination.path, requireWrite: true)
+            _ = ContainerStore.ensureContainerAccess(for: parentDir.path, requireWrite: true)
+        }
+
+        try Self.validateNoSymbolicLinks(at: source, includeParent: true, batchContext: batchContext)
+        try Self.validateNoSymbolicLinks(at: destination, includeParent: true, batchContext: batchContext)
+        try Self.createDirectoryIfNeeded(at: parentDir, batchContext: batchContext)
 
         var preservedMode: mode_t = 0o644
         var targetStat = stat()
-        if lstat(destination.path, &targetStat) == 0 {
+        let targetExisted = (lstat(destination.path, &targetStat) == 0)
+        if targetExisted {
             let existingPerms = targetStat.st_mode & 0o7777
             if existingPerms != 0 {
                 preservedMode = existingPerms | mode_t(S_IWUSR)
@@ -557,22 +659,25 @@ public final class FileIOEngine: @unchecked Sendable {
                 preservedMode = sourcePerms | mode_t(S_IWUSR)
             }
         }
-        let existingAttrs = try? fileManager.attributesOfItem(atPath: destination.path)
-        let protection = existingAttrs?[.protectionKey] as? FileProtectionType
+        let protection: FileProtectionType? = targetExisted
+            ? (try? fileManager.attributesOfItem(atPath: destination.path))?[.protectionKey] as? FileProtectionType
+            : nil
 
         let stagingURL = parentDir.appendingPathComponent(".totorox-\(UUID().uuidString).tmp")
+        var stagingCommitted = false
         defer {
-            _ = unlink(stagingURL.path)
-            try? fileManager.removeItem(at: stagingURL)
+            if !stagingCommitted {
+                _ = unlink(stagingURL.path)
+            }
         }
 
         // 1. Low-level POSIX stream to sibling staging file + atomic rename
-        if posixCopyStream(from: source.path, to: stagingURL.path, mode: preservedMode) {
-            _ = chmod(stagingURL.path, preservedMode)
+        if posixCopyStream(from: source.path, to: stagingURL.path, mode: preservedMode, batchContext: batchContext) {
             if let protection {
                 try? fileManager.setAttributes([.protectionKey: protection], ofItemAtPath: stagingURL.path)
             }
             if rename(stagingURL.path, destination.path) == 0 {
+                stagingCommitted = true
                 return
             }
         }
@@ -590,12 +695,13 @@ public final class FileIOEngine: @unchecked Sendable {
             try? fileManager.removeItem(at: inPlaceBackupURL)
         }
         var destinationStat = stat()
-        let destinationExisted = fileManager.fileExists(atPath: destination.path)
+        let destinationExisted = targetExisted
+            || fileManager.fileExists(atPath: destination.path)
             || lstat(destination.path, &destinationStat) == 0
         let hasInPlaceBackup = destinationExisted
-            && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode)
+            && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext)
         _ = chmod(destination.path, preservedMode | mode_t(S_IWUSR))
-        if posixCopyStream(from: source.path, to: destination.path, mode: preservedMode) {
+        if posixCopyStream(from: source.path, to: destination.path, mode: preservedMode, batchContext: batchContext) {
             _ = chmod(destination.path, preservedMode)
             if let protection {
                 try? fileManager.setAttributes([.protectionKey: protection], ofItemAtPath: destination.path)
@@ -603,20 +709,22 @@ public final class FileIOEngine: @unchecked Sendable {
             return
         }
         if hasInPlaceBackup {
-            _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode)
+            _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext)
         }
 
         // 4. Direct Data read + POSIX write fallback (never deletes the destination first)
         if let data = ContainerStore.readDataDirectly(atPath: source.path) ?? (try? Data(contentsOf: source)) {
             if posixWriteData(data, to: stagingURL.path, mode: preservedMode),
                rename(stagingURL.path, destination.path) == 0 {
+                stagingCommitted = true
                 return
             }
             var fallbackStat = stat()
-            let fallbackExisted = fileManager.fileExists(atPath: destination.path)
+            let fallbackExisted = destinationExisted
+                || fileManager.fileExists(atPath: destination.path)
                 || lstat(destination.path, &fallbackStat) == 0
             let hasFallbackBackup = fallbackExisted
-                && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode)
+                && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext)
             if posixWriteData(data, to: destination.path, mode: preservedMode) {
                 _ = chmod(destination.path, preservedMode)
                 if let protection {
@@ -625,7 +733,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 return
             }
             if hasFallbackBackup {
-                _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode)
+                _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext)
             }
         }
 
@@ -655,7 +763,12 @@ public final class FileIOEngine: @unchecked Sendable {
         try fileManager.moveItem(at: foundationStagingURL, to: destination)
     }
 
-    private func posixCopyStream(from sourcePath: String, to destinationPath: String, mode: mode_t = 0o644) -> Bool {
+    private func posixCopyStream(
+        from sourcePath: String,
+        to destinationPath: String,
+        mode: mode_t = 0o644,
+        batchContext: FileIOBatchContext? = nil
+    ) -> Bool {
         let srcFD = open(sourcePath, O_RDONLY | O_CLOEXEC)
         guard srcFD >= 0 else { return false }
         defer { close(srcFD) }
@@ -664,9 +777,23 @@ public final class FileIOEngine: @unchecked Sendable {
         guard dstFD >= 0 else { return false }
         defer { close(dstFD) }
 
-        let bufferSize = 256 * 1024
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        defer { buffer.deallocate() }
+        let bufferSize: Int
+        let buffer: UnsafeMutablePointer<UInt8>
+        let ownsBuffer: Bool
+        if let ctx = batchContext {
+            bufferSize = ctx.bufferSize
+            buffer = ctx.buffer
+            ownsBuffer = false
+        } else {
+            bufferSize = 256 * 1024
+            buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+            ownsBuffer = true
+        }
+        defer {
+            if ownsBuffer {
+                buffer.deallocate()
+            }
+        }
 
         while true {
             let bytesRead = read(srcFD, buffer, bufferSize)
@@ -690,7 +817,10 @@ public final class FileIOEngine: @unchecked Sendable {
                 offset += bytesWritten
             }
         }
-        _ = fsync(dstFD)
+        _ = fchmod(dstFD, mode)
+        if batchContext?.syncEachFile ?? true {
+            _ = fsync(dstFD)
+        }
         return true
     }
 
@@ -703,14 +833,22 @@ public final class FileIOEngine: @unchecked Sendable {
     /// Rejects symlinks so a write can never be redirected outside the intended item.
     /// The immediate parent is checked as well, since a symlinked directory would
     /// silently relocate the destination.
-    private static func validateNoSymbolicLinks(at url: URL, includeParent: Bool) throws {
+    private static func validateNoSymbolicLinks(
+        at url: URL,
+        includeParent: Bool,
+        batchContext: FileIOBatchContext? = nil
+    ) throws {
         if isSymbolicLink(at: url) {
             throw FileIOEngineError.symbolicLinkUnsupported
         }
-        if includeParent, isSymbolicLink(at: url.deletingLastPathComponent()) {
+        let parent = url.deletingLastPathComponent()
+        if batchContext?.verifiedSafeAncestors.contains(parent.path) == true {
+            return
+        }
+        if includeParent, isSymbolicLink(at: parent) {
             throw FileIOEngineError.symbolicLinkUnsupported
         }
-        try validateContainerAncestors(of: url)
+        try validateContainerAncestors(of: url, batchContext: batchContext)
     }
 
     /// Walks every path component from the app-container root down to `url` and rejects any
@@ -720,7 +858,7 @@ public final class FileIOEngine: @unchecked Sendable {
     ///
     /// Components *above* the container root are deliberately skipped — `/var` is a symlink to
     /// `/private/var` on stock iOS, so inspecting them would reject every container path.
-    private static func validateContainerAncestors(of url: URL) throws {
+    private static func validateContainerAncestors(of url: URL, batchContext: FileIOBatchContext? = nil) throws {
         let components = url.standardizedFileURL.pathComponents
         guard let applicationIndex = components.firstIndex(of: "Application"),
               applicationIndex >= 2,
@@ -738,6 +876,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 throw FileIOEngineError.symbolicLinkUnsupported
             }
         }
+        batchContext?.verifiedSafeAncestors.insert(url.deletingLastPathComponent().path)
     }
 
     private func posixWriteData(_ data: Data, to path: String, mode: mode_t = 0o644) -> Bool {
@@ -766,7 +905,7 @@ public final class FileIOEngine: @unchecked Sendable {
     }
 
     private func removeExistingItem(at url: URL) throws {
-        _ = ContainerStore.ensureContainerAccess(for: url.path)
+        _ = ContainerStore.ensureContainerAccess(for: url.path, requireWrite: true)
         var isDir: ObjCBool = false
         var st = stat()
         let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDir) || (lstat(url.path, &st) == 0)
@@ -807,11 +946,38 @@ public final class FileIOEngine: @unchecked Sendable {
     }
 
     public static func createDirectoryIfNeeded(at url: URL) throws {
+        try createDirectoryIfNeeded(at: url, batchContext: nil)
+    }
+
+    private static func createDirectoryIfNeeded(
+        at url: URL,
+        batchContext: FileIOBatchContext?
+    ) throws {
+        let path = url.path
+        if let ctx = batchContext, ctx.createdDirectories.contains(path) {
+            return
+        }
+
+        if let ctx = batchContext {
+            if !ctx.verifiedWritePaths.contains(path) {
+                _ = ContainerStore.ensureContainerAccess(for: path, requireWrite: true)
+                ctx.verifiedWritePaths.insert(path)
+            }
+        } else {
+            _ = ContainerStore.ensureContainerAccess(for: path, requireWrite: true)
+        }
+
+        var st = stat()
+        if stat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR {
+            batchContext?.createdDirectories.insert(path)
+            return
+        }
+
         let fm = FileManager.default
-        _ = ContainerStore.ensureContainerAccess(for: url.path)
-        if fm.fileExists(atPath: url.path) { return }
+        if fm.fileExists(atPath: path) { return }
         do {
             try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            batchContext?.createdDirectories.insert(path)
             return
         } catch {
             var currentPath = "/"
@@ -824,6 +990,7 @@ public final class FileIOEngine: @unchecked Sendable {
                     }
                 }
             }
+            batchContext?.createdDirectories.insert(path)
         }
     }
 
@@ -832,7 +999,7 @@ public final class FileIOEngine: @unchecked Sendable {
     public func createFolder(at url: URL) async throws {
         try await Task.detached(priority: .userInitiated) {
             let parent = url.deletingLastPathComponent()
-            _ = ContainerStore.ensureContainerAccess(for: parent.path)
+            _ = ContainerStore.ensureContainerAccess(for: parent.path, requireWrite: true)
             try Self.validateNoSymbolicLinks(at: parent, includeParent: false)
             try Self.createDirectoryIfNeeded(at: url)
         }.value
@@ -870,8 +1037,9 @@ public final class FileIOEngine: @unchecked Sendable {
 
     public func renameItem(at sourceURL: URL, to destinationURL: URL) async throws {
         try await Task.detached(priority: .userInitiated) { [self] in
-            _ = ContainerStore.ensureContainerAccess(for: sourceURL.path)
-            _ = ContainerStore.ensureContainerAccess(for: destinationURL.deletingLastPathComponent().path)
+            _ = ContainerStore.ensureContainerAccess(for: sourceURL.path, requireWrite: true)
+            _ = ContainerStore.ensureContainerAccess(for: sourceURL.deletingLastPathComponent().path, requireWrite: true)
+            _ = ContainerStore.ensureContainerAccess(for: destinationURL.deletingLastPathComponent().path, requireWrite: true)
 
             let source = sourceURL.standardizedFileURL
             let destination = destinationURL.standardizedFileURL
@@ -924,13 +1092,16 @@ public final class FileIOEngine: @unchecked Sendable {
 
         let workerTask = Task.detached(priority: .userInitiated) { [self] () -> FileIOResult in
             var result = FileIOResult()
+            let batchContext = FileIOBatchContext(syncEachFile: false)
             let srcBase = sourceRoot.standardizedFileURL
             let dstBase = destinationRoot.standardizedFileURL
             let srcPrefix = srcBase.path.hasSuffix("/") ? srcBase.path : srcBase.path + "/"
             let dstPrefix = dstBase.path.hasSuffix("/") ? dstBase.path : dstBase.path + "/"
 
-            _ = ContainerStore.ensureContainerAccess(for: srcBase.path)
-            _ = ContainerStore.ensureContainerAccess(for: dstBase.path)
+            _ = ContainerStore.ensureContainerAccess(for: srcBase.path, requireWrite: false)
+            batchContext.verifiedReadPaths.insert(srcBase.path)
+            _ = ContainerStore.ensureContainerAccess(for: dstBase.path, requireWrite: true)
+            batchContext.verifiedWritePaths.insert(dstBase.path)
 
             for mapping in mappings {
                 if cancelState.isCancelled || result.isCancelled || Task.isCancelled {
@@ -965,14 +1136,31 @@ public final class FileIOEngine: @unchecked Sendable {
                     continue
                 }
 
-                var isSrcDir: ObjCBool = false
-                guard self.fileManager.fileExists(atPath: sourceFile.path, isDirectory: &isSrcDir),
-                      !isSrcDir.boolValue else {
+                var srcSt = stat()
+                var srcIsRegular = false
+                if lstat(sourceFile.path, &srcSt) == 0 {
+                    if (srcSt.st_mode & S_IFMT) == S_IFLNK {
+                        result.failed.append(FileIOFailureRecord(
+                            url: sourceFile,
+                            reason: FileIOEngineError.symbolicLinkUnsupported.localizedDescription
+                        ))
+                        continue
+                    }
+                    srcIsRegular = (srcSt.st_mode & S_IFMT) != S_IFDIR
+                } else {
+                    var isSrcDir: ObjCBool = false
+                    srcIsRegular = self.fileManager.fileExists(atPath: sourceFile.path, isDirectory: &isSrcDir)
+                        && !isSrcDir.boolValue
+                }
+                guard srcIsRegular else {
                     continue
                 }
 
                 do {
-                    try Self.createDirectoryIfNeeded(at: destFile.deletingLastPathComponent())
+                    try Self.createDirectoryIfNeeded(
+                        at: destFile.deletingLastPathComponent(),
+                        batchContext: batchContext
+                    )
                 } catch {
                     result.failed.append(FileIOFailureRecord(
                         url: destFile,
@@ -989,7 +1177,8 @@ public final class FileIOEngine: @unchecked Sendable {
                     result: &result,
                     cancelState: cancelState,
                     progressHandler: nil,
-                    conflictResolver: conflictResolver
+                    conflictResolver: conflictResolver,
+                    batchContext: batchContext
                 )
             }
 

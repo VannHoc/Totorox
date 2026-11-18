@@ -87,18 +87,30 @@ struct FileEntry: Identifiable, Hashable {
         return sizeText
     }
 
-    var formattedModifiedDate: String? {
-        guard let d = modifiedAt else { return nil }
+    private static let formatterLock = NSLock()
+    private static let sharedDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "dd/MM/yyyy HH:mm"
-        return f.string(from: d)
+        return f
+    }()
+    private static let sharedDecimalFormatter: NumberFormatter = {
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        return nf
+    }()
+
+    var formattedModifiedDate: String? {
+        guard let d = modifiedAt else { return nil }
+        Self.formatterLock.lock()
+        defer { Self.formatterLock.unlock() }
+        return Self.sharedDateFormatter.string(from: d)
     }
 
     var formattedCreatedDate: String? {
         guard let d = createdAt else { return nil }
-        let f = DateFormatter()
-        f.dateFormat = "dd/MM/yyyy HH:mm"
-        return f.string(from: d)
+        Self.formatterLock.lock()
+        defer { Self.formatterLock.unlock() }
+        return Self.sharedDateFormatter.string(from: d)
     }
 
     var octalPermissions: String {
@@ -121,9 +133,9 @@ struct FileEntry: Identifiable, Hashable {
     var exactBytesText: String {
         if isDirectory { return AppLanguage.current.text("container.folder") }
         guard size >= 0 else { return "—" }
-        let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        let formatted = nf.string(from: NSNumber(value: size)) ?? "\(size)"
+        Self.formatterLock.lock()
+        let formatted = Self.sharedDecimalFormatter.string(from: NSNumber(value: size)) ?? "\(size)"
+        Self.formatterLock.unlock()
         return "\(formatted) bytes (\(sizeText))"
     }
 
@@ -181,7 +193,10 @@ enum ContainerStore {
     private static var _uuidMap: [String: String]? = nil
     private static let uuidMapLock = NSLock()
     private static var activeGrantHandles: [String: Int64] = [:]
+    /// Bitmask of verified access capabilities per canonical path/container root: bit 0 = read, bit 1 = write.
+    private static var grantedAccessMask: [String: UInt8] = [:]
     private static let grantHandlesLock = NSLock()
+    private static let cachedHomeCanonical: String = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
 
     static var uuidMap: [String: String] {
         uuidMapLock.lock()
@@ -334,12 +349,16 @@ enum ContainerStore {
     }
 
     static func resolveAppContainerPathByMetadataScan(bundleID: String) -> String? {
-        // iOS < 26: kernel R/W is enough, no need to require full sandbox escape
-        if KernelExploit.requiresSandboxEscape, !KernelExploit.hasSandboxAccess() {
+        // iOS < 26: kernel R/W is enough, no need to require full sandbox escape.
+        // iOS 26+: either the kernel exploit or a Tier 4 (worse_query) App Group
+        // extension can make the raw UUID containers readable.
+        if KernelExploit.requiresSandboxEscape,
+           !KernelExploit.hasSandboxAccess(),
+           WorseQuery.grantGroup == nil {
             log("patch: metadata scan skipped — sandbox access not active")
             return nil
         }
-        let dirs = enumerateDirectories(path: appDataRoot)
+        let dirs = enumerateDirectoriesWithTraversalGrant(path: appDataRoot)
         guard !dirs.isEmpty else {
             log("patch: metadata scan unavailable — no containers enumerated")
             return nil
@@ -763,27 +782,44 @@ enum ContainerStore {
     }
 
     static func readDataDirectly(atPath path: String) -> Data? {
-        // 1. First attempt: POSIX open & read (fastest, zero Foundation overhead)
+        // 1. First attempt: POSIX open & read (fastest, zero Foundation overhead, single allocation)
         let fd = open(path, O_RDONLY | O_CLOEXEC)
         if fd >= 0 {
             defer { close(fd) }
             var st = stat()
-            if fstat(fd, &st) == 0 && st.st_size > 0 && st.st_size < 10_000_000 {
-                let fileSize = Int(st.st_size)
-                var buffer = [UInt8](repeating: 0, count: fileSize)
-                var totalRead = 0
-                while totalRead < fileSize {
-                    let bytes = read(fd, &buffer[totalRead], fileSize - totalRead)
-                    if bytes <= 0 { break }
-                    totalRead += bytes
+            if fstat(fd, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG {
+                if st.st_size == 0 {
+                    return Data()
                 }
-                if totalRead > 0 {
-                    return Data(buffer.prefix(totalRead))
+                if st.st_size > 0 && st.st_size < 10_000_000 {
+                    let fileSize = Int(st.st_size)
+                    var data = Data(count: fileSize)
+                    let totalRead = data.withUnsafeMutableBytes { rawBuf -> Int in
+                        guard let base = rawBuf.baseAddress else { return 0 }
+                        var offset = 0
+                        while offset < fileSize {
+                            let bytes = read(fd, base.advanced(by: offset), fileSize - offset)
+                            if bytes > 0 {
+                                offset += bytes
+                            } else if bytes < 0 && errno == EINTR {
+                                continue
+                            } else {
+                                break
+                            }
+                        }
+                        return offset
+                    }
+                    if totalRead == fileSize {
+                        return data
+                    }
+                    if totalRead > 0 {
+                        return data.prefix(totalRead)
+                    }
                 }
             }
         }
         // 2. Second attempt: Standard Swift Data(contentsOf:)
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty {
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
             return data
         }
         // 3. Third attempt: fopen & fread with "rb"
@@ -832,7 +868,7 @@ enum ContainerStore {
         var plistData: Data? = nil
         for candidate in candidateContainers {
             let metaPath = metadataPath(for: candidate)
-            if let direct = readDataDirectly(atPath: metaPath) {
+            if let direct = readDataDirectly(atPath: metaPath), !direct.isEmpty {
                 plistData = direct
                 break
             }
@@ -848,7 +884,7 @@ enum ContainerStore {
             }
             for candidate in candidateContainers {
                 let metaPath = metadataPath(for: candidate)
-                if let grantedData = readDataDirectly(atPath: metaPath) {
+                if let grantedData = readDataDirectly(atPath: metaPath), !grantedData.isEmpty {
                     plistData = grantedData
                     break
                 }
@@ -917,94 +953,135 @@ enum ContainerStore {
         )
     }
 
-    static func grantContainerAccess(_ containerPath: String) -> Int64 {
+    private static func containerRootComponent(in canonicalPath: String) -> (rootPath: String, idOrUUID: String, isAppGroup: Bool)? {
+        let roots: [(prefix: String, isAppGroup: Bool)] = [
+            ("Containers/Data/Application/", false),
+            ("Containers/Shared/AppGroup/", true)
+        ]
+        for entry in roots {
+            if let range = canonicalPath.range(of: entry.prefix) {
+                let prefixPath = String(canonicalPath[..<range.upperBound])
+                let after = canonicalPath[range.upperBound...]
+                let idOrUUID = String(after.split(separator: "/").first ?? "")
+                if !idOrUUID.isEmpty {
+                    return (prefixPath + idOrUUID, idOrUUID, entry.isAppGroup)
+                }
+            }
+        }
+        return nil
+    }
+
+    static func grantContainerAccess(_ containerPath: String, requireWrite: Bool = false) -> Int64 {
         guard !containerPath.isEmpty else { return -1 }
         let clean = (containerPath.hasSuffix("/") && containerPath.count > 1)
             ? String(containerPath.dropLast())
             : containerPath
         let canonical = ContainerDiscoveryMerger.canonicalPath(clean)
         let key = canonical.isEmpty ? clean : canonical
+        let desiredMask: UInt8 = requireWrite ? 3 : 1
 
         grantHandlesLock.lock()
-        if let existing = activeGrantHandles[key], existing >= 0 {
+        if let existing = activeGrantHandles[key],
+           existing >= 0,
+           ((grantedAccessMask[key] ?? 0) & desiredMask) == desiredMask {
             grantHandlesLock.unlock()
             return existing
         }
         grantHandlesLock.unlock()
 
-        var pathC = clean.utf8CString.map { Int8($0) }
-        let handle = bad_query(&pathC, true, nil, false)
+        // Tier 1 bad_query -> Tier 4 worse_query fallback (badQueryBlocked memo).
+        let handle = SandboxGrantRouter.grant(path: clean, requireWrite: requireWrite)
         if handle >= 0 {
             grantHandlesLock.lock()
             activeGrantHandles[key] = handle
             activeGrantHandles[clean] = handle
+            grantedAccessMask[key] = (grantedAccessMask[key] ?? 0) | desiredMask
+            grantedAccessMask[clean] = (grantedAccessMask[clean] ?? 0) | desiredMask
             grantHandlesLock.unlock()
         }
         return handle
     }
 
     @discardableResult
-    static func ensureContainerAccess(for path: String) -> String {
+    static func ensureContainerAccess(for path: String, requireWrite: Bool = false) -> String {
         guard !path.isEmpty else { return path }
         #if targetEnvironment(simulator)
         return path
         #else
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        let targetPath = resolved.isEmpty ? path : resolved
+        let targetPath = ContainerMetadataCache.canonicalPath(path)
 
         if ContainerMetadataCache.isApplicationContainersRoot(targetPath) {
             return targetPath
         }
 
-        // Fast path: own sandbox container or already accessible path
-        let homeCanon = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
-        let targetCanon = ContainerMetadataCache.canonicalPath(targetPath)
-        if !homeCanon.isEmpty && (targetCanon == homeCanon || targetCanon.hasPrefix(homeCanon + "/")) {
+        // Fast path: own sandbox container (zero syscalls).
+        if !cachedHomeCanonical.isEmpty &&
+            (targetPath == cachedHomeCanonical || targetPath.hasPrefix(cachedHomeCanonical + "/")) {
             return targetPath
         }
 
-        if access(targetPath, R_OK) == 0 {
-            return targetPath
-        }
+        let desiredMask: UInt8 = requireWrite ? 3 : 1
+        let containerInfo = containerRootComponent(in: targetPath)
 
-        // Detect if path belongs to an Application container or App Group
-        let roots = ["Containers/Data/Application/", "Containers/Shared/AppGroup/"]
-        for root in roots {
-            if let range = targetPath.range(of: root) {
-                let prefixPath = String(targetPath[..<range.upperBound])
-                let after = targetPath[range.upperBound...]
-                let idOrUUID = String(after.split(separator: "/").first ?? "")
-                if !idOrUUID.isEmpty {
-                    let containerRoot = prefixPath + idOrUUID
-                    if access(containerRoot, R_OK) == 0 {
-                        return targetPath
-                    }
-                    if root.contains("AppGroup") {
-                        var actErr: NSString?
-                        _ = MCMActivateContainerPath(7, idOrUUID, true, &actErr)
-                    } else {
-                        let bid = ContainerMetadataCache.shared.bundleID(forUUID: idOrUUID)
-                            ?? ContainerStore.bundleID(forUUID: idOrUUID)
-                            ?? AppContainerScanner.shared.getCachedInfo(forUDID: idOrUUID)?.bundleID
-                            ?? readContainerMetadata(containerPath: containerRoot)?.bundleID
-                        if let bid = bid, isValidAppBundleID(bid, uuid: idOrUUID) {
-                            if !ContainerMetadataCache.shared.isBundleActivated(bid) || access(containerRoot, R_OK) != 0 {
-                                var actErr: NSString?
-                                _ = MCMActivateContainerPath(2, bid, false, &actErr)
-                                ContainerMetadataCache.shared.markBundleActivated(bid)
-                            }
-                        }
-                    }
-                    if access(containerRoot, R_OK) != 0 {
-                        _ = grantContainerAccess(containerRoot)
-                    }
-                    return targetPath
-                }
+        // Fast path: container root already verified with at least `desiredMask` in this session.
+        if let info = containerInfo {
+            grantHandlesLock.lock()
+            let mask = grantedAccessMask[info.rootPath] ?? 0
+            grantHandlesLock.unlock()
+            if (mask & desiredMask) == desiredMask {
+                return targetPath
             }
         }
-        if access(targetPath, R_OK) != 0 {
-            _ = grantContainerAccess(targetPath)
+
+        // Check actual OS access (ancestor-aware & POSIX-0444-aware for writes).
+        if SandboxGrantRouter.verifyAccess(path: targetPath, requireWrite: requireWrite) == 0 {
+            if let info = containerInfo,
+               SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) == 0 {
+                grantHandlesLock.lock()
+                grantedAccessMask[info.rootPath] = (grantedAccessMask[info.rootPath] ?? 0) | desiredMask
+                grantHandlesLock.unlock()
+            }
+            return targetPath
         }
+
+        // Container-level activation + grant (bad_query -> worse_query).
+        if let info = containerInfo {
+            if info.isAppGroup {
+                var actErr: NSString?
+                _ = MCMActivateContainerPath(7, info.idOrUUID, true, &actErr)
+            } else {
+                let bid = ContainerMetadataCache.shared.bundleID(forUUID: info.idOrUUID)
+                    ?? ContainerStore.bundleID(forUUID: info.idOrUUID)
+                    ?? AppContainerScanner.shared.getCachedInfo(forUDID: info.idOrUUID)?.bundleID
+                    ?? readContainerMetadata(containerPath: info.rootPath)?.bundleID
+                if let bid = bid, isValidAppBundleID(bid, uuid: info.idOrUUID) {
+                    if !ContainerMetadataCache.shared.isBundleActivated(bid) ||
+                        SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) != 0 {
+                        var actErr: NSString?
+                        _ = MCMActivateContainerPath(2, bid, false, &actErr)
+                        ContainerMetadataCache.shared.markBundleActivated(bid)
+                    }
+                }
+            }
+
+            if SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) != 0 ||
+                SandboxGrantRouter.verifyAccess(path: targetPath, requireWrite: requireWrite) != 0 {
+                _ = grantContainerAccess(info.rootPath, requireWrite: requireWrite)
+            }
+
+            if SandboxGrantRouter.verifyAccess(path: targetPath, requireWrite: requireWrite) == 0 {
+                grantHandlesLock.lock()
+                grantedAccessMask[info.rootPath] = (grantedAccessMask[info.rootPath] ?? 0) | desiredMask
+                grantHandlesLock.unlock()
+                return targetPath
+            }
+
+            // Fallback: grant specific subpath when container root token didn't unlock it.
+            _ = grantContainerAccess(targetPath, requireWrite: requireWrite)
+            return targetPath
+        }
+
+        _ = grantContainerAccess(targetPath, requireWrite: requireWrite)
         return targetPath
         #endif
     }
@@ -1193,15 +1270,13 @@ enum ContainerStore {
     static func shallowChildCount(atPath path: String) -> Int? {
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
 
-        // 1. Fast POSIX opendir/readdir without triggering XPC per child directory
+        // 1. Fast POSIX opendir/readdir without triggering XPC or String allocation per entry
         if let dir = opendir(clean) {
             defer { closedir(dir) }
             var count = 0
             while let dp = readdir(dir) {
-                let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                    String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
-                }
-                if name == "." || name == ".." || name.hasPrefix(".") {
+                // Skip ".", "..", and all dotfiles by checking first byte == '.' (0x2E / 46)
+                if dp.pointee.d_name.0 == 46 {
                     continue
                 }
                 count += 1
@@ -1419,10 +1494,9 @@ enum ContainerStore {
     /// directory with the installed apps list.
     static func readDirectoryEntriesFromDisk(at path: String) -> [FileEntry] {
         let accessPath = ensureContainerAccess(for: path)
-        let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
 
         var candidates: [String] = []
-        for candidate in [resolved, accessPath, path] where !candidate.isEmpty && !candidates.contains(candidate) {
+        for candidate in [accessPath, path] where !candidate.isEmpty && !candidates.contains(candidate) {
             candidates.append(candidate)
         }
 
@@ -1431,6 +1505,15 @@ enum ContainerStore {
             if let posixEntries = posixListDirectory(at: p) {
                 return sortedEntries(posixEntries)
             }
+        }
+
+        // Lazy symlink resolution fallback only if direct POSIX open failed
+        let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
+        if !resolved.isEmpty && !candidates.contains(resolved) {
+            if let posixEntries = posixListDirectory(at: resolved) {
+                return sortedEntries(posixEntries)
+            }
+            candidates.insert(resolved, at: 0)
         }
 
         // 2. Fallback to FileManager (returns [] immediately if directory is genuinely empty)
@@ -1557,7 +1640,8 @@ enum ContainerStore {
     }
 
     static func readTextFile(at path: String, limit: Int = 200_000) -> String {
-        guard let handle = FileHandle(forReadingAtPath: path) else {
+        let resolvedPath = ensureContainerAccess(for: path)
+        guard let handle = FileHandle(forReadingAtPath: resolvedPath) else {
             return "Unable to read file."
         }
         defer { try? handle.close() }

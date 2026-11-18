@@ -151,6 +151,7 @@ final class AppListViewModel: ObservableObject {
 
 struct FolderExplorerView: View {
     @Environment(\.appLanguage) private var language
+    @ObservedObject private var themeManager = ThemeManager.shared
     @StateObject private var directoryVM = DirectoryViewModel()
     @StateObject private var appListVM = AppListViewModel()
     @State private var currentURL: URL
@@ -530,15 +531,18 @@ struct FolderExplorerView: View {
         .sheet(isPresented: $showShareSheet) {
             if let share = shareURL {
                 ActivityViewControllerWrapper(activityItems: [share])
+                    .preferredColorScheme(themeManager.mode.colorScheme)
             }
         }
         .sheet(isPresented: $showImportPicker) {
             DocumentPickerWrapper { pickedURL in
                 importFileIntoCurrentDirectory(pickedURL)
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(item: $inspectingEntry) { entry in
             FileInfoInspectorSheet(entry: entry)
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .confirmationDialog(
             language.text("folders.extract.title", selectedArchiveForExtraction?.name ?? ""),
@@ -566,6 +570,7 @@ struct FolderExplorerView: View {
                 ContainerMetadataCache.shared.invalidate(path: currentURL.path)
                 loadCurrentDirectory(forceRefresh: true)
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .overlay {
             if let conflict = activeConflict {
@@ -1185,7 +1190,7 @@ struct FolderExplorerView: View {
             defer {
                 if hasSecurityAccess { src.stopAccessingSecurityScopedResource() }
             }
-            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
+            _ = ContainerStore.ensureContainerAccess(for: baseDir.path, requireWrite: true)
             let totalItems = Self.countItemsRecursively(at: src)
             await MainActor.run {
                 self.activeTaskTotalCount = totalItems
@@ -1247,7 +1252,7 @@ struct FolderExplorerView: View {
         activeTaskTotalCount = 0
 
         Task.detached(priority: .userInitiated) {
-            _ = ContainerStore.ensureContainerAccess(for: baseDir.path)
+            _ = ContainerStore.ensureContainerAccess(for: baseDir.path, requireWrite: true)
             let totalItems = Self.countItemsRecursively(at: source)
             await MainActor.run {
                 self.activeTaskTotalCount = totalItems
@@ -1320,7 +1325,7 @@ struct FolderExplorerView: View {
 
         directoryVM.isLoading = true
         Task.detached(priority: .userInitiated) {
-            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path)
+            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path, requireWrite: true)
             let tempStaging = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempStaging, withIntermediateDirectories: true)

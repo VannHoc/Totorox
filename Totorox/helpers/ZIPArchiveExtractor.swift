@@ -101,6 +101,7 @@ enum ZIPArchiveExtractor {
 
         do {
             try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
+            var createdDirectories = Set<String>([staging.path])
             for entry in entries {
                 let target = try destinationURL(
                     components: entry.components,
@@ -108,13 +109,18 @@ enum ZIPArchiveExtractor {
                     isDirectory: entry.isDirectory
                 )
                 if entry.isDirectory {
-                    try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+                    if createdDirectories.insert(target.path).inserted {
+                        try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+                    }
                     continue
                 }
-                try fileManager.createDirectory(
-                    at: target.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
+                let parentDir = target.deletingLastPathComponent()
+                if createdDirectories.insert(parentDir.path).inserted {
+                    try fileManager.createDirectory(
+                        at: parentDir,
+                        withIntermediateDirectories: true
+                    )
+                }
                 let status = archive.path.withCString { archivePath in
                     target.path.withCString { targetPath in
                         browserZIPExtractEntry(
@@ -188,6 +194,8 @@ enum ZIPArchiveExtractor {
         }
 
         var extractedFiles = 0
+        var createdDirectories = Set<String>([staging.path])
+        var seenTargetPaths = Set<String>()
         for entry in entries {
             let target = try destinationURL(
                 components: entry.components,
@@ -195,14 +203,20 @@ enum ZIPArchiveExtractor {
                 isDirectory: entry.isDirectory
             )
             if entry.isDirectory {
-                try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+                if createdDirectories.insert(target.path).inserted {
+                    try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+                }
                 continue
             }
-            try fileManager.createDirectory(
-                at: target.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            if fileManager.fileExists(atPath: target.path) {
+            let parentDir = target.deletingLastPathComponent()
+            if createdDirectories.insert(parentDir.path).inserted {
+                try fileManager.createDirectory(
+                    at: parentDir,
+                    withIntermediateDirectories: true
+                )
+            }
+            if !seenTargetPaths.insert(target.path).inserted {
+                _ = unlink(target.path)
                 try? fileManager.removeItem(at: target)
             }
             let status = archive.path.withCString { archivePath in

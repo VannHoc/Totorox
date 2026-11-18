@@ -24,12 +24,13 @@ struct LogView: View {
                     VStack(spacing: 14) {
                         Image(systemName: "apple.terminal")
                             .font(.system(size: AppTheme.emptyIconSize, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(TotoroxTheme.textSecondary)
                         Text(language.text("logs.empty_title"))
                             .font(.title3.bold())
+                            .foregroundStyle(TotoroxTheme.textPrimary)
                         Text(language.text("logs.empty_message"))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(TotoroxTheme.textSecondary)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -75,7 +76,6 @@ struct LogView: View {
                 }
             }
             .background(TotoroxTheme.pageBackground.ignoresSafeArea())
-            .preferredColorScheme(.light)
             .navigationTitle(language.text("logs.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -649,3 +649,61 @@
 "error.filemanager.cannot_archive" = "Could not create ZIP archive.";
 "error.filemanager.cannot_extract" = "Could not extract ZIP archive.";
 "error.fileio.invalid_destination" = "Destination path is invalid or escapes the target folder.";
+
+/* --- Tier 4: worse_query (sandbox fallback) --- */
+"settings.worse_query_label" = "Tier 4: worse_query";
+"settings.worse_query_ready" = "Ready (fallback for iOS 26+)";
+"settings.worse_query_not_needed" = "Only used on iOS 26+";
+"settings.worse_query_disabled" = "Disabled";
+"settings.worse_query_api_missing" = "Not supported by this iOS build";
+"settings.worse_query_missing_group" = "Missing App Group in signature";
+
+/* --- Light / Dark Theme & In-App Mod Store --- */
+"tab.mods" = "Mod Store";
+"settings.section_appearance" = "APPEARANCE";
+"settings.theme_light" = "Light Mode";
+"settings.theme_dark" = "Dark Mode";
+
+"modstore.header.title" = "AoV Skin Mod Store";
+"modstore.header.credit" = "Verified Resources/ Packs • 1-Tap Install";
+"modstore.header.subtitle" = "Download verified skin, button, and broadcast mod packs directly inside Totorox and send them straight to Overwrite or Merge.";
+"modstore.header.quota_short" = "New: 1 credit • Saved: Free";
+"modstore.badge.total_mods" = "%lld mods";
+"modstore.badge.cached_count" = "%lld saved";
+"modstore.search.placeholder" = "Search hero, skin name, #ID...";
+"modstore.filter.all" = "All";
+"modstore.filter.skin" = "Hero Skins";
+"modstore.filter.button" = "HUD & Kill FX";
+"modstore.filter.bundle" = "Combo Packs";
+"modstore.filter.cached" = "Saved";
+"modstore.sort.newest" = "Newest First";
+"modstore.sort.popular" = "Most Downloaded";
+"modstore.sort.name_asc" = "Name (A → Z)";
+"modstore.sort.size_asc" = "Smallest Size";
+"modstore.select_guide" = "Select 1 pack to Overwrite or 2+ packs to Merge";
+"modstore.showing_count" = "%lld items";
+"modstore.loading" = "Loading Mod Store catalog...";
+"modstore.retry" = "Retry";
+"modstore.empty" = "No matching mod packs found.";
+"modstore.reset_filter" = "Reset search & filters";
+"modstore.category.skin" = "Skin";
+"modstore.category.button" = "HUD & FX";
+"modstore.category.bundle" = "Combo";
+"modstore.cached_badge" = "Saved on device (free to reuse)";
+"modstore.selected_summary" = "%lld selected";
+"modstore.quota_cached_free" = "Saved • 0 credits";
+"modstore.quota_cost_count" = "New download: %lld credits";
+"modstore.clear_selection" = "Clear";
+"modstore.downloading_item" = "Downloading (%lld/%lld): %@";
+"modstore.cancelled" = "Mod download cancelled.";
+"modstore.action.download_overwrite" = "Download & Overwrite Now";
+"modstore.action.cached_overwrite" = "Overwrite Now (Saved)";
+"modstore.action.send_to_merge_one" = "Download & Send to Merge";
+"modstore.action.send_to_merge_short" = "Send to Merge";
+"modstore.action.share_zip" = "Save / Share .zip File";
+"modstore.action.share_zip_short" = "Save / Share .zip";
+"modstore.action.delete_cached" = "Delete Saved Copy";
+"modstore.action.download_merge" = "Download & Merge %lld Mods";
+"modstore.action.cached_merge" = "Send %lld Saved Mods to Merge";
+"modstore.error.invalid_zip" = "Downloaded file is not a valid .zip archive.";
+"modstore.error.checksum_mismatch" = "Downloaded file failed SHA-256 verification. Please retry.";

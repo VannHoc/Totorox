@@ -31,3 +31,9 @@ ion to 1.2*
 
 # Agent/tooling state
 .kilo/
+
+# Local test/job scratch
+tmp/
+Totorox-Mod-Studio/Tai_nguyen/
+Totorox-Mod-Studio/dist/
+Totorox-Mod-Studio/build/

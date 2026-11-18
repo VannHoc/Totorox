@@ -38,6 +38,7 @@ private struct ConverterShareURLItem: Identifiable {
 
 struct PatchConverterView: View {
     @Environment(\.appLanguage) private var language
+    @ObservedObject private var themeManager = ThemeManager.shared
     @State private var direction: ConverterDirection = .zipToPatch
     @State private var selectedSourceURL: URL? = nil
     @State private var sourceFileSizeText: String = ""
@@ -217,7 +218,7 @@ struct PatchConverterView: View {
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(TotoroxTheme.mintAccent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [6]))
                             )
-                            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                            .shadow(color: TotoroxTheme.shadowColor, radius: 8, x: 0, y: 3)
                         }
                         .buttonStyle(.plain)
                     }
@@ -226,6 +227,11 @@ struct PatchConverterView: View {
                     if isSourcePasswordProtected {
                         let trimmedSourcePwd = sourcePasswordText.trimmingCharacters(in: .whitespacesAndNewlines)
                         let needsRequiredPassword = trimmedSourcePwd.isEmpty
+                        let srcPwdPrompt = language.text(
+                            direction == .patchToZip
+                                ? "converter.placeholder.source_password_3105"
+                                : "converter.placeholder.source_password_zip"
+                        )
                         VStack(alignment: .leading, spacing: 8) {
                             Text(language.text("converter.section.source_password"))
                                 .font(.system(size: 13, weight: .semibold))
@@ -238,17 +244,21 @@ struct PatchConverterView: View {
                                 Group {
                                     if showSourcePassword {
                                         TextField(
-                                            language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
-                                            text: $sourcePasswordText
+                                            "",
+                                            text: $sourcePasswordText,
+                                            prompt: Text(srcPwdPrompt).foregroundColor(TotoroxTheme.textSecondary)
                                         )
                                     } else {
                                         SecureField(
-                                            language.text(direction == .patchToZip ? "converter.placeholder.source_password_3105" : "converter.placeholder.source_password_zip"),
-                                            text: $sourcePasswordText
+                                            "",
+                                            text: $sourcePasswordText,
+                                            prompt: Text(srcPwdPrompt).foregroundColor(TotoroxTheme.textSecondary)
                                         )
                                     }
                                 }
                                 .font(.system(size: 14))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                .tint(TotoroxTheme.mintAccent)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
                                 .onSubmit {
@@ -320,10 +330,14 @@ struct PatchConverterView: View {
                                         .foregroundStyle(TotoroxTheme.mintAccent)
 
                                     TextField(
-                                        language.text("converter.placeholder.output_filename"),
-                                        text: $outputFileNameText
+                                        "",
+                                        text: $outputFileNameText,
+                                        prompt: Text(language.text("converter.placeholder.output_filename"))
+                                            .foregroundColor(TotoroxTheme.textSecondary)
                                     )
                                     .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                    .tint(TotoroxTheme.mintAccent)
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled(true)
 
@@ -353,6 +367,11 @@ struct PatchConverterView: View {
                             }
 
                             // Output Password (optional for both .zip -> .3105 and .3105 -> .zip)
+                            let outPwdPrompt = language.text(
+                                direction == .zipToPatch
+                                    ? "converter.placeholder.output_password_3105"
+                                    : "converter.placeholder.output_password_zip"
+                            )
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(language.text("converter.label.output_password"))
                                     .font(.system(size: 12, weight: .semibold))
@@ -366,17 +385,21 @@ struct PatchConverterView: View {
                                     Group {
                                         if showOutputPassword {
                                             TextField(
-                                                language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
-                                                text: $outputPasswordText
+                                                "",
+                                                text: $outputPasswordText,
+                                                prompt: Text(outPwdPrompt).foregroundColor(TotoroxTheme.textSecondary)
                                             )
                                         } else {
                                             SecureField(
-                                                language.text(direction == .zipToPatch ? "converter.placeholder.output_password_3105" : "converter.placeholder.output_password_zip"),
-                                                text: $outputPasswordText
+                                                "",
+                                                text: $outputPasswordText,
+                                                prompt: Text(outPwdPrompt).foregroundColor(TotoroxTheme.textSecondary)
                                             )
                                         }
                                     }
                                     .font(.system(size: 14))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                    .tint(TotoroxTheme.mintAccent)
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled(true)
 
@@ -536,9 +559,11 @@ struct PatchConverterView: View {
             ) { picked in
                 inspectSourceFile(picked, keepCustomInputs: false)
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(item: $activeShareItem) { item in
             ActivityViewControllerWrapper(activityItems: [item.url])
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
     }
 

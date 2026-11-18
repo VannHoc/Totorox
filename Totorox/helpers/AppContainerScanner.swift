@@ -513,8 +513,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 }
             }
 
-            // STAGE 3: Filesystem Container Discovery (only when sandbox escape is active or iOS < 26,
-            // since on iOS 26+ without kernel sandbox escape raw UUID paths cannot be granted without a Bundle ID)
+            // STAGE 3: Filesystem Container Discovery (only when a tier can grant raw
+            // UUID paths: kernel sandbox escape, iOS < 26, a directly readable root,
+            // or Tier 4 worse_query on iOS 26+ sideloads)
             let canOpenRootDirectly: Bool = {
                 if let d = opendir(ContainerStore.appDataRoot) {
                     closedir(d)
@@ -525,8 +526,13 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             let canReadRawUUIDContainers = ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26
                 || KernelExploit.hasSandboxAccess()
                 || canOpenRootDirectly
+                // Tier 4 grants traversal of the app-data root exactly like Tier 1
+                // does, so raw UUID containers stay reachable on iOS 26+ sideloads.
+                || WorseQuery.grantGroup != nil
             if canReadRawUUIDContainers {
-                let dirs = ContainerStore.enumerateDirectories(path: ContainerStore.appDataRoot)
+                let dirs = ContainerStore.enumerateDirectoriesWithTraversalGrant(
+                    path: ContainerStore.appDataRoot
+                )
                 let lsSet = Set(lsStoreCandidates)
                 for dirPath in dirs {
                     let udid = (dirPath as NSString).lastPathComponent
