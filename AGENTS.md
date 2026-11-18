@@ -4,8 +4,10 @@ Tài liệu này cung cấp bản đồ kiến trúc hệ thống, cấu trúc t
 
 ---
 
-## 1. Tổng quan Kiến trúc & Hạ tầng Mạng
+## 1. Tổng quan Kiến trúc, Phiên bản & Hạ tầng Mạng
 
+- **Phiên bản hiện hành của toàn dự án:** **`3.0`** (`MARKETING_VERSION = "3.0"` trong `project.yml`, bản build CI xuất ra `Totorox-3.0-unsigned.ipa` / artifact `Totorox-3.0-unsigned-ipa`, Backend FastAPI `3.0.0`).
+- **Tài liệu theo dõi tiến độ trung tâm:** `TOTOROX_3.0_PROGRESS.md` (cùng các tài liệu thành phần như `WORSE_QUERY_PROGRESS.md`, `WORSE_QUERY_INTEGRATION_PLAN.md`, `HANDOFF_TO_NEW_AGENT.md`).
 - **Tên miền chính:** `totorox.io.vn` (chạy qua Cloudflare Tunnel cố định).
 - **`https://api.totorox.io.vn`**: Endpoint API chính phục vụ ứng dụng iOS (`Totorox/`).
 - **`https://admin.totorox.io.vn`**: Giao diện Web Admin Dashboard (được bảo vệ bởi **Subdomain Guard Middleware** trong `admin.py`; mọi truy cập vào `/` hoặc `/admin/*` từ host không nằm trong `ALLOWED_ADMIN_HOSTS` như `api.totorox.io.vn` sẽ tự động trả về `404 Not Found`).
@@ -18,26 +20,33 @@ Tài liệu này cung cấp bản đồ kiến trúc hệ thống, cấu trúc t
 Totorox/
 ├── AGENTS.md                       # File quy tắc & bản đồ dự án cho AI Agent
 ├── .cursorrules                    # Bản sao đồng bộ quy tắc từ AGENTS.md
-├── HANDOFF_TO_NEW_AGENT.md         # Tài liệu bàn giao kỹ thuật iOS/Backend
-├── project.yml                     # Cấu hình XcodeGen cho app iOS
+├── TOTOROX_3.0_PROGRESS.md         # Nhật ký tiến độ trung tâm của thế hệ Totorox 3.0 (BẮT BUỘC cập nhật)
+├── WORSE_QUERY_INTEGRATION_PLAN.md # Kế hoạch kỹ thuật tích hợp Tầng 4 worse_query (iOS 26+)
+├── WORSE_QUERY_PROGRESS.md         # Báo cáo tiến độ chi tiết module worse_query
+├── HANDOFF_TO_NEW_AGENT.md         # Tài liệu bàn giao kiến trúc Hybrid iOS/Backend ban đầu
+├── project.yml                     # Cấu hình XcodeGen cho app iOS (MARKETING_VERSION: "3.0")
+├── .github/workflows/
+│   └── build-and-test.yml          # CI chạy XCTest & đóng gói Totorox-3.0-unsigned.ipa
 ├── README.md
 ├── sever_security.md
 ├── Totorox/                        # Source code App iOS (Swift / Objective-C / C)
 │   ├── App.swift, ContentView.swift, Info.plist, Totorox.entitlements
 │   ├── engine/                     # Logic cốt lõi: AovModMergerEngine, FileIOEngine, PatchZipConverter
-│   ├── helpers/                    # APIService, LicenseManager, DeviceIDManager, KeychainHelper, KernelExploit, v.v.
-│   ├── exploit/ & kexploit/        # Các module C/Obj-C (aov_zstd, bad_query, mcm_bridge, kexploit_opa334, sandbox_escape, ...)
+│   ├── helpers/                    # APIService, LicenseManager, DeviceIDManager, WorseQuery, SandboxGrantRouter, v.v.
+│   ├── exploit/ & kexploit/        # Các module C/Obj-C (aov_zstd, bad_query, worse_query, mcm_bridge, kexploit_opa334, sandbox_escape, ...)
 │   └── views/                      # Giao diện SwiftUI (ActivationView, MergeFileView, OverwriteFileView, PatchConverterView, ...)
-├── TotoroxTests/                   # Unit test cho iOS Client
-├── Totorox-Backend/                # Backend Python (FastAPI + SQLite WAL)
+├── TotoroxTests/                   # Unit test cho iOS Client (XCTest)
+├── Totorox-Backend/                # Backend Python (FastAPI 3.0.0 + SQLite WAL)
 │   ├── main.py                     # Core FastAPI server & API cho app iOS
 │   ├── admin.py                    # Backend Web Admin Dashboard & Subdomain Guard Middleware
 │   ├── admin.html                  # Giao diện Web Admin Dashboard (Tailwind CSS + Alpine.js)
 │   ├── admin_keys.py               # Công cụ CLI quản trị dự phòng trên terminal
+│   ├── store.py & store.html       # Web Store bán gói tự động (PayOS & OxaPay)
 │   ├── database.py                 # Quản lý SQLite WAL (licenses.db), schema, auth, quota & redeem
 │   ├── core_processor.py           # Xử lý mod (overwrite-plan, convert-header, merge-plan)
 │   ├── aov_zstd_dict.py            # Từ điển Zstd
-│   ├── test_backend.py             # Test suite cho Backend
+│   ├── test_backend.py             # Test suite chính cho Backend & Engine gộp mod
+│   ├── test_store.py               # Test suite cho Web Store & Webhook thanh toán
 │   ├── requirements.txt
 │   └── licenses.db                 # File database SQLite (dùng chung cho main.py, admin.py, admin_keys.py)
 ├── scripts/                        # Script hỗ trợ build & test
@@ -163,3 +172,8 @@ Cung cấp `get_connection()`, `init_db()`, cơ chế tự động migration c�
 3. **Bảo toàn Subdomain Isolation:**
    - Tuyệt đối không được vô hiệu hóa, nới lỏng hoặc làm hỏng `admin_subdomain_middleware` và `require_admin` trong `admin.py` / `main.py`.
    - Mọi request tới `/` hoặc `/admin/*` xuất phát từ `api.totorox.io.vn` (hoặc bất kỳ host nào ngoài `ALLOWED_ADMIN_HOSTS`) **bắt buộc phải trả về `404 Not Found`**.
+
+4. **Chuẩn Phiên bản `3.0` & Bắt buộc Cập nhật Tiến độ `.md` cho Đa Agent:**
+   - Toàn bộ dự án hiện vận hành ở phiên bản **`3.0`** (bao gồm `MARKETING_VERSION: "3.0"` trong `project.yml` và tên gói build `Totorox-3.0-unsigned.ipa` trong `.github/workflows/build-and-test.yml`). Không quay ngược tên bản build hay version về `2.0`/`1.x`.
+   - Trước khi bắt đầu làm việc, AI Agent phải đọc `TOTOROX_3.0_PROGRESS.md` (và các file `.md` liên quan như `WORSE_QUERY_PROGRESS.md`) để nắm trạng thái working tree của các Agent trước, tránh ghi đè hoặc revert nhầm code đang làm dở.
+   - Làm dự án đến đâu **BẮT BUỘC** phải ghi chép cập nhật ngay đến đó vào `TOTOROX_3.0_PROGRESS.md` (hoặc tạo/cập nhật file `.md` chuyên biệt của hạng mục rồi liên kết vào `TOTOROX_3.0_PROGRESS.md`), nêu rõ: ngày thực hiện, nguyên nhân/mục tiêu, danh sách file đã sửa, kết quả chạy test và bước tiếp theo.

@@ -488,7 +488,10 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
         var configObject: [String: Any] = [
             "mods": modPayloads,
-            "output": ["resourcesVersion": targetVersion],
+            "output": [
+                "resourcesVersion": targetVersion,
+                "isolateHudOnConflict": true,
+            ],
         ]
         if !blobAliases.isEmpty {
             configObject["blob_aliases"] = blobAliases
@@ -630,11 +633,40 @@ public final class AovModMergerEngine: @unchecked Sendable {
             }
 
             // 2. Ghi toàn bộ các file còn lại (cấu hình không xung đột + tài nguyên nặng)
-            // Khi trùng đường dẫn ở local, ưu tiên mod có build version cao hơn rồi mới tới kích thước/thứ tự.
+            // Gom nhóm nguyên tử các cặp `<stem>.assetbundle` + `<stem>_raw*.assetbundle` và cụm Battle HUD chung
+            // để không bao giờ trộn nửa bundle của Mod A với nửa `_raw` của Mod B.
+            var modIndicesByPath: [String: Set<Int>] = [:]
+            var nonEmptyModsByPath: [String: Set<Int>] = [:]
+            for (key, refs) in pathGroups where !serverMergedKeys.contains(key) {
+                modIndicesByPath[key] = Set(refs.map(\.modIndex))
+                nonEmptyModsByPath[key] = Set(refs.filter { $0.header.uncompressedSize > 0 }.map(\.modIndex))
+            }
+            let familyResolution = Self.resolveFamilyWinningModByKey(
+                pathKeys: Array(modIndicesByPath.keys),
+                modIndicesByPath: modIndicesByPath,
+                nonEmptyModsByPath: nonEmptyModsByPath,
+                buildInfoByModIndex: buildInfoByModIndex
+            )
+            let isolateHud = plan.mergePlan?.isolateHudOnConflict ?? true
+            let dropConflictingGlobalHud = isolateHud && Self.shouldIsolateGlobalHudConflict(
+                summaries: summaries,
+                modIndicesByPath: modIndicesByPath
+            )
+
             for normalizedKey in pathGroups.keys.sorted() {
                 guard !serverMergedKeys.contains(normalizedKey) else { continue }
-                guard let refs = pathGroups[normalizedKey],
-                      let winner = Self.selectWinningLocalRef(refs, buildInfoByModIndex: buildInfoByModIndex) else {
+                if dropConflictingGlobalHud && Self.isGlobalHudConflictPath(normalizedKey) {
+                    continue
+                }
+                guard var candidateRefs = pathGroups[normalizedKey] else { continue }
+                if let fam = Self.assetBundleFamilyKey(forNormalizedPath: normalizedKey),
+                   let allowedMod = familyResolution.familyWinnerByKey[fam] {
+                    candidateRefs = candidateRefs.filter { $0.modIndex == allowedMod }
+                } else if let hudWinner = familyResolution.hudConflictWinner,
+                          Self.isGlobalUISoundBankPath(normalizedKey) {
+                    candidateRefs = candidateRefs.filter { $0.modIndex == hudWinner }
+                }
+                guard let winner = Self.selectWinningLocalRef(candidateRefs, buildInfoByModIndex: buildInfoByModIndex) else {
                     continue
                 }
                 guard let sourceHandle = modHandles[winner.modIndex] else {
@@ -844,6 +876,135 @@ public final class AovModMergerEngine: @unchecked Sendable {
             return lhs.build < rhs.build ? -1 : 1
         }
         return 0
+    }
+
+    static func assetBundleFamilyKey(forNormalizedPath lowerPath: String) -> String? {
+        let unified = lowerPath.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard unified.hasSuffix(".assetbundle") else { return nil }
+        if unified.hasSuffix("resourcepackerinfosetall.assetbundle")
+            || unified.hasSuffix("resourceverificationinfosetall.assetbundle") {
+            return nil
+        }
+        let dirPart: String
+        let fileName: String
+        if let slashIdx = unified.lastIndex(of: "/") {
+            dirPart = String(unified[..<slashIdx])
+            fileName = String(unified[unified.index(after: slashIdx)...])
+        } else {
+            dirPart = ""
+            fileName = unified
+        }
+        if dirPart.hasSuffix("/assetbundle/uisystem/battle")
+            && (fileName.hasPrefix("battlecommon") || fileName.hasPrefix("battleotherui")) {
+            return "\(dirPart)/__battle_hud__"
+        }
+        var stem = String(fileName.dropLast(".assetbundle".count))
+        for rawSuffix in ["_raw_mat", "_raw_h", "_raw"] {
+            if stem.hasSuffix(rawSuffix), stem.count > rawSuffix.count {
+                stem = String(stem.dropLast(rawSuffix.count))
+                break
+            }
+        }
+        return dirPart.isEmpty ? stem : "\(dirPart)/\(stem)"
+    }
+
+    static func isGlobalUISoundBankPath(_ lowerPath: String) -> Bool {
+        let unified = lowerPath.replacingOccurrences(of: "\\", with: "/").lowercased()
+        return unified.hasSuffix("/sound/ios/ui.bnk")
+            || unified.hasSuffix("/sound/ios/vietnamese/ui.bnk")
+            || unified.hasSuffix("/sound/android/ui.bnk")
+            || unified.hasSuffix("/sound/android/vietnamese/ui.bnk")
+    }
+
+    static func isGlobalHudConflictPath(_ lowerPath: String) -> Bool {
+        let unified = lowerPath.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if unified.hasSuffix("/assetbundle/uisystem/atlas/primary/allshared.assetbundle")
+            || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle") {
+            return true
+        }
+        if let slashIdx = unified.lastIndex(of: "/") {
+            let dirPart = String(unified[..<slashIdx])
+            let fileName = String(unified[unified.index(after: slashIdx)...])
+            if dirPart.hasSuffix("/assetbundle/uisystem/battle")
+                && (fileName.hasPrefix("battlecommon") || fileName.hasPrefix("battleotherui")) {
+                return true
+            }
+        }
+        return Self.isGlobalUISoundBankPath(unified)
+    }
+
+    static func shouldIsolateGlobalHudConflict(
+        summaries: [AovModSummary],
+        modIndicesByPath: [String: Set<Int>]
+    ) -> Bool {
+        var modsWithGlobalHud = Set<Int>()
+        for (key, mods) in modIndicesByPath {
+            if Self.isGlobalHudConflictPath(key) {
+                modsWithGlobalHud.formUnion(mods)
+            }
+        }
+        guard !modsWithGlobalHud.isEmpty else { return false }
+        if modsWithGlobalHud.count >= 2 {
+            return true
+        }
+        let distinctHeroSets = Set(summaries.map { $0.heroIDs.sorted() }.filter { !$0.isEmpty })
+        return distinctHeroSets.count >= 2
+    }
+
+    static func resolveFamilyWinningModByKey(
+        pathKeys: [String],
+        modIndicesByPath: [String: Set<Int>],
+        nonEmptyModsByPath: [String: Set<Int>],
+        buildInfoByModIndex: [Int: (tuple: [Int], build: Int)]
+    ) -> (familyWinnerByKey: [String: Int], hudConflictWinner: Int?) {
+        var familyMods: [String: Set<Int>] = [:]
+        var familyNonEmptyMods: [String: Set<Int>] = [:]
+        var modsWithAllShared = Set<Int>()
+
+        for key in pathKeys {
+            let unified = key.replacingOccurrences(of: "\\", with: "/").lowercased()
+            if unified.hasSuffix("/assetbundle/uisystem/atlas/primary/allshared.assetbundle")
+                || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle") {
+                if let mods = modIndicesByPath[key] {
+                    modsWithAllShared.formUnion(mods)
+                }
+            }
+            guard let fam = Self.assetBundleFamilyKey(forNormalizedPath: unified),
+                  let mods = modIndicesByPath[key] else {
+                continue
+            }
+            familyMods[fam, default: []].formUnion(mods)
+            if let nonEmpty = nonEmptyModsByPath[key] {
+                familyNonEmptyMods[fam, default: []].formUnion(nonEmpty)
+            }
+        }
+
+        var familyWinnerByKey: [String: Int] = [:]
+        var hudConflictWinner: Int?
+        for (fam, candidates) in familyMods {
+            let isHud = fam.hasSuffix("/__battle_hud__")
+            let nonEmptySet = familyNonEmptyMods[fam] ?? []
+            guard let winner = candidates.max(by: { lhs, rhs in
+                let lBuild = buildInfoByModIndex[lhs] ?? ([], 0)
+                let rBuild = buildInfoByModIndex[rhs] ?? ([], 0)
+                let cmp = Self.compareBuildVersion(lBuild, rBuild)
+                if cmp != 0 { return cmp < 0 }
+                if isHud {
+                    let lShared = modsWithAllShared.contains(lhs)
+                    let rShared = modsWithAllShared.contains(rhs)
+                    if lShared != rShared { return !lShared }
+                }
+                let lHasData = nonEmptySet.contains(lhs)
+                let rHasData = nonEmptySet.contains(rhs)
+                if lHasData != rHasData { return !lHasData }
+                return lhs < rhs
+            }) else { continue }
+            familyWinnerByKey[fam] = winner
+            if isHud && candidates.count >= 2 {
+                hudConflictWinner = winner
+            }
+        }
+        return (familyWinnerByKey, hudConflictWinner)
     }
 
     private static func selectWinningLocalRef(

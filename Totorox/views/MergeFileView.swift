@@ -31,6 +31,8 @@ private enum ActiveMergeSheet: Identifiable {
 
 struct MergeFileView: View {
     @Environment(\.appLanguage) private var language
+    @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     @State private var selectedMods: [AovModSummary] = []
     @State private var modContentHashes: [URL: String] = [:]
 
@@ -80,6 +82,10 @@ struct MergeFileView: View {
         .background(TotoroxTheme.pageBackground)
         .onAppear {
             loadPersistedHistory()
+            consumePendingMergeModsIfNeeded()
+        }
+        .onChange(of: navCoordinator.pendingMergeModURLs) { _ in
+            consumePendingMergeModsIfNeeded()
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -87,8 +93,10 @@ struct MergeFileView: View {
                 MultiZipDocumentPicker { urls in
                     handlePickedModURLs(urls)
                 }
+                .preferredColorScheme(themeManager.mode.colorScheme)
             case .share(let url):
                 ActivityShareSheet(items: [url])
+                    .preferredColorScheme(themeManager.mode.colorScheme)
             }
         }
         .alert(language.text("common.notice"), isPresented: Binding(
@@ -382,10 +390,10 @@ struct MergeFileView: View {
                             .font(.system(size: 15, weight: .bold))
                     }
                 }
-                .foregroundStyle((canMerge || isMerging) ? .white : TotoroxTheme.textSecondary)
+                .foregroundStyle((canMerge || isMerging) ? .white : TotoroxTheme.disabledText)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background((canMerge || isMerging) ? TotoroxTheme.mintAccent : Color(red: 0.91, green: 0.92, blue: 0.95))
+                .background((canMerge || isMerging) ? TotoroxTheme.mintAccent : TotoroxTheme.disabledBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: canMerge ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, y: 4)
             }
@@ -677,6 +685,13 @@ struct MergeFileView: View {
     private struct ScopedPickedURL: Sendable {
         let url: URL
         let hasAccess: Bool
+    }
+
+    private func consumePendingMergeModsIfNeeded() {
+        let pending = navCoordinator.pendingMergeModURLs
+        guard !pending.isEmpty else { return }
+        navCoordinator.pendingMergeModURLs = []
+        handlePickedModURLs(pending)
     }
 
     private func handlePickedModURLs(_ urls: [URL]) {

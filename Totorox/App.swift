@@ -4,6 +4,7 @@ import UIKit
 @main
 struct TotoroxApp: App {
     @StateObject private var appState = AppState()
+    @StateObject private var themeManager = ThemeManager.shared
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
     @State private var showOnboarding = false
     @State private var updateOffer: AppUpdateChecker.Offer?
@@ -16,6 +17,7 @@ struct TotoroxApp: App {
         #endif
         setupLogCapture()
         log("app: Totorox launching — iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) \(AppInfo.machineName)")
+        ThemeManager.shared.applyToAllWindows()
         AppState.runEarlyPrivilegeInit()
         Task { await LicenseManager.shared.refresh() } // xác minh license ngay từ đầu
     }
@@ -62,6 +64,8 @@ struct TotoroxApp: App {
                     .zIndex(1)
                 }
             }
+            .preferredColorScheme(themeManager.mode.colorScheme)
+            .tint(TotoroxTheme.mintAccent)
             .alert(item: $updateOffer) { offer in
                 Alert(
                     title: Text(language.text("update.title")),
@@ -75,12 +79,16 @@ struct TotoroxApp: App {
                 )
             }
             .onAppear {
+                themeManager.applyToAllWindows()
                 if !showOnboarding {
                     appState.detectSupport()
                     checkForUpdate()
                 }
             }
             .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    themeManager.applyToAllWindows()
+                }
                 guard phase == .active, !showOnboarding else { return }
                 appState.detectSupport()
                 Task {
@@ -128,6 +136,11 @@ class AppState: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
+            // Repair a stale <AppGroup>/Library/Caches symlink left by a crash
+            // in the middle of a Tier 4 (worse_query) grant, then log what
+            // Tier 4 can actually do on this device.
+            WorseQuery.logProbe()
+            WorseQuery.recoverAllGroups()
             let hasAccess = KernelExploit.hasSandboxAccess()
             log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "MHA-C2")")
             AppContainerScanner.shared.prewarmOnLaunch()

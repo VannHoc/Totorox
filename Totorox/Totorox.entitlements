@@ -31,5 +31,17 @@
 		<string>/var/containers/Bundle/Application/</string>
 		<string>/private/var/containers/Bundle/Application/</string>
 	</array>
+	<!-- Tier 4 (worse_query). The group below MUST also be present in the
+	     provisioning profile used to sign this build, otherwise
+	     containerURL(forSecurityApplicationGroupIdentifier:) returns nil and
+	     Tier 4 is unavailable (-1). If your profile has a different group,
+	     change the string (or override it at runtime with the
+	     "totorox.worseQueryGroup" user default). Remove this key only if
+	     signing with a profile that cannot carry app groups: Tiers 1-3 keep
+	     working unchanged. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.totorox.app</string>
+	</array>
 </dict>
 </plist>

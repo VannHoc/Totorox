@@ -1019,4 +1019,108 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(summary.resourceVersion, "1.64.1")
         XCTAssertTrue(summary.heroIDs.isEmpty)
     }
+
+    func testAovModMerger_AtomicAssetBundleFamiliesAndBattleHudGrouping() {
+        XCTAssertEqual(
+            AovModMergerEngine.assetBundleFamilyKey(
+                forNormalizedPath: "resources/1.64.1/assetbundle/battle/hero/5992_lvmeng_battle_raw_mat.assetbundle"
+            ),
+            "resources/1.64.1/assetbundle/battle/hero/5992_lvmeng_battle"
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.assetBundleFamilyKey(
+                forNormalizedPath: "resources/1.64.1/assetbundle/uisystem/battle/battlecommon_raw.assetbundle"
+            ),
+            "resources/1.64.1/assetbundle/uisystem/battle/__battle_hud__"
+        )
+        XCTAssertEqual(
+            AovModMergerEngine.assetBundleFamilyKey(
+                forNormalizedPath: "resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle"
+            ),
+            "resources/1.64.1/assetbundle/uisystem/battle/__battle_hud__"
+        )
+        XCTAssertNil(
+            AovModMergerEngine.assetBundleFamilyKey(
+                forNormalizedPath: "resources/1.64.1/assetbundle/resourcepackerinfosetall.assetbundle"
+            )
+        )
+
+        // Edras (has allshared) vs Bilow (global 4-file HUD + UI.bnk): Edras wins __battle_hud__ in BOTH orders!
+        for (bilowIdx, edrasIdx) in [(0, 1), (1, 0)] {
+            let paths: [String: Set<Int>] = [
+                "resources/1.64.1/assetbundle/uisystem/atlas/primary/allshared.assetbundle": [edrasIdx],
+                "resources/1.64.1/assetbundle/uisystem/battle/battlecommon.assetbundle": [bilowIdx],
+                "resources/1.64.1/assetbundle/uisystem/battle/battlecommon_raw.assetbundle": [bilowIdx, edrasIdx],
+                "resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle": [bilowIdx, edrasIdx],
+                "resources/1.64.1/assetbundle/uisystem/battle/battleotherui_raw.assetbundle": [bilowIdx],
+                "resources/1.64.1/sound/ios/ui.bnk": [bilowIdx],
+            ]
+            let res = AovModMergerEngine.resolveFamilyWinningModByKey(
+                pathKeys: Array(paths.keys),
+                modIndicesByPath: paths,
+                nonEmptyModsByPath: paths,
+                buildInfoByModIndex: [
+                    bilowIdx: ([1, 64, 1, 12], 1793129),
+                    edrasIdx: ([1, 64, 1, 12], 1793129),
+                ]
+            )
+            XCTAssertEqual(
+                res.familyWinnerByKey["resources/1.64.1/assetbundle/uisystem/battle/__battle_hud__"],
+                edrasIdx
+            )
+            XCTAssertEqual(res.hudConflictWinner, edrasIdx)
+            XCTAssertTrue(AovModMergerEngine.isGlobalUISoundBankPath("resources/1.64.1/sound/ios/ui.bnk"))
+        }
+
+        // Kiểm tra hàm nhận diện & tách global HUD khi gộp nhiều mod tướng (kể cả 1 mod HUD + 1 mod không HUD)
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/atlas/primary/allshared.assetbundle"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/battle/battlecommon_raw.assetbundle"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/sound/ios/ui.bnk"))
+        XCTAssertFalse(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/personalbutton/personalbuttonsprite_59903.assetbundle"))
+
+        let bilowSummary = AovModSummary(
+            url: URL(fileURLWithPath: "/tmp/Bilow.zip"),
+            fileName: "Bilow.zip",
+            fileSize: 1024,
+            heroID: 599,
+            skinID: 59903,
+            resourceVersion: "1.64.1",
+            heroIDs: [599],
+            skinIDs: [59903]
+        )
+        let nakSummary = AovModSummary(
+            url: URL(fileURLWithPath: "/tmp/Nakroth.zip"),
+            fileName: "Nakroth.zip",
+            fileSize: 1024,
+            heroID: 150,
+            skinID: 15009,
+            resourceVersion: "1.64.1",
+            heroIDs: [150],
+            skinIDs: [15009]
+        )
+        let camOnlySummary = AovModSummary(
+            url: URL(fileURLWithPath: "/tmp/CamXa.zip"),
+            fileName: "CamXa.zip",
+            fileSize: 512,
+            heroID: nil,
+            skinID: nil,
+            resourceVersion: "1.64.1",
+            heroIDs: [],
+            skinIDs: []
+        )
+
+        XCTAssertTrue(
+            AovModMergerEngine.shouldIsolateGlobalHudConflict(
+                summaries: [bilowSummary, nakSummary],
+                modIndicesByPath: ["resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle": [0]]
+            )
+        )
+        XCTAssertFalse(
+            AovModMergerEngine.shouldIsolateGlobalHudConflict(
+                summaries: [bilowSummary, camOnlySummary],
+                modIndicesByPath: ["resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle": [0]]
+            )
+        )
+    }
 }

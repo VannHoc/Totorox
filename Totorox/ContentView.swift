@@ -4,6 +4,7 @@ import UIKit
 struct ContentView: View {
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var license = LicenseManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     @State private var showSettings: Bool = false
     @State private var showLogs: Bool = false
     @State private var showRedeemSheet: Bool = false
@@ -19,6 +20,7 @@ struct ContentView: View {
             }
         }
         .background(TotoroxTheme.pageBackground)
+        .preferredColorScheme(themeManager.mode.colorScheme)
     }
 
     /// Chưa đăng nhập tài khoản thì chỉ hiện màn hình Đăng nhập / Đăng ký.
@@ -57,6 +59,9 @@ struct ContentView: View {
                     PatchConverterView()
                 case .merge:
                     MergeFileView()
+                case .mods:
+                    // Kho Mod đang để ở trạng thái nháp trên bản 3.0, fallback về Đè file.
+                    OverwriteFileView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -65,18 +70,17 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: license.hasActivePackage)
         .animation(.easeInOut(duration: 0.25), value: license.isDeviceVerified)
-        .preferredColorScheme(.light)
         .sheet(isPresented: $showSettings) {
             SettingsView()
-                .preferredColorScheme(.light)
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(isPresented: $showLogs) {
             LogView()
-                .preferredColorScheme(.light)
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(isPresented: $showRedeemSheet) {
             RedeemCodeSheet()
-                .preferredColorScheme(.light)
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .alert(language.text("account.logout_confirm_title"), isPresented: $showLogoutConfirm) {
             Button(language.text("account.logout_button"), role: .destructive) {

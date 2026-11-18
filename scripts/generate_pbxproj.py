@@ -9,7 +9,7 @@ with open(os.path.join('3105_repo', 'ThreeOneOSFive.xcodeproj', 'project.pbxproj
 text = orig.replace('ThreeOneOSFive-Bridging-Header.h', 'Totorox-Bridging-Header.h')
 text = text.replace('ThreeOneOSFive', 'Totorox')
 text = text.replace('3105.app', 'Totorox.app')
-text = text.replace('MARKETING_VERSION = 2.0;', 'MARKETING_VERSION = 1.0;')
+text = text.replace('MARKETING_VERSION = 2.0;', 'MARKETING_VERSION = 3.0;')
 text = text.replace('CURRENT_PROJECT_VERSION = 8;', 'CURRENT_PROJECT_VERSION = 1;')
 text = text.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = Totorox;')
 text = text.replace('PRODUCT_NAME = 3105;', 'PRODUCT_NAME = Totorox;')
@@ -183,7 +183,7 @@ test_configs = """
 \t\t\t\tCURRENT_PROJECT_VERSION = 1;
 \t\t\t\tGENERATE_INFOPLIST_FILE = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
-\t\t\t\tMARKETING_VERSION = 1.0;
+\t\t\t\tMARKETING_VERSION = 3.0;
 \t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.0;
@@ -200,7 +200,7 @@ test_configs = """
 \t\t\t\tCURRENT_PROJECT_VERSION = 1;
 \t\t\t\tGENERATE_INFOPLIST_FILE = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 16.0;
-\t\t\t\tMARKETING_VERSION = 1.0;
+\t\t\t\tMARKETING_VERSION = 3.0;
 \t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.apple.mobile.TotoroxTests;
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.0;

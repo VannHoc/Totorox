@@ -649,3 +649,61 @@
 "error.filemanager.cannot_archive" = "无法创建 ZIP 压缩包。";
 "error.filemanager.cannot_extract" = "无法解压 ZIP 压缩包。";
 "error.fileio.invalid_destination" = "目标路径无效或超出目标文件夹范围。";
+
+/* --- 第 4 层：worse_query（沙盒备用） --- */
+"settings.worse_query_label" = "第 4 层：worse_query";
+"settings.worse_query_ready" = "就绪（iOS 26+ 备用）";
+"settings.worse_query_not_needed" = "仅在 iOS 26+ 使用";
+"settings.worse_query_disabled" = "已关闭";
+"settings.worse_query_api_missing" = "此 iOS 版本不支持";
+"settings.worse_query_missing_group" = "签名缺少 App Group";
+
+/* --- 浅色 / 深色主题与内置 Mod 仓库 --- */
+"tab.mods" = "Mod仓库";
+"settings.section_appearance" = "界面外观";
+"settings.theme_light" = "浅色模式";
+"settings.theme_dark" = "深色模式";
+
+"modstore.header.title" = "传说对决皮肤 Mod 仓库";
+"modstore.header.credit" = "标准 Resources/ 模组 • 一键安装";
+"modstore.header.subtitle" = "在应用内直接下载已校验的英雄皮肤、按键与播报特效 Mod 包，一键发送至覆盖写入或合并文件。";
+"modstore.header.quota_short" = "新下载: 1 次 • 已缓存: 免费";
+"modstore.badge.total_mods" = "%lld 个模组";
+"modstore.badge.cached_count" = "%lld 已保存";
+"modstore.search.placeholder" = "搜索英雄、皮肤名称或 #ID...";
+"modstore.filter.all" = "全部";
+"modstore.filter.skin" = "英雄皮肤";
+"modstore.filter.button" = "按键与播报";
+"modstore.filter.bundle" = "组合套装";
+"modstore.filter.cached" = "已保存";
+"modstore.sort.newest" = "最新上架";
+"modstore.sort.popular" = "下载最多";
+"modstore.sort.name_asc" = "名称 (A → Z)";
+"modstore.sort.size_asc" = "体积最小";
+"modstore.select_guide" = "选择 1 个覆盖写入，选择 2 个及以上合并文件";
+"modstore.showing_count" = "%lld 项";
+"modstore.loading" = "正在加载 Mod 仓库列表...";
+"modstore.retry" = "重试";
+"modstore.empty" = "暂无符合筛选条件的 Mod 包。";
+"modstore.reset_filter" = "重置搜索与筛选";
+"modstore.category.skin" = "皮肤";
+"modstore.category.button" = "按键特效";
+"modstore.category.bundle" = "套装";
+"modstore.cached_badge" = "已保存在本机（重复使用不扣次数）";
+"modstore.selected_summary" = "已选 %lld 个";
+"modstore.quota_cached_free" = "已保存 • 0 次";
+"modstore.quota_cost_count" = "新下载消耗 %lld 次";
+"modstore.clear_selection" = "取消选择";
+"modstore.downloading_item" = "正在下载 (%lld/%lld): %@";
+"modstore.cancelled" = "已取消下载。";
+"modstore.action.download_overwrite" = "下载并立即覆盖";
+"modstore.action.cached_overwrite" = "立即覆盖（已保存）";
+"modstore.action.send_to_merge_one" = "下载并送至合并";
+"modstore.action.send_to_merge_short" = "送至合并";
+"modstore.action.share_zip" = "保存 / 分享 .zip 文件";
+"modstore.action.share_zip_short" = "保存 / 分享 .zip";
+"modstore.action.delete_cached" = "删除本机缓存副本";
+"modstore.action.download_merge" = "下载并合并 %lld 个 Mod";
+"modstore.action.cached_merge" = "将 %lld 个已存 Mod 送至合并";
+"modstore.error.invalid_zip" = "下载的文件不是有效的 .zip 压缩包。";
+"modstore.error.checksum_mismatch" = "下载的文件 SHA-256 校验不匹配，请重新下载。";

@@ -649,3 +649,61 @@
 "error.filemanager.cannot_archive" = "Không thể tạo tệp nén ZIP.";
 "error.filemanager.cannot_extract" = "Không thể giải nén tệp ZIP.";
 "error.fileio.invalid_destination" = "Đường dẫn đích không hợp lệ hoặc vượt ra ngoài thư mục mục tiêu.";
+
+/* --- Tầng 4: worse_query (dự phòng cấp quyền) --- */
+"settings.worse_query_label" = "Tầng 4: worse_query";
+"settings.worse_query_ready" = "Sẵn sàng (dự phòng cho iOS 26+)";
+"settings.worse_query_not_needed" = "Chỉ dùng trên iOS 26+";
+"settings.worse_query_disabled" = "Đã tắt";
+"settings.worse_query_api_missing" = "iOS này không hỗ trợ";
+"settings.worse_query_missing_group" = "Thiếu App Group trong chữ ký";
+
+/* --- Giao diện Sáng / Tối & Kho Mod Trực Tuyến --- */
+"tab.mods" = "Kho Mod";
+"settings.section_appearance" = "CHẾ ĐỘ GIAO DIỆN";
+"settings.theme_light" = "Giao diện Sáng";
+"settings.theme_dark" = "Giao diện Tối";
+
+"modstore.header.title" = "Kho Mod Skin Liên Quân";
+"modstore.header.credit" = "Kho mod chuẩn Resources/ • Cài đặt 1 chạm";
+"modstore.header.subtitle" = "Tải trực tiếp gói mod skin, nút bấm và hiệu ứng đã chuẩn hóa Resources/ ngay trong ứng dụng, chuyển thẳng sang Đè file hoặc Gộp file.";
+"modstore.header.quota_short" = "Tải mới: 1 lượt • Đã lưu: Miễn phí";
+"modstore.badge.total_mods" = "%lld bản mod";
+"modstore.badge.cached_count" = "%lld đã lưu";
+"modstore.search.placeholder" = "Tìm tên tướng, tên skin, #ID...";
+"modstore.filter.all" = "Tất cả";
+"modstore.filter.skin" = "Skin Tướng";
+"modstore.filter.button" = "Nút & Hạ";
+"modstore.filter.bundle" = "Combo Mod";
+"modstore.filter.cached" = "Đã lưu";
+"modstore.sort.newest" = "Mới cập nhật";
+"modstore.sort.popular" = "Tải nhiều nhất";
+"modstore.sort.name_asc" = "Tên (A → Z)";
+"modstore.sort.size_asc" = "Dung lượng nhẹ nhất";
+"modstore.select_guide" = "Chọn 1 gói để Đè file hoặc từ 2 gói để Gộp file";
+"modstore.showing_count" = "%lld mục";
+"modstore.loading" = "Đang tải danh sách Kho Mod...";
+"modstore.retry" = "Thử tải lại";
+"modstore.empty" = "Chưa có gói mod nào phù hợp bộ lọc.";
+"modstore.reset_filter" = "Xóa bộ lọc tìm kiếm";
+"modstore.category.skin" = "Skin";
+"modstore.category.button" = "Nút & Hạ";
+"modstore.category.bundle" = "Combo";
+"modstore.cached_badge" = "Đã lưu trên máy (dùng lại không tốn lượt)";
+"modstore.selected_summary" = "Đã chọn %lld gói";
+"modstore.quota_cached_free" = "Đã lưu • 0 lượt";
+"modstore.quota_cost_count" = "Tải mới: %lld lượt";
+"modstore.clear_selection" = "Bỏ chọn";
+"modstore.downloading_item" = "Đang tải (%lld/%lld): %@";
+"modstore.cancelled" = "Đã hủy tải gói mod.";
+"modstore.action.download_overwrite" = "Tải & Đè file ngay";
+"modstore.action.cached_overwrite" = "Đè file ngay (Đã lưu)";
+"modstore.action.send_to_merge_one" = "Tải & Đưa sang Gộp file";
+"modstore.action.send_to_merge_short" = "Đưa sang Gộp file";
+"modstore.action.share_zip" = "Lưu / Chia sẻ tệp .zip";
+"modstore.action.share_zip_short" = "Lưu / Chia sẻ .zip";
+"modstore.action.delete_cached" = "Xóa bản lưu trên máy";
+"modstore.action.download_merge" = "Tải & Gộp %lld gói Mod";
+"modstore.action.cached_merge" = "Gửi %lld gói đã lưu sang Gộp file";
+"modstore.error.invalid_zip" = "Tệp tải về không phải gói nén .zip hợp lệ.";
+"modstore.error.checksum_mismatch" = "Tệp tải về không khớp mã kiểm tra SHA-256 từ máy chủ. Vui lòng thử tải lại.";

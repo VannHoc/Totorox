@@ -5,6 +5,10 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
     case folders = 1
     case patch = 2
     case merge = 3
+    case mods = 4
+
+    /// Các tab hiển thị trên thanh điều hướng IPA 3.0 (Tab `.mods` Kho Mod đang giữ ở bản nháp, chưa mở trên UI).
+    static let visibleTabs: [TotoroxTab] = [.overwrite, .folders, .patch, .merge]
 
     var id: Int { rawValue }
 
@@ -14,6 +18,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .folders: return language.text("tab.folders")
         case .patch: return language.text("tab.patch")
         case .merge: return language.text("tab.merge")
+        case .mods: return language.text("tab.mods")
         }
     }
 
@@ -27,6 +32,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .folders: return "folder.fill"
         case .patch: return "arrow.triangle.2.circlepath"
         case .merge: return "square.stack.3d.up.fill"
+        case .mods: return "shippingbox.fill"
         }
     }
 }
@@ -38,12 +44,12 @@ struct TotoroxTabBar: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-                .background(TotoroxTheme.dividerColor)
+                .overlay(TotoroxTheme.dividerColor)
 
             HStack(spacing: 0) {
-                ForEach(TotoroxTab.allCases) { tab in
+                ForEach(TotoroxTab.visibleTabs) { tab in
                     let isSelected = (selectedTab == tab)
-                    
+
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedTab = tab
@@ -55,10 +61,10 @@ struct TotoroxTabBar: View {
                                 if isSelected {
                                     RoundedRectangle(cornerRadius: 2)
                                         .fill(TotoroxTheme.mintAccent)
-                                        .frame(width: 32, height: 3)
+                                        .frame(width: 28, height: 3)
                                 } else {
                                     Color.clear
-                                        .frame(width: 32, height: 3)
+                                        .frame(width: 28, height: 3)
                                 }
                             }
                             .frame(height: 3)
@@ -66,15 +72,18 @@ struct TotoroxTabBar: View {
 
                             // Tab Icon
                             Image(systemName: tab.iconName)
-                                .font(.system(size: 20, weight: isSelected ? .bold : .medium))
+                                .font(.system(size: 19, weight: isSelected ? .bold : .medium))
                                 .foregroundColor(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
 
                             // Tab Label
                             Text(tab.title(for: language))
-                                .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+                                .font(.system(size: 10.5, weight: isSelected ? .bold : .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                                 .foregroundColor(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.textSecondary)
                         }
                         .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 2)
                         .padding(.bottom, 6)
                         .contentShape(Rectangle())
                     }
@@ -85,6 +94,6 @@ struct TotoroxTabBar: View {
             .background(TotoroxTheme.cardBackground)
         }
         .background(TotoroxTheme.cardBackground.ignoresSafeArea(edges: .bottom))
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: -2)
+        .shadow(color: TotoroxTheme.shadowColor, radius: 6, x: 0, y: -2)
     }
 }

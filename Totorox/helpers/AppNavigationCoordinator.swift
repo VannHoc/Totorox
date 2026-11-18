@@ -8,6 +8,7 @@ final class AppNavigationCoordinator: ObservableObject {
     @Published var folderExplorerTargetURL: URL? = nil
     @Published var pendingOverwritePatchURL: URL? = nil
     @Published var pendingOverwriteBundleID: String? = nil
+    @Published var pendingMergeModURLs: [URL] = []
 
     init() {}
 
@@ -20,6 +21,11 @@ final class AppNavigationCoordinator: ObservableObject {
         self.pendingOverwritePatchURL = patchURL
         self.pendingOverwriteBundleID = bundleID
         self.selectedTab = .overwrite
+    }
+
+    func navigateToMerge(modURLs: [URL]) {
+        self.pendingMergeModURLs = modURLs
+        self.selectedTab = .merge
     }
 
     /// Xử lý mở file hoặc URL Scheme từ ứng dụng khác (AirDrop, Tệp, Safari, Chia sẻ...)
@@ -62,6 +68,9 @@ final class AppNavigationCoordinator: ObservableObject {
             }
         case "merge":
             self.selectedTab = .merge
+        case "mods", "store":
+            // Tab Kho Mod đang ở trạng thái nháp trên IPA 3.0
+            self.selectedTab = .overwrite
         case "patch", "convert":
             self.selectedTab = .patch
         case "folders", "explorer":

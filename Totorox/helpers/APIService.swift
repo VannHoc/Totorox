@@ -828,6 +828,9 @@ final class APIService {
             applyAuthHeaders(to: &request, token: token, hwid: hwid ?? "")
         } else {
             request.timeoutInterval = APIService.requestTimeout
+            if #available(iOS 14.5, *) {
+                request.assumesHTTP3Capable = false
+            }
         }
         signRequest(&request)
         do {
@@ -1059,6 +1062,180 @@ final class APIService {
         return try await session.upload(for: tunedRequest, from: body.data)
     }
 
+    // MARK: - Kho Mod Skin Trực Tuyến
+
+    func fetchModCatalog(
+        search: String = "",
+        token: String,
+        hwid: String
+    ) async -> Result<[ModCatalogItem], APIServiceError> {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent(ObfuscatedStrings.modsCatalog),
+            resolvingAgainstBaseURL: false
+        ) else {
+            return .failure(.invalidConfiguration)
+        }
+        let trimmedSearch = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSearch.isEmpty {
+            components.queryItems = [URLQueryItem(name: "search", value: trimmedSearch)]
+        }
+        guard let url = components.url else {
+            return .failure(.invalidConfiguration)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 {
+                    notifyUnauthorized(msg)
+                }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            let decoded = try parseJSON(ModCatalogResponseBody.self, from: data)
+            return .success(decoded.mods)
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    private final class DownloadTaskBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionDownloadTask?
+        private var observation: NSKeyValueObservation?
+        private var isCancelled = false
+
+        func attach(_ newTask: URLSessionDownloadTask, observation obs: NSKeyValueObservation?) {
+            lock.lock()
+            self.task = newTask
+            self.observation = obs
+            let shouldCancel = self.isCancelled
+            lock.unlock()
+            if shouldCancel {
+                obs?.invalidate()
+                newTask.cancel()
+            } else {
+                newTask.resume()
+            }
+        }
+
+        func cancel() {
+            lock.lock()
+            isCancelled = true
+            let activeTask = task
+            let obs = observation
+            observation = nil
+            lock.unlock()
+            obs?.invalidate()
+            activeTask?.cancel()
+        }
+
+        func invalidateObservation() {
+            lock.lock()
+            let obs = observation
+            observation = nil
+            lock.unlock()
+            obs?.invalidate()
+        }
+    }
+
+    func downloadModFile(
+        modId: Int,
+        fileName: String,
+        expectedBytes: Int64 = 0,
+        token: String,
+        hwid: String,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async -> Result<URL, APIServiceError> {
+        var request = URLRequest(url: baseURL.appendingPathComponent(ObfuscatedStrings.modsDownload))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/zip, application/json", forHTTPHeaderField: "Accept")
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        request.timeoutInterval = APIService.mergeTimeout
+        signRequest(&request)
+
+        let cleanHWID = hwid.trimmingCharacters(in: .whitespacesAndNewlines)
+        var payload: [String: Any] = ["mod_id": modId]
+        if !cleanHWID.isEmpty {
+            payload["udid"] = cleanHWID
+        }
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return .failure(.invalidConfiguration)
+        }
+        request.httpBody = bodyData
+
+        let box = DownloadTaskBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let task = self.session.downloadTask(with: request) { [weak self] tempURL, response, error in
+                    box.invalidateObservation()
+                    if let error {
+                        if let urlErr = error as? URLError, urlErr.code == .cancelled {
+                            continuation.resume(returning: .failure(.transport(AppLanguage.current.text("modstore.cancelled"))))
+                        } else {
+                            continuation.resume(returning: .failure(Self.failure(from: error)))
+                        }
+                        return
+                    }
+                    guard let http = response as? HTTPURLResponse, let tempURL else {
+                        if let tempURL { try? FileManager.default.removeItem(at: tempURL) }
+                        continuation.resume(returning: .failure(.invalidResponse))
+                        return
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        let errData = (try? Data(contentsOf: tempURL, options: .mappedIfSafe)) ?? Data()
+                        try? FileManager.default.removeItem(at: tempURL)
+                        let msg = errData.count <= 65_536 ? Self.errorMessage(from: errData) : nil
+                        if http.statusCode == 401 {
+                            self?.notifyUnauthorized(msg)
+                        }
+                        continuation.resume(returning: .failure(.serverRejected(status: http.statusCode, message: msg)))
+                        return
+                    }
+
+                    let fm = FileManager.default
+                    let stagingDir = fm.temporaryDirectory.appendingPathComponent("TotoroxModStoreStaging", isDirectory: true)
+                    let safeName = (fileName as NSString).lastPathComponent
+                    let cleanName = safeName.isEmpty ? "mod_\(modId).zip" : safeName
+                    let destURL = stagingDir.appendingPathComponent("\(UUID().uuidString)_\(cleanName)")
+                    do {
+                        try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+                        try? fm.removeItem(at: destURL)
+                        try fm.moveItem(at: tempURL, to: destURL)
+                        continuation.resume(returning: .success(destURL))
+                    } catch {
+                        try? fm.removeItem(at: tempURL)
+                        continuation.resume(returning: .failure(.ioFailure(error.localizedDescription)))
+                    }
+                }
+
+                let obs: NSKeyValueObservation?
+                if let onProgress {
+                    obs = task.progress.observe(\.completedUnitCount, options: [.new]) { progress, _ in
+                        let completed = max(0, progress.completedUnitCount)
+                        let total = progress.totalUnitCount > 0 ? progress.totalUnitCount : max(0, expectedBytes)
+                        onProgress(completed, total)
+                    }
+                } else {
+                    obs = nil
+                }
+                box.attach(task, observation: obs)
+            }
+        } onCancel: {
+            box.cancel()
+        }
+    }
+
     // MARK: - Parsing helpers
 
     private func parseJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
@@ -1190,6 +1367,20 @@ private enum ObfuscatedStrings {
         decode(
             [0x7d, 0x41, 0x54, 0x9a, 0x62, 0xdd, 0xc5, 0xe5, 0x3c, 0x59, 0xd4, 0xe4, 0xd9, 0x65, 0x16, 0xf0, 0x8f, 0xbb, 0x09, 0x75, 0xf3, 0x28, 0xfb, 0xc7, 0x34],
             [0x52, 0x20, 0x24, 0xf3, 0x4d, 0xab, 0xf4, 0xca, 0x51, 0x3c, 0xa6, 0x83, 0xbc, 0x48, 0x66, 0x9c, 0xee, 0xd5, 0x26, 0x16, 0x9b, 0x5d, 0x95, 0xac, 0x47]
+        )
+    }
+
+    static var modsCatalog: String {
+        decode(
+            [0x2e, 0x39, 0xdb, 0xc9, 0x24, 0xd5, 0x1c, 0x3d, 0x92, 0x81, 0x88],
+            [0x4f, 0x49, 0xb2, 0xe6, 0x52, 0xe4, 0x33, 0x50, 0xfd, 0xe5, 0xfb]
+        )
+    }
+
+    static var modsDownload: String {
+        decode(
+            [0x9f, 0x51, 0x5a, 0xe3, 0x39, 0x5c, 0x79, 0xeb, 0x1c, 0xf7, 0x3d, 0x38, 0x6a, 0x9c, 0x02, 0xc4, 0x21, 0x3a, 0x43, 0x1f],
+            [0xfe, 0x21, 0x33, 0xcc, 0x4f, 0x6d, 0x56, 0x86, 0x73, 0x93, 0x4e, 0x17, 0x0e, 0xf3, 0x75, 0xaa, 0x4d, 0x55, 0x22, 0x7b]
         )
     }
 }
@@ -1707,6 +1898,7 @@ struct MergePlanBody: Decodable {
     let bundleVersions: [BundleVersionBody]?
     let note: String?
     let baseModIndex: Int?
+    let isolateHudOnConflict: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case outputFilename = "output_filename"
@@ -1717,6 +1909,7 @@ struct MergePlanBody: Decodable {
         case bundleVersions = "bundle_versions"
         case note
         case baseModIndex = "base_mod_index"
+        case isolateHudOnConflict = "isolate_hud_on_conflict"
     }
 }
 
@@ -1818,4 +2011,47 @@ struct MergeJobStatusBody: Decodable {
         case note
         case user
     }
+}
+
+struct ModCatalogItem: Identifiable, Codable, Equatable, Sendable {
+    let id: Int
+    let name: String
+    let heroName: String
+    let skinName: String
+    let heroID: Int?
+    let resourceVersion: String
+    let category: String
+    let fileName: String
+    let fileSize: Int64
+    let sha256: String
+    var downloadCount: Int
+    let createdAt: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case heroName = "hero_name"
+        case skinName = "skin_name"
+        case heroID = "hero_id"
+        case resourceVersion = "resource_version"
+        case category
+        case fileName = "file_name"
+        case fileSize = "file_size"
+        case sha256
+        case downloadCount = "download_count"
+        case createdAt = "created_at"
+    }
+
+    var normalizedCategory: String {
+        let lower = category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower == "button" || lower == "bundle" || lower == "skin" {
+            return lower
+        }
+        return "skin"
+    }
+}
+
+struct ModCatalogResponseBody: Decodable {
+    let ok: Bool
+    let mods: [ModCatalogItem]
 }

@@ -1,4 +1,6 @@
 import Security
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Totorox
 
@@ -719,6 +721,163 @@ final class APIServiceLicenseTests: XCTestCase {
         case .failure(let err):
             XCTFail("Expected chunked queue success, got \(err.localizedDescription)")
         }
+    }
+
+    func testModCatalogAndDownloadSignRequestsAndVerifyCachedZip() async throws {
+        let validZipBytes = Data([0x50, 0x4B, 0x05, 0x06] + Array(repeating: 0x00, count: 18))
+        let zipSHA256 = "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85"
+
+        let catalogJSON = """
+        {
+          "ok": true,
+          "mods": [
+            {
+              "id": 7,
+              "name": "Murad Thiên Luân Kiếm Thánh",
+              "hero_name": "Murad",
+              "skin_name": "Thiên Luân Kiếm Thánh",
+              "hero_id": 131,
+              "resource_version": "1.64.1",
+              "category": "skin",
+              "file_name": "Murad_TLKT.zip",
+              "file_size": \(validZipBytes.count),
+              "sha256": "\(zipSHA256)",
+              "download_count": 18,
+              "created_at": 1763400000
+            }
+          ]
+        }
+        """
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        StubURLProtocol.handler = { req in
+            let path = req.url?.path ?? ""
+            if path == "/api/v1/mods" && req.httpMethod == "GET" {
+                return StubURLProtocol.Stub(statusCode: 200, body: catalogJSON)
+            }
+            if path == "/api/v1/mods/download" && req.httpMethod == "POST" {
+                return StubURLProtocol.Stub(statusCode: 200, data: validZipBytes)
+            }
+            return StubURLProtocol.Stub(statusCode: 404, body: #"{"detail":"Not Found"}"#)
+        }
+
+        let api = APIService(baseURL: URL(string: "https://example.test")!, session: session)
+
+        // 1. Fetch Mod Catalog
+        let mods: [ModCatalogItem]
+        switch await api.fetchModCatalog(search: "Murad", token: "tok_mods", hwid: "TEST-UDID") {
+        case .success(let fetched):
+            mods = fetched
+        case .failure(let err):
+            XCTFail("fetchModCatalog failed: \(err.localizedDescription)")
+            return
+        }
+        XCTAssertEqual(mods.count, 1)
+        let mod = try XCTUnwrap(mods.first)
+        XCTAssertEqual(mod.heroID, 131)
+        XCTAssertEqual(mod.normalizedCategory, "skin")
+
+        let catalogReq = try XCTUnwrap(StubURLProtocol.lastRequest)
+        XCTAssertEqual(catalogReq.url?.path, "/api/v1/mods")
+        XCTAssertEqual(catalogReq.url?.query, "search=Murad")
+        let catSig = try XCTUnwrap(catalogReq.value(forHTTPHeaderField: "X-Signature"))
+        let expectedCatSig = APIService.computeHMACSignature(
+            method: "GET",
+            path: "/api/v1/mods",
+            timestamp: try XCTUnwrap(catalogReq.value(forHTTPHeaderField: "X-Timestamp")),
+            nonce: try XCTUnwrap(catalogReq.value(forHTTPHeaderField: "X-Nonce")),
+            hwid: "TEST-UDID",
+            authorization: "Bearer tok_mods"
+        )
+        XCTAssertEqual(catSig, expectedCatSig)
+
+        // 2. Download Mod File & Store in ModStoreCache
+        let tempCacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ModStoreCacheTest_\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempCacheDir) }
+        let cache = ModStoreCache(rootDirectory: tempCacheDir)
+        XCTAssertNil(cache.cachedFileURL(for: mod))
+
+        let stagedURL: URL
+        switch await api.downloadModFile(
+            modId: mod.id,
+            fileName: mod.fileName,
+            expectedBytes: mod.fileSize,
+            token: "tok_mods",
+            hwid: "TEST-UDID"
+        ) {
+        case .success(let url):
+            stagedURL = url
+        case .failure(let err):
+            XCTFail("downloadModFile failed: \(err.localizedDescription)")
+            return
+        }
+
+        let storedURL = try cache.storeDownloadedFile(from: stagedURL, for: mod)
+        XCTAssertEqual(cache.cachedFileURL(for: mod)?.standardizedFileURL, storedURL.standardizedFileURL)
+        XCTAssertEqual(cache.cachedModIDs(matching: mods), [7])
+
+        // 3. Tampered SHA-256 must be rejected
+        let tamperedTemp = FileManager.default.temporaryDirectory.appendingPathComponent("tampered_\(UUID().uuidString).zip")
+        try Data([0x50, 0x4B, 0x05, 0x06] + Array(repeating: 0x01, count: 18)).write(to: tamperedTemp)
+        XCTAssertThrowsError(try cache.storeDownloadedFile(from: tamperedTemp, for: mod)) { err in
+            XCTAssertEqual(err as? ModStoreCacheError, .checksumMismatch)
+        }
+
+        // 4. Quota exhausted 403 parses backend error detail cleanly
+        StubURLProtocol.handler = { _ in
+            StubURLProtocol.Stub(statusCode: 403, body: #"{"detail":"Tài khoản đã hết lượt sử dụng."}"#)
+        }
+        switch await api.downloadModFile(modId: 7, fileName: "Murad.zip", token: "tok_mods", hwid: "TEST-UDID") {
+        case .success:
+            XCTFail("Expected 403 rejection")
+        case .failure(let err):
+            XCTAssertEqual(err, .serverRejected(status: 403, message: "Tài khoản đã hết lượt sử dụng."))
+        }
+
+        cache.removeCachedFile(for: mod.id)
+        XCTAssertNil(cache.cachedFileURL(for: mod))
+    }
+
+    @MainActor
+    func testThemeManagerPersistsLightAndDarkModeAndAdaptiveContrast() throws {
+        let suiteName = "ThemeManagerTest.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let manager = ThemeManager(defaults: defaults, applyToUIKitWindows: false)
+        XCTAssertEqual(manager.mode, .light)
+        XCTAssertEqual(manager.mode.colorScheme, .light)
+
+        manager.toggle()
+        XCTAssertEqual(manager.mode, .dark)
+        XCTAssertEqual(manager.mode.colorScheme, .dark)
+        XCTAssertEqual(defaults.string(forKey: AppThemeMode.storageKey), "dark")
+
+        let reloaded = ThemeManager(defaults: defaults, applyToUIKitWindows: false)
+        XCTAssertEqual(reloaded.mode, .dark)
+
+        // Verify dynamic UIColor traits keep high contrast in both Light and Dark trait collections
+        let cardUI = UIColor(TotoroxTheme.cardBackground)
+        let textUI = UIColor(TotoroxTheme.textPrimary)
+
+        let lightTraits = UITraitCollection(userInterfaceStyle: .light)
+        let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
+
+        var lightCardR: CGFloat = 0, lightTextR: CGFloat = 0
+        cardUI.resolvedColor(with: lightTraits).getRed(&lightCardR, green: nil, blue: nil, alpha: nil)
+        textUI.resolvedColor(with: lightTraits).getRed(&lightTextR, green: nil, blue: nil, alpha: nil)
+        XCTAssertGreaterThan(lightCardR, 0.9, "Light card background must stay bright")
+        XCTAssertLessThan(lightTextR, 0.25, "Light primary text must stay dark and readable")
+
+        var darkCardR: CGFloat = 0, darkTextR: CGFloat = 0
+        cardUI.resolvedColor(with: darkTraits).getRed(&darkCardR, green: nil, blue: nil, alpha: nil)
+        textUI.resolvedColor(with: darkTraits).getRed(&darkTextR, green: nil, blue: nil, alpha: nil)
+        XCTAssertLessThan(darkCardR, 0.2, "Dark card background must stay dark")
+        XCTAssertGreaterThan(darkTextR, 0.85, "Dark primary text must stay crisp light")
     }
 }
 

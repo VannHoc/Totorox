@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Màn hình Đăng nhập / Đăng ký tài khoản — hiện khi `LicenseManager.status.isAuthenticated == false`.
 struct ActivationView: View {
@@ -10,6 +11,7 @@ struct ActivationView: View {
     }
 
     @ObservedObject private var license = LicenseManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     @Environment(\.appLanguage) private var language
 
     @State private var authMode: AuthMode = .login
@@ -37,6 +39,32 @@ struct ActivationView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
+                HStack {
+                    Spacer()
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        themeManager.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: themeManager.mode.iconName)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                            Text(themeManager.mode.displayTitle(for: language))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(TotoroxTheme.cardBackground)
+                        .overlay(
+                            Capsule()
+                                .stroke(TotoroxTheme.cardBorderColor, lineWidth: 0.8)
+                        )
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 headerSection
 
                 authCard
@@ -44,9 +72,11 @@ struct ActivationView: View {
                 supportLinksSection
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 32)
+            .padding(.top, 16)
+            .padding(.bottom, 32)
         }
         .background(TotoroxTheme.pageBackground.ignoresSafeArea())
+        .preferredColorScheme(themeManager.mode.colorScheme)
         .onChange(of: authMode) { _ in
             localError = nil
         }
@@ -92,11 +122,18 @@ struct ActivationView: View {
                     Image(systemName: "person.fill")
                         .font(.system(size: 14))
                         .foregroundStyle(TotoroxTheme.mintAccent)
-                    TextField(language.text("auth.username_placeholder"), text: $usernameInput)
-                        .font(.system(size: 15))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.next)
+                    TextField(
+                        "",
+                        text: $usernameInput,
+                        prompt: Text(language.text("auth.username_placeholder"))
+                            .foregroundColor(TotoroxTheme.textSecondary)
+                    )
+                    .font(.system(size: 15))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .tint(TotoroxTheme.mintAccent)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
@@ -116,12 +153,24 @@ struct ActivationView: View {
                         .foregroundStyle(TotoroxTheme.mintAccent)
                     Group {
                         if showPassword {
-                            TextField(language.text("auth.password_placeholder"), text: $passwordInput)
+                            TextField(
+                                "",
+                                text: $passwordInput,
+                                prompt: Text(language.text("auth.password_placeholder"))
+                                    .foregroundColor(TotoroxTheme.textSecondary)
+                            )
                         } else {
-                            SecureField(language.text("auth.password_placeholder"), text: $passwordInput)
+                            SecureField(
+                                "",
+                                text: $passwordInput,
+                                prompt: Text(language.text("auth.password_placeholder"))
+                                    .foregroundColor(TotoroxTheme.textSecondary)
+                            )
                         }
                     }
                     .font(.system(size: 15))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .tint(TotoroxTheme.mintAccent)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -153,12 +202,24 @@ struct ActivationView: View {
                             .foregroundStyle(TotoroxTheme.mintAccent)
                         Group {
                             if showPassword {
-                                TextField(language.text("auth.confirm_password_placeholder"), text: $confirmPasswordInput)
+                                TextField(
+                                    "",
+                                    text: $confirmPasswordInput,
+                                    prompt: Text(language.text("auth.confirm_password_placeholder"))
+                                        .foregroundColor(TotoroxTheme.textSecondary)
+                                )
                             } else {
-                                SecureField(language.text("auth.confirm_password_placeholder"), text: $confirmPasswordInput)
+                                SecureField(
+                                    "",
+                                    text: $confirmPasswordInput,
+                                    prompt: Text(language.text("auth.confirm_password_placeholder"))
+                                        .foregroundColor(TotoroxTheme.textSecondary)
+                                )
                             }
                         }
                         .font(.system(size: 15))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .tint(TotoroxTheme.mintAccent)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     }
@@ -341,14 +402,21 @@ struct RedeemCodeSheet: View {
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(TotoroxTheme.textSecondary)
 
-                        TextField(language.text("redeem.input_placeholder"), text: $codeInput)
-                            .font(.system(size: 16, weight: .medium, design: .monospaced))
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        TextField(
+                            "",
+                            text: $codeInput,
+                            prompt: Text(language.text("redeem.input_placeholder"))
+                                .foregroundColor(TotoroxTheme.textSecondary)
+                        )
+                        .font(.system(size: 16, weight: .medium, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .tint(TotoroxTheme.mintAccent)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         if let errorMessage {
                             HStack(alignment: .top, spacing: 8) {

@@ -634,4 +634,58 @@ final class FileIOEngineTests: XCTestCase {
         XCTAssertFalse(fileManager.fileExists(atPath: destinationRoot.appendingPathComponent("ignored.txt").path))
         XCTAssertFalse(fileManager.fileExists(atPath: tempDirectory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
     }
+
+    // MARK: - 16. Direct Read, Shallow Child Count & Bulk Sibling Batch Context
+    func testReadDataDirectlyAndShallowChildCount() throws {
+        let emptyFile = tempDirectory.appendingPathComponent("empty.bin")
+        try Data().write(to: emptyFile)
+        XCTAssertEqual(ContainerStore.readDataDirectly(atPath: emptyFile.path), Data())
+
+        let payload = Data([0x00, 0x54, 0x4F, 0x54, 0xFF])
+        let normalFile = tempDirectory.appendingPathComponent("sample.bin")
+        try payload.write(to: normalFile)
+        XCTAssertEqual(ContainerStore.readDataDirectly(atPath: normalFile.path), payload)
+
+        let missingFile = tempDirectory.appendingPathComponent("does_not_exist.bin")
+        XCTAssertNil(ContainerStore.readDataDirectly(atPath: missingFile.path))
+
+        let hiddenFile = tempDirectory.appendingPathComponent(".DS_Store")
+        try Data([0x01]).write(to: hiddenFile)
+        // `tempDirectory` currently has: empty.bin, sample.bin, .DS_Store -> shallow count should ignore dotfiles (= 2)
+        XCTAssertEqual(ContainerStore.shallowChildCount(atPath: tempDirectory.path), 2)
+    }
+
+    func testBulkApplyMappedFilesPreservesSiblingFilesAndEmptyFiles() async throws {
+        let sourceRoot = tempDirectory.appendingPathComponent("BulkSource", isDirectory: true)
+        let destinationRoot = tempDirectory.appendingPathComponent("BulkDest", isDirectory: true)
+        let nestedSrc = sourceRoot.appendingPathComponent("Resources/1.64.1/Sub", isDirectory: true)
+        try fileManager.createDirectory(at: nestedSrc, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        var mappings: [(source: String, destination: String)] = []
+        for idx in 0..<25 {
+            let name = "file_\(idx).bytes"
+            let content = idx == 0 ? Data() : Data(repeating: UInt8(idx & 0xFF), count: 1024 + idx)
+            try content.write(to: nestedSrc.appendingPathComponent(name))
+            mappings.append((
+                source: "Resources/1.64.1/Sub/\(name)",
+                destination: "Resources/1.64.1/Sub/\(name)"
+            ))
+        }
+
+        let result = await engine.applyMappedFiles(
+            mappings,
+            from: sourceRoot,
+            to: destinationRoot,
+            conflictResolver: { _, _, _ in .replaceAll }
+        )
+
+        XCTAssertEqual(result.succeeded.count, 25)
+        XCTAssertTrue(result.failed.isEmpty)
+        for idx in 0..<25 {
+            let destFile = destinationRoot.appendingPathComponent("Resources/1.64.1/Sub/file_\(idx).bytes")
+            let expected = idx == 0 ? Data() : Data(repeating: UInt8(idx & 0xFF), count: 1024 + idx)
+            XCTAssertEqual(try Data(contentsOf: destFile), expected)
+        }
+    }
 }

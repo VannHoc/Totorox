@@ -229,14 +229,14 @@ struct WindowsConflictDialog: View {
         }
         .padding(18)
         .frame(maxWidth: 340)
-        .background(Color.white.opacity(0.88))
+        .background(TotoroxTheme.cardBackground.opacity(0.95))
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+                .strokeBorder(TotoroxTheme.cardBorderColor, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.14), radius: 18, y: 8)
+        .shadow(color: TotoroxTheme.shadowColor, radius: 18, y: 8)
         .padding(.horizontal, 24)
         .presentationDetents([.fraction(0.55), .medium])
     }
@@ -296,6 +296,7 @@ struct OverwriteOutcomeView: View {
                                         .foregroundStyle(TotoroxTheme.mintAccent)
                                     Text(url.lastPathComponent)
                                         .font(.system(size: 13, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
                                     Spacer()
                                 }
                                 .padding(.vertical, 4)
@@ -318,6 +319,7 @@ struct OverwriteOutcomeView: View {
                                             .foregroundStyle(Color.red)
                                         Text(record.url.lastPathComponent)
                                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(TotoroxTheme.textPrimary)
                                     }
                                     Text(record.reason)
                                         .font(.system(size: 12))
@@ -342,6 +344,7 @@ struct OverwriteOutcomeView: View {
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                     Text(url.lastPathComponent)
                                         .font(.system(size: 13, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
                                     Spacer()
                                 }
                                 .padding(.vertical, 4)
