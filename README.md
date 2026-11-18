@@ -20,7 +20,7 @@
 
 ## 🌟 Giới thiệu
 
-**Totorox** là giải pháp nâng cao được phát triển dựa trên nền tảng kiến trúc của `3105` và `FilzaSlop`, mang lại khả năng quản lý container dữ liệu ứng dụng, tệp tin và gói Patch mạnh mẽ trên iOS (hỗ trợ từ iOS 16.0 đến iOS 27.x).
+**Totorox** là giải pháp nâng cao được phát triển dựa trên nền tảng kiến trúc của FilzaSlop, mang lại khả năng quản lý container dữ liệu ứng dụng, tệp tin và gói Patch mạnh mẽ trên iOS (hỗ trợ từ iOS 16.0 đến iOS 27.x).
 
 Ứng dụng tích hợp toàn bộ các cơ chế cấp thấp (MCM exploit, Sandbox escape, Kernel R/W primitives OPA334, Bridging Header) và bổ sung các hệ thống xử lý tệp tin chuyên biệt:
 1. **File I/O Engine chuyên dụng:** Quy tắc ghi đè file không hash check, merge đệ quy thư mục nhiều cấp trên Background Thread, xử lý xung đột loại (File vs Folder) với cơ chế hỏi ý kiến người dùng (`Replace` / `Skip` / `Cancel`) tuyệt đối không xóa âm thầm dữ liệu đích, cùng khả năng hủy thao tác an toàn và báo cáo chi tiết (`Succeeded`, `Failed`, `Skipped`).
@@ -65,20 +65,6 @@ Totorox/
     ├── generate_pbxproj.py             # Script sinh và cập nhật project.pbxproj
     └── test_engine.py                  # Script kiểm thử độc lập các module engine
 ```
-
----
-
-## 🛠 Hướng dẫn Build & Chạy Test
-
-### Cách 1: Sử dụng XcodeGen
-```bash
-brew install xcodegen
-xcodegen generate
-xcodebuild test -project Totorox.xcodeproj -scheme Totorox -destination 'platform=iOS Simulator,name=iPhone 15'
-```
-
-### Cách 2: Mở trực tiếp bằng Xcode
-Mở tệp `Totorox.xcodeproj` trên macOS, chọn Scheme `Totorox` để build ứng dụng hoặc Scheme `TotoroxTests` (phím tắt `Cmd + U`) để chạy toàn bộ Unit Test.
 
 ---
 
