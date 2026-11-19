@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Darwin
 
 extension Notification.Name {
     static let totoroxContainersDidUpdate = Notification.Name("TotoroxContainersDidUpdate")
@@ -287,6 +288,178 @@ final class ContainerMetadataCache: @unchecked Sendable {
         directorySizes[canon] = size
     }
 
+    // MARK: - Persisted scan snapshot
+    //
+    // Reference app `Exploit-v2.2.1` keeps its inventory in
+    // `<caches>/wq-container-scan.plist` and serves `[RESOLVER] Cache hit and
+    // validated` from it before touching LaunchServices, MCM or the bundle
+    // directories. Totorox used to rebuild everything on every launch, which is
+    // where the multi-second cold start came from. The snapshot below is the
+    // same idea: cheap to read, validated entry by entry, refreshed by the
+    // background scan.
+
+    private struct PersistedEntry: Codable {
+        let uuid: String
+        let path: String
+        let bundleID: String
+        let name: String
+        let isUserApp: Bool
+    }
+
+    private struct PersistedScan: Codable {
+        let savedAt: Date
+        let entries: [PersistedEntry]
+        let launchServicesIDs: [String]
+        let launchServicesStorePath: String?
+    }
+
+    /// Container list may change when the user installs/removes an app; names
+    /// and the LaunchServices store path only change at the same moments.
+    static let snapshotTTL: TimeInterval = 600
+    static let launchServicesTTL: TimeInterval = 7 * 24 * 3600
+
+    private var lastPersistAt: Date?
+    private var persistedSavedAt: Date?
+    private var persistedLaunchServicesStore: String?
+    private var containerRecordsCache: [[String: Any]] = []
+    private var containerRecordsAt: Date?
+
+    private static var snapshotURL: URL {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return directory.appendingPathComponent("totorox-container-scan.plist")
+    }
+
+    /// LaunchServices `.csstore` found earlier; retried before running the MCM
+    /// `com.apple.lsd` lookup again (reference `WQLaunchServicesStore`).
+    var launchServicesStorePath: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return persistedLaunchServicesStore
+        }
+        set {
+            lock.lock()
+            persistedLaunchServicesStore = newValue
+            lock.unlock()
+        }
+    }
+
+    func persistedSnapshotAge() -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let savedAt = persistedSavedAt else { return nil }
+        return Date().timeIntervalSince(savedAt)
+    }
+
+    /// Container-manager inventory shared by the scanner and the LaunchServices
+    /// lookup: `MCMEnumerateContainerRecords` costs up to 28 daemon round-trips,
+    /// and both used to issue it independently on every pass.
+    func cachedContainerRecords(maxAge: TimeInterval = 60) -> [[String: Any]]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let at = containerRecordsAt,
+              !containerRecordsCache.isEmpty,
+              Date().timeIntervalSince(at) <= maxAge else { return nil }
+        return containerRecordsCache
+    }
+
+    func storeContainerRecords(_ records: [[String: Any]]) {
+        guard !records.isEmpty else { return }
+        lock.lock()
+        containerRecordsCache = records
+        containerRecordsAt = Date()
+        lock.unlock()
+    }
+
+    private static func containerStillExists(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), path.count > 1 else { return false }
+        var st = stat()
+        if lstat(path, &st) == 0 { return true }
+        // A sandbox denial is not proof that the container is gone.
+        return errno == EPERM || errno == EACCES
+    }
+
+    /// Load the previous session's inventory. Entries whose container vanished
+    /// (app uninstalled) or whose bundle id/uuid pair is invalid are dropped.
+    @discardableResult
+    func hydratePersistedSnapshot() -> [AppContainerMetadata] {
+        guard let data = try? Data(contentsOf: Self.snapshotURL),
+              let scan = try? PropertyListDecoder().decode(PersistedScan.self, from: data) else {
+            return []
+        }
+
+        lock.lock()
+        persistedSavedAt = scan.savedAt
+        if let store = scan.launchServicesStorePath, !store.isEmpty {
+            persistedLaunchServicesStore = store
+        }
+        if _cachedLaunchServicesIDs == nil, !scan.launchServicesIDs.isEmpty {
+            _cachedLaunchServicesIDs = scan.launchServicesIDs
+        }
+        lock.unlock()
+
+        var result: [AppContainerMetadata] = []
+        var seenBundleIDs = Set<String>()
+        for entry in scan.entries {
+            guard ContainerStore.isValidAppBundleID(entry.bundleID, uuid: entry.uuid),
+                  Self.containerStillExists(entry.path),
+                  seenBundleIDs.insert(entry.bundleID.lowercased()).inserted else { continue }
+            let meta = AppContainerMetadata(
+                uuid: entry.uuid,
+                containerPath: entry.path,
+                bundleID: entry.bundleID,
+                appName: entry.name,
+                icon: cachedIcon(for: entry.bundleID),
+                isUserApp: entry.isUserApp
+            )
+            store(app: meta)
+            result.append(meta)
+        }
+        return result
+    }
+
+    /// Write the inventory for the next launch. Debounced: a full scan stores
+    /// hundreds of entries and calls this repeatedly.
+    func persistSnapshot(force: Bool = false) {
+        lock.lock()
+        let now = Date()
+        if !force, let last = lastPersistAt, now.timeIntervalSince(last) < 5 {
+            lock.unlock()
+            return
+        }
+        lastPersistAt = now
+        let apps = appMetadataByBundleID
+        let launchServicesIDs = _cachedLaunchServicesIDs ?? []
+        let store = persistedLaunchServicesStore
+        lock.unlock()
+
+        var seen = Set<String>()
+        var entries: [PersistedEntry] = []
+        for (key, meta) in apps where key == meta.bundleID.lowercased() {
+            guard seen.insert(meta.bundleID.lowercased()).inserted else { continue }
+            entries.append(PersistedEntry(
+                uuid: meta.uuid,
+                path: meta.containerPath,
+                bundleID: meta.bundleID,
+                name: meta.appName,
+                isUserApp: meta.isUserApp
+            ))
+        }
+        guard !entries.isEmpty || !launchServicesIDs.isEmpty else { return }
+
+        let scan = PersistedScan(
+            savedAt: now,
+            entries: entries,
+            launchServicesIDs: Array(launchServicesIDs.prefix(4_096)),
+            launchServicesStorePath: store
+        )
+        DispatchQueue.global(qos: .utility).async {
+            guard let data = try? PropertyListEncoder().encode(scan) else { return }
+            try? data.write(to: Self.snapshotURL, options: .atomic)
+        }
+    }
+
     func invalidate(path: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -304,6 +477,8 @@ final class ContainerMetadataCache: @unchecked Sendable {
         activatedBundleIDs.removeAll()
         directoryListCache.removeAll()
         directorySizes.removeAll()
+        containerRecordsCache.removeAll()
+        containerRecordsAt = nil
         _cachedFilesystemDirs = nil
         iconCache.removeAllObjects()
     }

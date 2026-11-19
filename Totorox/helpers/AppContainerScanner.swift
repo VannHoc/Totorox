@@ -347,6 +347,22 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         hasCompletedFastPass = true
         cacheLock.unlock()
 
+        let fastStart = CFAbsoluteTimeGetCurrent()
+
+        // 0. Previous session's inventory (`totorox-container-scan.plist`).
+        //    Reference app `Exploit-v2.2.1` serves `[RESOLVER] Cache hit and
+        //    validated` from its persisted scan and only refreshes in the
+        //    background; a fresh snapshot makes the whole fast pass free.
+        let hydrated = hydratePersistedSnapshot()
+        if hydrated > 0,
+           let age = ContainerMetadataCache.shared.persistedSnapshotAge(),
+           age < ContainerMetadataCache.snapshotTTL {
+            let elapsed = (CFAbsoluteTimeGetCurrent() - fastStart) * 1000
+            log("[TIME] fast-pass cache-hit \(String(format: "%.1f", elapsed))ms " +
+                "apps=\(hydrated) age=\(Int(age))s")
+            return
+        }
+
         // 1. Direct POSIX opendir of /var/mobile/Containers/Data/Application (if accessible without inode scan)
         for root in ["/var/mobile/Containers/Data/Application", "/private/var/mobile/Containers/Data/Application"] {
             if let dir = opendir(root) {
@@ -391,6 +407,36 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
         }
 
+        // 2b. MobileContainerManager inventory (classes 1…14, no flags, no part).
+        //     `container_object_get_path` is metadata, so this needs no sandbox
+        //     token and is the only enumeration that still answers on iOS 27,
+        //     where `LSApplicationWorkspace`, MobileInstallation and MCM
+        //     activation all come back empty. Reference `_wq_run_shared_scan`.
+        let recordsStart = CFAbsoluteTimeGetCurrent()
+        let records = ContainerStore.containerRecords()
+        var recordsUsed = 0
+        for record in records {
+            guard let path = record["path"] as? String,
+                  let identifier = record["identifier"] as? String,
+                  !identifier.isEmpty,
+                  ContainerStore.isValidAppBundleID(identifier),
+                  ContainerStore.isApplicationContainerPath(path) else { continue }
+            if getCachedInfo(forBundleID: identifier) != nil { continue }
+            let meta = ContainerStore.readContainerMetadata(containerPath: path)
+            if registerResolvedApp(
+                bundleID: meta?.bundleID ?? identifier,
+                containerPath: path,
+                preferredName: meta?.displayName
+            ) != nil {
+                recordsUsed += 1
+            }
+        }
+        if recordsUsed > 0 || records.isEmpty {
+            let elapsed = (CFAbsoluteTimeGetCurrent() - recordsStart) * 1000
+            log("[TIME] MCM inventory \(String(format: "%.1f", elapsed))ms " +
+                "records=\(records.count) resolved=\(recordsUsed)")
+        }
+
         // 3. LaunchServices / MobileInstallation API
         let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
         for (bundleID, info) in lsInfo where ContainerStore.isValidAppBundleID(bundleID) {
@@ -432,6 +478,32 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         }
 
         _ = buildSortedSnapshotFromCache()
+        ContainerMetadataCache.shared.persistSnapshot()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - fastStart) * 1000
+        log("[TIME] fast-pass \(String(format: "%.1f", elapsed))ms apps=\(allCachedApps().count)")
+    }
+
+    /// Adopt the persisted inventory (`totorox-container-scan.plist`) without
+    /// touching MobileInstallation, MCM or the bundle directories. Every entry
+    /// was validated before it was written and is re-validated on load.
+    @discardableResult
+    private func hydratePersistedSnapshot() -> Int {
+        let metas = ContainerMetadataCache.shared.hydratePersistedSnapshot()
+        var added = 0
+        for meta in metas where getCachedInfo(forBundleID: meta.bundleID) == nil {
+            let app = AppContainerInfo(
+                appName: meta.appName,
+                bundleID: meta.bundleID,
+                udid: meta.uuid,
+                dataPath: meta.containerPath
+            )
+            storeInCache(app)
+            added += 1
+        }
+        if added > 0 {
+            _ = buildSortedSnapshotFromCache()
+        }
+        return added
     }
 
     /// Scans all application containers on a background thread using a deduplicated two-stage pipeline.
