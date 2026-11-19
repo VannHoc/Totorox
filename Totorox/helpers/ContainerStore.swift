@@ -580,6 +580,19 @@ enum ContainerStore {
         }
     }
 
+    /// Container-manager inventory shared by the app scanner and the
+    /// LaunchServices store lookup. One `MCMEnumerateContainerRecords` call is
+    /// up to 14 class queries; issuing it twice per pass was the single most
+    /// expensive repeated work left in the fast path.
+    static func containerRecords(limit: Int = 4_096) -> [[String: Any]] {
+        if let cached = ContainerMetadataCache.shared.cachedContainerRecords() {
+            return cached
+        }
+        let records = MCMEnumerateContainerRecords(14, NSUInteger(limit), nil)
+        ContainerMetadataCache.shared.storeContainerRecords(records)
+        return records
+    }
+
     static func launchServicesStoreIdentifiers() -> [String] {
         if let cached = ContainerMetadataCache.shared.cachedLaunchServicesIDs, !cached.isEmpty {
             return cached
@@ -594,9 +607,27 @@ enum ContainerStore {
             cachePaths.append(path)
         }
 
+        // Store path remembered from the previous launch (reference
+        // `WQLaunchServicesStore`): try it before paying for the MCM lookup.
+        if let remembered = ContainerMetadataCache.shared.launchServicesStorePath,
+           !remembered.isEmpty {
+            let rememberedDirectory = (remembered as NSString).deletingLastPathComponent
+            if access(rememberedDirectory, R_OK) == 0 {
+                addCachePath(rememberedDirectory)
+            }
+        }
+
         var leasedCachePaths = Set<String>()
         var serviceLookupError: NSString?
-        if let servicePath = MCMActivateContainerPath(
+        // Path lookup first: it needs no activation token, which is exactly what
+        // iOS 27 refuses. Activation stays as the fallback because it is what
+        // makes the store readable on iOS 26.
+        if let servicePath = MCMContainerPathForIdentifier(
+            10,
+            "com.apple.lsd",
+            false,
+            &serviceLookupError
+        ) ?? MCMActivateContainerPath(
             10,
             "com.apple.lsd",
             false,
@@ -608,6 +639,17 @@ enum ContainerStore {
         } else if shouldUseBadQuery {
             let detail = serviceLookupError.map { String($0) } ?? "no path"
             log("browser: MCM com.apple.lsd activation unavailable detail=\(detail)")
+        }
+
+        if leasedCachePaths.isEmpty {
+            // Same lookup through the token-free container inventory: on iOS 27
+            // MCM activation is refused but the record still carries the path.
+            for record in containerRecords(limit: 1_024) {
+                guard (record["identifier"] as? String) == "com.apple.lsd",
+                      let path = record["path"] as? String,
+                      !path.isEmpty else { continue }
+                addCachePath((path as NSString).appendingPathComponent("Library/Caches"))
+            }
         }
 
         if leasedCachePaths.isEmpty {
@@ -661,12 +703,14 @@ enum ContainerStore {
                 for identifier in extracted where seenIdentifiers.insert(identifier).inserted {
                     identifiers.append(identifier)
                 }
+                ContainerMetadataCache.shared.launchServicesStorePath = storePath
                 log("browser: LaunchServices store \(name) bytes=\(data.count) candidates=\(identifiers.count)")
             }
         }
 
         if !identifiers.isEmpty {
             ContainerMetadataCache.shared.cachedLaunchServicesIDs = identifiers
+            ContainerMetadataCache.shared.persistSnapshot()
         }
         log("browser: LaunchServices store total candidates=\(identifiers.count)")
         return identifiers

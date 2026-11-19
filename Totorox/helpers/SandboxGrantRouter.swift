@@ -287,6 +287,14 @@ enum SandboxGrantRouter {
                     variant = variant.opposite
                     continue
                 }
+                // Reference `_wq_grant`: -5 means the daemon could not answer at
+                // all (usually an access cache left broken by a killed swap).
+                // Repair it once per minute and retry the same flags.
+                if round == 0,
+                   handle == Int64(WQ_ERR_NO_RESULT),
+                   repairAccessCacheIfNeeded(group: group) {
+                    continue
+                }
                 return .failed(handle)
             }
 
@@ -294,7 +302,7 @@ enum SandboxGrantRouter {
             // the group container from its own cache it hands back a token for
             // `<group>` instead of the swapped target. Verifying here keeps a
             // useless handle out of `ContainerStore.activeGrantHandles`.
-            let accessError = verifyAccess(path: path, requireWrite: requireWrite)
+            let accessError = verifyGrant(path: path, requireWrite: requireWrite)
             if accessError == 0 {
                 WorseQuery.noteVariant(variant.rawValue)
                 noteWorseQuerySuccess(strict: targetExists)
@@ -427,6 +435,66 @@ enum SandboxGrantRouter {
         }
         return badQueryAccessError(forErrno: initialErrno)
         #endif
+    }
+
+    /// Confirms a **consumed** Tier 4 extension with the same rule the reference
+    /// `_wq_grant` uses: only `EPERM` from `open(2)` means "the token does not
+    /// cover the target".
+    ///
+    /// `EACCES` is a POSIX mode-bit answer (an unreadable file still belongs to
+    /// the container we were granted), and `ENOENT` says nothing about the token.
+    /// Treating those as a denial is what made iOS 27 log false failures while
+    /// the extension was in fact valid, so they must not veto the grant.
+    static func verifyGrant(path: String, requireWrite: Bool = false) -> Int64 {
+        #if targetEnvironment(simulator)
+        return 0
+        #else
+        var st = stat()
+        let knownDirectory = stat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR
+        var flags: Int32 = O_RDONLY | O_CLOEXEC | O_NONBLOCK
+        if knownDirectory { flags |= O_DIRECTORY }
+
+        errno = 0
+        let fd = open(path, flags)
+        if fd >= 0 {
+            close(fd)
+        } else {
+            let code = errno
+            if code == EPERM { return -Int64(EPERM) }
+            // ENOENT/EACCES/anything else: not a statement about the token.
+            if code != ENOENT && code != EACCES { return 0 }
+            if code == ENOENT { return verifyAccess(path: path, requireWrite: requireWrite) }
+        }
+
+        guard requireWrite else { return 0 }
+
+        errno = 0
+        if access(path, W_OK) == 0 { return 0 }
+        if errno == EPERM { return -Int64(EPERM) }
+        // Read-only POSIX bits are staged by FileIOEngine through the parent
+        // directory, so let the ancestor-aware check decide.
+        return verifyAccess(path: path, requireWrite: true)
+        #endif
+    }
+
+    private static var lastAccessCacheRepair: Date?
+    private static let repairLock = NSLock()
+
+    /// `_wq_grant` rate-limits the access-cache repair to once a minute: on a
+    /// patched build every query returns -5, and without the limit each grant
+    /// would rebuild the whole App Group cache.
+    private static func repairAccessCacheIfNeeded(group: String) -> Bool {
+        repairLock.lock()
+        if let last = lastAccessCacheRepair, Date().timeIntervalSince(last) < 60 {
+            repairLock.unlock()
+            return false
+        }
+        lastAccessCacheRepair = Date()
+        repairLock.unlock()
+
+        let repaired = WorseQuery.repairAccessCache(group: group)
+        log("grant: worse_query -5, access cache repair \(repaired ? "ok" : "failed") group=\(group)")
+        return repaired
     }
 
     /// Maps a failed `access(2)` errno to the synthetic error code the router
