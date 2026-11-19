@@ -173,7 +173,7 @@ enum WorseQuery {
     }
 
     /// Remember the variant that actually unlocked the target (call only after
-    /// the handle was verified with `SandboxGrantRouter.verifyGrant`).
+    /// the handle was verified with `access(2)`).
     static func noteVariant(_ used: Int32) {
         #if !targetEnvironment(simulator)
         worse_query_note_variant(used)
@@ -212,18 +212,6 @@ enum WorseQuery {
     static func release(_ handle: Int64) {
         guard handle >= 0 else { return }
         worse_query_release(handle)
-    }
-
-    /// Rebuild `<group>/Library/Caches` after the daemon answered
-    /// `WQ_ERR_NO_RESULT` (-5). The reference repairs its access cache and
-    /// retries the same operation flags once; without the repair every later
-    /// query on that group keeps returning -5.
-    static func repairAccessCache(group: String) -> Bool {
-        #if targetEnvironment(simulator)
-        return false
-        #else
-        return group.withCString { worse_query_reset_access_cache($0) == 0 }
-        #endif
     }
 
     // MARK: - Self-heal
