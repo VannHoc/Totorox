@@ -524,6 +524,7 @@ final class PatchZipConverterTests: XCTestCase {
 
         XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/KernelLua.pkg.bytes"))
         XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Ages/Prefab_Characters/Prefab_Hero/StableSystems_3.pkg.bytes"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/AssetRefs/Hero/150_AssetRef.bytes"))
         XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/version.txt"))
         XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Languages/VN_Garena_VN/languageMap.txt"))
     }
@@ -1072,11 +1073,14 @@ final class PatchZipConverterTests: XCTestCase {
             XCTAssertTrue(AovModMergerEngine.isGlobalUISoundBankPath("resources/1.64.1/sound/ios/ui.bnk"))
         }
 
-        // Kiểm tra hàm nhận diện & tách global HUD khi gộp nhiều mod tướng (kể cả 1 mod HUD + 1 mod không HUD)
+        // Kiểm tra hàm nhận diện & tách global HUD khi gộp nhiều mod tướng (kể cả 1 mod HUD + 1 mod không HUD, hoặc 2 mod cùng tướng)
         XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/atlas/primary/allshared.assetbundle"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/atlas/primary/allshared_raw.assetbundle"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/allshared_raw.assetbundle"))
         XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/battle/battlecommon_raw.assetbundle"))
         XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle"))
         XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/sound/ios/ui.bnk"))
+        XCTAssertTrue(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/sound/ios/vietnamese/ui.bnk"))
         XCTAssertFalse(AovModMergerEngine.isGlobalHudConflictPath("resources/1.64.1/assetbundle/personalbutton/personalbuttonsprite_59903.assetbundle"))
 
         let bilowSummary = AovModSummary(
@@ -1114,6 +1118,12 @@ final class PatchZipConverterTests: XCTestCase {
             AovModMergerEngine.shouldIsolateGlobalHudConflict(
                 summaries: [bilowSummary, nakSummary],
                 modIndicesByPath: ["resources/1.64.1/assetbundle/uisystem/battle/battleotherui.assetbundle": [0]]
+            )
+        )
+        XCTAssertTrue(
+            AovModMergerEngine.shouldIsolateGlobalHudConflict(
+                summaries: [nakSummary, nakSummary],
+                modIndicesByPath: ["resources/1.64.1/assetbundle/uisystem/allshared_raw.assetbundle": [0]]
             )
         )
         XCTAssertFalse(
