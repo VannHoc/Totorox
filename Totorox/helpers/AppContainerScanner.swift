@@ -382,11 +382,23 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             "detail=\(mcmError.map(String.init) ?? "none")")
         var containerManagerPaths: [String] = []
         containerManagerPaths.reserveCapacity(mcmPairs.count)
+        var mcmActivationFailures = 0
         for (identifier, containerPath) in mcmPairs {
             guard ContainerStore.isApplicationContainerPath(containerPath) else { continue }
             let udid = (containerPath as NSString).lastPathComponent
             containerManagerPaths.append(containerPath)
             if getCachedInfo(forUDID: udid) != nil { continue }
+
+            // Activate the container lease with the identifier the daemon itself
+            // reported. On iOS 27 a class-2 container is registered under its
+            // UUID, so the old bundle-id lookup never produced a lease and every
+            // metadata read answered "MCM object contained no sandbox token".
+            // The lease is also what makes the container's files readable: a
+            // bad_query/worse_query path token covers the directory node only.
+            var activateError: NSString?
+            if MCMActivateContainerPath(2, identifier, false, &activateError) == nil {
+                mcmActivationFailures += 1
+            }
 
             // Older builds report the bundle id as the class-2 identifier: no
             // metadata read, no grant, straight into the list.
@@ -396,7 +408,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
 
             // Newer builds report the container UUID, so the name only exists in
-            // the container's metadata plist. One grant here; the result is
+            // the container's metadata plist. One lease here; the result is
             // cached by UUID afterwards, so this is a first-scan cost only.
             if let meta = ContainerStore.readContainerMetadata(containerPath: containerPath),
                ContainerStore.isValidAppBundleID(meta.bundleID, uuid: udid) {
@@ -409,6 +421,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             // Deliberately not `markUnresolved` here: a missing token is
             // transient, and the unresolved set has no TTL, so a poisoned entry
             // would hide the app for the rest of the session.
+        }
+        if mcmActivationFailures > 0 {
+            log("browser: MCM lease activation failed for \(mcmActivationFailures)/\(mcmPairs.count) containers")
         }
         cacheLock.lock()
         mcmContainerPaths = containerManagerPaths

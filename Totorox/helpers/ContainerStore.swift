@@ -918,11 +918,28 @@ enum ContainerStore {
         }
 
         if plistData == nil {
-            if UUID(uuidString: uuid) != nil, let knownBID = bundleID(forUUID: uuid) {
+            // The container lease is the only thing that unlocks this plist: a
+            // bad_query/worse_query token covers the container's directory node
+            // while `.com.apple.mobile_container_manager.metadata.plist` keeps
+            // answering EPERM (the iOS 27.0.1 log shows exactly that), which is
+            // why only one container out of 211 ever resolved to a bundle id.
+            //
+            // The lease has to be requested with the identifier the container is
+            // registered under: the UUID on iOS 27, the bundle id only on older
+            // builds. That is why the UUID is tried first.
+            var leased = false
+            if UUID(uuidString: uuid) != nil, isApplicationContainerPath(cleanContainer) {
+                var leaseError: NSString?
+                leased = MCMActivateContainerPath(2, uuid, false, &leaseError) != nil
+            }
+            if !leased, UUID(uuidString: uuid) != nil, let knownBID = bundleID(forUUID: uuid) {
                 var actErr: NSString?
-                _ = MCMActivateContainerPath(2, knownBID, false, &actErr)
-                ContainerMetadataCache.shared.markBundleActivated(knownBID)
-            } else {
+                leased = MCMActivateContainerPath(2, knownBID, false, &actErr) != nil
+                if leased {
+                    ContainerMetadataCache.shared.markBundleActivated(knownBID)
+                }
+            }
+            if !leased {
                 _ = grantContainerAccess(cleanContainer)
             }
             for candidate in candidateContainers {
