@@ -46,6 +46,11 @@ final class ContainerMetadataCache: @unchecked Sendable {
     private var appMetadataCache: [String: AppContainerMetadata] = [:]
     private var appMetadataByBundleID: [String: AppContainerMetadata] = [:]
     private var unresolvedUUIDs: Set<String> = []
+    /// App containers that were enumerated but whose metadata could not be read.
+    /// They still belong in the browser list: hiding them is what made a pass
+    /// over 276 containers display 274 apps (and, on a build without a working
+    /// token, display none at all).
+    private var unresolvedContainers: [String: (uuid: String, path: String)] = [:]
     private var activatedBundleIDs: Set<String> = []
     private var directoryListCache: [String: [FileEntry]] = [:]
     private var directorySizes: [String: DirectorySizeResult] = [:]
@@ -130,9 +135,16 @@ final class ContainerMetadataCache: @unchecked Sendable {
         appMetadataByBundleID[app.bundleID] = app
         appMetadataByBundleID[app.bundleID.lowercased()] = app
         unresolvedUUIDs.remove(upperUUID)
+        unresolvedContainers.removeValue(forKey: upperUUID)
         if let icon = app.icon {
             iconCache.setObject(icon, forKey: app.bundleID as NSString)
         }
+    }
+
+    var unresolvedContainerCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return unresolvedContainers.count
     }
 
     func isUnresolved(uuid: String) -> Bool {
@@ -151,6 +163,23 @@ final class ContainerMetadataCache: @unchecked Sendable {
         if appMetadataCache[clean] == nil {
             unresolvedUUIDs.insert(clean)
         }
+    }
+
+    func storeUnresolvedContainer(uuid: String, containerPath: String) {
+        let cleanUUID = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: cleanUUID) != nil, !containerPath.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        unresolvedContainers[cleanUUID.uppercased()] = (uuid: cleanUUID, path: containerPath)
+    }
+
+    /// Drops the "could not read" skip marks so a forced refresh retries those
+    /// containers instead of skipping them for the rest of the session. The
+    /// entries stay listed meanwhile, so the browser never loses rows.
+    func retryUnresolvedContainers() {
+        lock.lock()
+        defer { lock.unlock() }
+        unresolvedUUIDs.removeAll()
     }
 
     func isBundleActivated(_ bundleID: String) -> Bool {
@@ -244,7 +273,7 @@ final class ContainerMetadataCache: @unchecked Sendable {
     }
 
     private func buildApplicationDirectoryEntriesLocked() -> [FileEntry] {
-        guard !appMetadataByBundleID.isEmpty else { return [] }
+        guard !appMetadataByBundleID.isEmpty || !unresolvedContainers.isEmpty else { return [] }
         var seenUUIDs = Set<String>()
         var entries: [FileEntry] = []
         for meta in appMetadataByBundleID.values {
@@ -267,6 +296,29 @@ final class ContainerMetadataCache: @unchecked Sendable {
                     appIcon: meta.icon,
                     isAppContainer: true,
                     shortUUID: meta.shortUUID
+                )
+            )
+        }
+        for (_, item) in unresolvedContainers {
+            guard seenUUIDs.insert(item.uuid.uppercased()).inserted else { continue }
+            entries.append(
+                FileEntry(
+                    name: item.uuid,
+                    path: item.path,
+                    isDirectory: true,
+                    size: -1,
+                    modifiedAt: nil,
+                    createdAt: nil,
+                    isSymlink: false,
+                    posixPermissions: 0o755,
+                    childCount: nil,
+                    appName: nil,
+                    bundleID: nil,
+                    appIcon: nil,
+                    isAppContainer: true,
+                    shortUUID: item.uuid.count >= 8
+                        ? "\(item.uuid.prefix(4))...\(item.uuid.suffix(4))"
+                        : item.uuid
                 )
             )
         }
@@ -301,6 +353,7 @@ final class ContainerMetadataCache: @unchecked Sendable {
         appMetadataCache.removeAll()
         appMetadataByBundleID.removeAll()
         unresolvedUUIDs.removeAll()
+        unresolvedContainers.removeAll()
         activatedBundleIDs.removeAll()
         directoryListCache.removeAll()
         directorySizes.removeAll()
