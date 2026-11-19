@@ -534,9 +534,30 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                     path: ContainerStore.appDataRoot
                 )
                 let lsSet = Set(lsStoreCandidates)
+                let stage3Started = Date()
+                var stage3Inspected = 0
                 for dirPath in dirs {
                     let udid = (dirPath as NSString).lastPathComponent
                     guard UUID(uuidString: udid) != nil else { continue }
+
+                    // Each container costs one Tier-4 grant (symlink swap + daemon
+                    // round-trip), so the iOS 27 pass over ~211 UUIDs takes a while.
+                    // Publish what has been resolved so far instead of leaving the
+                    // browser empty until the last container is done.
+                    stage3Inspected += 1
+                    if stage3Inspected.isMultiple(of: 25) {
+                        let partial = self.buildSortedSnapshotFromCache()
+                        let elapsed = String(format: "%.1f", Date().timeIntervalSince(stage3Started))
+                        log("browser: inventory progress \(stage3Inspected)/\(dirs.count) " +
+                            "elapsed=\(elapsed)s resolved=\(partial.count)")
+                        if !partial.isEmpty {
+                            await MainActor.run {
+                                self.apps = partial
+                                self.isLoading = false
+                                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
+                            }
+                        }
+                    }
                     if self.getCachedInfo(forUDID: udid) != nil { continue }
                     if ContainerMetadataCache.shared.isUnresolved(uuid: udid) { continue }
 
@@ -557,7 +578,8 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                         version: "",
                         icon: nil
                     )
-                    if let inferred = ContainerStore.inferredApp(
+                    if !lsSet.isEmpty,
+                       let inferred = ContainerStore.inferredApp(
                         for: fallback,
                         knownAppsByBundleID: [:],
                         launchServicesIdentifiers: lsSet

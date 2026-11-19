@@ -918,6 +918,27 @@ enum ContainerStore {
             }
         }
 
+        // iOS 27 hands back a token for the node it resolved: a container-level
+        // grant makes the container directory openable while the metadata plist
+        // inside it stays denied. The 27.2.1 device log shows exactly that — every
+        // container grant "succeeded" (open probe passed) yet only one app in 211
+        // resolved to a bundle id. Granting the plist path itself is the last
+        // resort, and the result is cached by uuid so it is paid once.
+        if plistData == nil {
+            // One candidate only: `/var/...` and `/private/var/...` resolve to the
+            // same inode, so the second grant buys nothing and the scan pays for
+            // it 200+ times.
+            for candidate in candidateContainers.prefix(1) {
+                let metaPath = metadataPath(for: candidate)
+                if grantContainerAccess(metaPath) >= 0,
+                   let grantedData = readDataDirectly(atPath: metaPath),
+                   !grantedData.isEmpty {
+                    plistData = grantedData
+                    break
+                }
+            }
+        }
+
         guard let data = plistData,
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
             return nil
