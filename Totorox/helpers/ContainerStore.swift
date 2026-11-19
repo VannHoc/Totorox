@@ -207,10 +207,16 @@ enum ContainerStore {
     /// where listing `/var/mobile/Containers/Data/Application` over POSIX is
     /// denied and previously left the browser with no app whatsoever.
     static func containerManagerPairs() -> [String: String] {
-        var mcmError: NSString? = nil
-        let pairs = MCMEnumerateContainersForClass(2, 4_096, &mcmError)
-        log("browser: MCM class-2 containers=\(pairs.count) " +
-            "detail=\(mcmError.map(String.init) ?? "none")")
+        var mcmDetail: NSString? = nil
+        let records = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
+        var pairs: [String: String] = [:]
+        for record in records {
+            guard let identifier = record["identifier"] as? String,
+                  let path = record["path"] as? String else { continue }
+            pairs[identifier] = path
+        }
+        log("browser: MCM app containers=\(pairs.count) " +
+            "classes=\(mcmDetail.map(String.init) ?? "none")")
         return pairs
     }
 
@@ -929,8 +935,17 @@ enum ContainerStore {
             // builds. That is why the UUID is tried first.
             var leased = false
             if UUID(uuidString: uuid) != nil, isApplicationContainerPath(cleanContainer) {
+                // Ask for the class the container was enumerated in: a lease only
+                // answers for that class, and assuming 2 is what answered "MCM
+                // object contained no sandbox token" on iOS 27.0.1.
+                let knownClass = MCMContainerClassForPath(cleanContainer)
                 var leaseError: NSString?
-                leased = MCMActivateContainerPath(2, uuid, false, &leaseError) != nil
+                leased = MCMActivateContainerPath(
+                    knownClass != 0 ? knownClass : 2,
+                    uuid,
+                    false,
+                    &leaseError
+                ) != nil
             }
             if !leased, UUID(uuidString: uuid) != nil, let knownBID = bundleID(forUUID: uuid) {
                 var actErr: NSString?

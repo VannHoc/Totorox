@@ -370,34 +370,39 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
         }
 
-        // 2. Container-manager enumeration: one metadata query returns every
-        //    app container as (identifier, path). The reference app enumerates
-        //    the same way (`_wq_mcm_list_containers`) and it needs no sandbox
-        //    extension, so it keeps working on builds where listing the app-data
-        //    root over POSIX is denied — that denial is what left this browser
-        //    empty on iOS 26/27.
-        var mcmError: NSString? = nil
-        let mcmPairs = MCMEnumerateContainersForClass(2, 4_096, &mcmError)
-        log("browser: MCM class-2 containers=\(mcmPairs.count) " +
-            "detail=\(mcmError.map(String.init) ?? "none")")
+        // 2. Container-manager enumeration: identifier+path pairs for every app
+        //    container, with no sandbox extension. One class is not enough on
+        //    iOS 27 (27.0.1 answered a class-2 query with a single container and
+        //    that emptied the browser), so the bridge walks the classes the
+        //    reference app walks and keeps what lives under the app-data root.
+        var mcmDetail: NSString? = nil
+        let mcmRecords = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
+        log("browser: MCM app containers=\(mcmRecords.count) " +
+            "classes=\(mcmDetail.map(String.init) ?? "none")")
         var containerManagerPaths: [String] = []
-        containerManagerPaths.reserveCapacity(mcmPairs.count)
+        containerManagerPaths.reserveCapacity(mcmRecords.count)
         var mcmActivationFailures = 0
-        for (identifier, containerPath) in mcmPairs {
-            guard ContainerStore.isApplicationContainerPath(containerPath) else { continue }
+        var mcmActivationAttempts = 0
+        for record in mcmRecords {
+            guard let containerPath = record["path"] as? String,
+                  let identifier = record["identifier"] as? String,
+                  ContainerStore.isApplicationContainerPath(containerPath) else { continue }
+            let containerClass = (record["class"] as? NSNumber)?.uint64Value ?? 2
             let udid = (containerPath as NSString).lastPathComponent
             containerManagerPaths.append(containerPath)
             if getCachedInfo(forUDID: udid) != nil { continue }
 
             // Activate the container lease with the identifier the daemon itself
-            // reported. On iOS 27 a class-2 container is registered under its
-            // UUID, so the old bundle-id lookup never produced a lease and every
-            // metadata read answered "MCM object contained no sandbox token".
-            // The lease is also what makes the container's files readable: a
-            // bad_query/worse_query path token covers the directory node only.
-            var activateError: NSString?
-            if MCMActivateContainerPath(2, identifier, false, &activateError) == nil {
-                mcmActivationFailures += 1
+            // reported: on iOS 27 a container is registered under its UUID, and
+            // the lease token is what makes its files readable. When the daemon
+            // hands out no token at all, stop after a few probes instead of
+            // paying one round-trip per container on every scan.
+            if mcmActivationAttempts < 3 || mcmActivationFailures < mcmActivationAttempts {
+                mcmActivationAttempts += 1
+                var activateError: NSString?
+                if MCMActivateContainerPath(containerClass, identifier, false, &activateError) == nil {
+                    mcmActivationFailures += 1
+                }
             }
 
             // Older builds report the bundle id as the class-2 identifier: no
@@ -423,7 +428,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             // would hide the app for the rest of the session.
         }
         if mcmActivationFailures > 0 {
-            log("browser: MCM lease activation failed for \(mcmActivationFailures)/\(mcmPairs.count) containers")
+            log("browser: MCM lease activation failed for \(mcmActivationFailures)/\(mcmActivationAttempts) probes")
         }
         cacheLock.lock()
         mcmContainerPaths = containerManagerPaths
@@ -571,16 +576,23 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             let containerManagerDirs = self.mcmContainerPaths
             self.cacheLock.unlock()
             if canReadRawUUIDContainers || !containerManagerDirs.isEmpty {
-                // Prefer the container manager's list. Listing the app-data root
-                // over POSIX costs one grant the daemon refuses on iOS 26/27 and
-                // then falls back to a 2,000,000-inode `fsgetpath` walk, which is
-                // minutes of I/O on a used device — the reported "as slow as a
-                // snail" scan.
-                let dirs = containerManagerDirs.isEmpty
-                    ? ContainerStore.enumerateDirectoriesWithTraversalGrant(
+                // Prefer the container manager's list: it costs no grant and skips
+                // the 2,000,000-inode `fsgetpath` walk that made this scan look
+                // frozen. It is only preferred while it actually holds the
+                // device's containers though — iOS 27.0.1 answered the query with
+                // a single container for a device full of apps, and trusting that
+                // left the browser empty, so a short list falls back to the
+                // traversal listing instead of showing nothing.
+                var dirs = containerManagerDirs
+                if dirs.count < 5 {
+                    let traversal = ContainerStore.enumerateDirectoriesWithTraversalGrant(
                         path: ContainerStore.appDataRoot
                     )
-                    : containerManagerDirs
+                    let known = Set(dirs)
+                    dirs.append(contentsOf: traversal.filter { !known.contains($0) })
+                    log("browser: MCM list short (\(containerManagerDirs.count)); " +
+                        "traversal found \(dirs.count) containers")
+                }
                 let lsSet = Set(lsStoreCandidates)
                 let stage3Started = Date()
                 var stage3Inspected = 0
