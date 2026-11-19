@@ -120,7 +120,15 @@ enum SandboxGrantRouter {
         }
         negativeGrants[key] = NegativeEntry(
             code: code,
-            expiresAt: Date().addingTimeInterval(negativeTTL)
+            // "No token" failures are stable for the whole build: on the 27.2.1
+            // device log every root and every nested folder answered -3/-4/-5/-6
+            // again after a minute, so the short TTL only re-paid a swap plus a
+            // daemon round-trip while the user was browsing.
+            expiresAt: Date().addingTimeInterval(
+                code == -3 || code == -4
+                    || code == Int64(WQ_ERR_NO_RESULT) || code == Int64(WQ_ERR_NO_TOKEN)
+                    ? 600 : negativeTTL
+            )
         )
         stateLock.unlock()
     }
@@ -257,13 +265,21 @@ enum SandboxGrantRouter {
         let group = WorseQuery.grantGroup
         var failure = Int64(WQ_ERR_NO_RESULT)
 
-        for scope in badQueryScopes(group: group) {
+        // Once Tier 4 is proven, Tier 1 is only a degradation path. On iOS 27 all
+        // three scopes answer the same "no token", so walking them in order costs
+        // three daemon round-trips per failed path for an answer that cannot
+        // change; one scope is enough to notice a recovered Tier 1.
+        let scopes = badQueryBlocked
+            ? Array(badQueryScopes(group: group).suffix(1))
+            : badQueryScopes(group: group)
+
+        for scope in scopes {
             let handle = callBadQuery(path: path, scope: scope)
             guard handle >= 0 else {
                 failure = handle
                 noteBadQueryFailure(handle)
                 log("grant: bad_query[\(scope.label)] failed path=\(path) " +
-                    "code=\(handle) \(WorseQuery.errorName(handle))")
+                    "code=\(handle) \(badQueryErrorName(handle))")
                 continue
             }
 
@@ -393,6 +409,23 @@ enum SandboxGrantRouter {
         if !wasBlocked && nowBlocked {
             log("grant: bad_query marked BLOCKED for this session " +
                 "(tier 4 works, tier 1 does not)")
+        }
+    }
+
+    /// `bad_query` has its own code table; `WQ_ERR_*` (-4 = symlink swap) does
+    /// not apply to it (-4 = the daemon result carried no sandbox token).
+    /// Logging the wrong name sent earlier sessions after a symlink bug that was
+    /// never there.
+    private static func badQueryErrorName(_ code: Int64) -> String {
+        switch code {
+        case -1: return "BQ_ERR_NO_GROUP"
+        case -2: return "BQ_ERR_API_UNAVAILABLE"
+        case -3: return "BQ_ERR_NO_RESULT"
+        case -4: return "BQ_ERR_NO_TOKEN"
+        case -5: return "BQ_ERR_DENIED"
+        case -254: return "BQ_ERR_GROUP_LOOKUP"
+        case -255: return "BQ_ERR_INVALID_PATH"
+        default: return "BQ_ERR_\(code)"
         }
     }
 
