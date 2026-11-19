@@ -588,7 +588,7 @@ enum ContainerStore {
         if let cached = ContainerMetadataCache.shared.cachedContainerRecords() {
             return cached
         }
-        let records = MCMEnumerateContainerRecords(14, NSUInteger(limit), nil)
+        let records = MCMEnumerateContainerRecords(14, UInt(limit), nil)
         ContainerMetadataCache.shared.storeContainerRecords(records)
         return records
     }
