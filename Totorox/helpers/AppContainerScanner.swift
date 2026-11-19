@@ -179,6 +179,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     private var cacheByBundleID: [String: AppContainerInfo] = [:]
     private var cacheByUDID: [String: AppContainerInfo] = [:]
     private var _cachedAppsSnapshot: [AppContainerInfo] = []
+    private var mcmContainerPaths: [String] = []
     private var hasCompletedFullScan: Bool = false
     private var hasCompletedFastPass: Bool = false
     private var activeScanTask: Task<[AppContainerInfo], Never>? = nil
@@ -369,27 +370,49 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
         }
 
-        // 2. MCM Class-2 Enumeration & Lease Activation
+        // 2. Container-manager enumeration: one metadata query returns every
+        //    app container as (identifier, path). The reference app enumerates
+        //    the same way (`_wq_mcm_list_containers`) and it needs no sandbox
+        //    extension, so it keeps working on builds where listing the app-data
+        //    root over POSIX is denied — that denial is what left this browser
+        //    empty on iOS 26/27.
         var mcmError: NSString? = nil
-        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmError)
-        for bundleID in mcmIDs where ContainerStore.isValidAppBundleID(bundleID) {
-            if getCachedInfo(forBundleID: bundleID) != nil { continue }
-            var actError: NSString? = nil
-            if let path = MCMActivateContainerPath(2, bundleID, false, &actError)
-                ?? MCMContainerPathForIdentifier(2, bundleID, false, &actError),
-               !path.isEmpty {
-                ContainerMetadataCache.shared.markBundleActivated(bundleID)
-                let meta = ContainerStore.readContainerMetadata(containerPath: path)
-                let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
-                    ? meta!.bundleID
-                    : bundleID
+        let mcmPairs = MCMEnumerateContainersForClass(2, 4_096, &mcmError)
+        log("browser: MCM class-2 containers=\(mcmPairs.count) " +
+            "detail=\(mcmError.map(String.init) ?? "none")")
+        var containerManagerPaths: [String] = []
+        containerManagerPaths.reserveCapacity(mcmPairs.count)
+        for (identifier, containerPath) in mcmPairs {
+            guard ContainerStore.isApplicationContainerPath(containerPath) else { continue }
+            let udid = (containerPath as NSString).lastPathComponent
+            containerManagerPaths.append(containerPath)
+            if getCachedInfo(forUDID: udid) != nil { continue }
+
+            // Older builds report the bundle id as the class-2 identifier: no
+            // metadata read, no grant, straight into the list.
+            if ContainerStore.isValidAppBundleID(identifier, uuid: udid) {
+                _ = registerResolvedApp(bundleID: identifier, containerPath: containerPath)
+                continue
+            }
+
+            // Newer builds report the container UUID, so the name only exists in
+            // the container's metadata plist. One grant here; the result is
+            // cached by UUID afterwards, so this is a first-scan cost only.
+            if let meta = ContainerStore.readContainerMetadata(containerPath: containerPath),
+               ContainerStore.isValidAppBundleID(meta.bundleID, uuid: udid) {
                 _ = registerResolvedApp(
-                    bundleID: actualBundleID,
-                    containerPath: path,
-                    preferredName: meta?.displayName
+                    bundleID: meta.bundleID,
+                    containerPath: containerPath,
+                    preferredName: meta.displayName
                 )
             }
+            // Deliberately not `markUnresolved` here: a missing token is
+            // transient, and the unresolved set has no TTL, so a poisoned entry
+            // would hide the app for the rest of the session.
         }
+        cacheLock.lock()
+        mcmContainerPaths = containerManagerPaths
+        cacheLock.unlock()
 
         // 3. LaunchServices / MobileInstallation API
         let lsInfo = installedAppInfo() as? [String: [String: Any]] ?? [:]
@@ -529,10 +552,20 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 // Tier 4 grants traversal of the app-data root exactly like Tier 1
                 // does, so raw UUID containers stay reachable on iOS 26+ sideloads.
                 || WorseQuery.grantGroup != nil
-            if canReadRawUUIDContainers {
-                let dirs = ContainerStore.enumerateDirectoriesWithTraversalGrant(
-                    path: ContainerStore.appDataRoot
-                )
+            self.cacheLock.lock()
+            let containerManagerDirs = self.mcmContainerPaths
+            self.cacheLock.unlock()
+            if canReadRawUUIDContainers || !containerManagerDirs.isEmpty {
+                // Prefer the container manager's list. Listing the app-data root
+                // over POSIX costs one grant the daemon refuses on iOS 26/27 and
+                // then falls back to a 2,000,000-inode `fsgetpath` walk, which is
+                // minutes of I/O on a used device — the reported "as slow as a
+                // snail" scan.
+                let dirs = containerManagerDirs.isEmpty
+                    ? ContainerStore.enumerateDirectoriesWithTraversalGrant(
+                        path: ContainerStore.appDataRoot
+                    )
+                    : containerManagerDirs
                 let lsSet = Set(lsStoreCandidates)
                 let stage3Started = Date()
                 var stage3Inspected = 0
