@@ -147,6 +147,12 @@ final class ContainerMetadataCache: @unchecked Sendable {
         return unresolvedContainers.count
     }
 
+    func unresolvedContainerUUIDList() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(unresolvedContainers.keys)
+    }
+
     func isUnresolved(uuid: String) -> Bool {
         let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !clean.isEmpty else { return false }
