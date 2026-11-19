@@ -6,11 +6,16 @@ import Darwin
 /// Chain (cheapest first, matching the project design):
 ///   Tier 1 `bad_query`  →  Tier 4 `worse_query`  →  give up.
 ///
-/// `bad_query` is always attempted first. A returned handle is not trusted on
-/// its own: iOS 26+ can hand back a valid `mobilegestaltcache` token while
-/// ignoring the `../../..` traversal, which leaves the real target blocked.
-/// Every successful handle (from either tier) is therefore confirmed with
-/// `access(path, R_OK)` before the router reports success.
+/// `bad_query` is always attempted first, in both of its scopes:
+/// `systemgroup.com.apple.mobilegestaltcache` (class 13, what worked up to
+/// iOS 26) and our own App Group (class 7, the only scope iOS 27 still answers).
+///
+/// A returned handle is not trusted on its own: iOS 26/27 can hand back a token
+/// while ignoring the `../../..` traversal, which leaves the real target blocked.
+/// Every successful handle (from either tier) is therefore confirmed with a real
+/// `open(2)` on the path — `access(2)` alone reports success on iOS 27 for paths
+/// that `open`/`readdir` still deny, which used to latch a fake "granted" mask
+/// and made every later file operation fail silently.
 ///
 /// If Tier 1 fails *and* `worse_query` then succeeds, the failure is remembered
 /// in RAM for the rest of the session (`badQueryBlocked`), so every following
@@ -143,7 +148,7 @@ enum SandboxGrantRouter {
     ///
     /// | memo | Tier 4 usable | order                        |
     /// |------|---------------|------------------------------|
-    /// | off  | yes           | bad_query → worse_query      |
+    /// | off  | yes           | bad_query (system, then group) → worse_query |
     /// | off  | no            | bad_query                    |
     /// | on   | yes           | worse_query → bad_query      |
     /// | on   | no            | bad_query (last resort)      |
@@ -237,30 +242,72 @@ enum SandboxGrantRouter {
         case failed(Int64)
     }
 
+    /// Tier 1 has two scopes and both are tried before Tier 4.
+    ///
+    /// * `nil` — the reference `_wq_grant` path: class 13 query on
+    ///   `systemgroup.com.apple.mobilegestaltcache` plus a `../` walk out of the
+    ///   container part. This is what worked up to iOS 26.
+    /// * our own App Group — class 7 query, the one scope iOS 27 still answers.
+    ///   The iOS 27.2.1 device log shows `bad_query` returning `-3`
+    ///   (`[bad_query] daemon returned no result`) for every path on the class-13
+    ///   scope while the class-7 group query in `worse_query` keeps returning a
+    ///   result for the same session, so the group scope is the only Tier 1
+    ///   shape left on that build.
     private static func attemptBadQuery(path: String, requireWrite: Bool) -> Attempt {
-        let handle = callBadQuery(path: path)
-        guard handle >= 0 else {
-            noteBadQueryFailure(handle)
-            log("grant: bad_query failed path=\(path) code=\(handle) " +
-                "\(WorseQuery.errorName(handle))")
-            return .failed(handle)
+        let group = WorseQuery.grantGroup
+        var failure = Int64(WQ_ERR_NO_RESULT)
+
+        for scope in badQueryScopes(group: group) {
+            let handle = callBadQuery(path: path, scope: scope)
+            guard handle >= 0 else {
+                failure = handle
+                noteBadQueryFailure(handle)
+                log("grant: bad_query[\(scope.label)] failed path=\(path) " +
+                    "code=\(handle) \(WorseQuery.errorName(handle))")
+                continue
+            }
+
+            let accessError = verifyAccess(path: path, requireWrite: requireWrite)
+            if accessError == 0 {
+                noteBadQuerySuccess()
+                record(backend: .badQuery, handle: handle, group: scope.group)
+                return .granted(handle)
+            }
+
+            // The token exists but does not cover `path` (iOS 26 ignores the
+            // traversal and hands out the cache container token instead, or only
+            // granted read-only when write is required). Release it and move on.
+            release(handle)
+            noteBadQueryFailure(accessError)
+            log("grant: bad_query[\(scope.label)] handle=\(handle) " +
+                "does not cover path=\(path) requireWrite=\(requireWrite) " +
+                "errno=\(-accessError) — next scope/tier")
         }
 
-        let accessError = verifyAccess(path: path, requireWrite: requireWrite)
-        if accessError == 0 {
-            noteBadQuerySuccess()
-            record(backend: .badQuery, handle: handle)
-            return .granted(handle)
-        }
+        return .failed(failure)
+    }
 
-        // The token exists but does not cover `path` (iOS 26 ignores the
-        // traversal and hands out the cache container token instead, or only
-        // granted read-only when write is required). Release it so the next tier runs.
-        release(handle)
-        noteBadQueryFailure(accessError)
-        log("grant: bad_query handle=\(handle) does not cover path=\(path) " +
-            "requireWrite=\(requireWrite) errno=\(-accessError) — next tier")
-        return .failed(accessError)
+    /// One Tier-1 shape: which container the traversal query is aimed at and the
+    /// operation flags it uses.
+    private struct BadQueryScope {
+        let group: String?
+        let flags: UInt64
+        let label: String
+    }
+
+    private static let badQueryFlagPrimary: UInt64 = 0x0000_0080_0000_0000 // 1 << 39
+    private static let badQueryFlagAnyPath: UInt64 = 0x0000_0008_0000_0000 // 1 << 35
+
+    /// Class-13 first (the documented order, still the only working one below
+    /// iOS 26), then our own App Group with both flag variants — iOS 27 answers
+    /// only the class-7 shape and prefers `1 << 39`, while `1 << 35` is what the
+    /// older builds honoured.
+    private static func badQueryScopes(group: String?) -> [BadQueryScope] {
+        var scopes = [BadQueryScope(group: nil, flags: badQueryFlagPrimary, label: "system")]
+        guard let group = group, !group.isEmpty else { return scopes }
+        scopes.append(BadQueryScope(group: group, flags: badQueryFlagPrimary, label: "group"))
+        scopes.append(BadQueryScope(group: group, flags: badQueryFlagAnyPath, label: "group-any"))
+        return scopes
     }
 
     private static func attemptWorseQuery(path: String,
@@ -349,12 +396,22 @@ enum SandboxGrantRouter {
         }
     }
 
-    private static func callBadQuery(path: String) -> Int64 {
+    private static func callBadQuery(path: String, scope: BadQueryScope) -> Int64 {
         #if targetEnvironment(simulator)
         return -255
         #else
         var pathC = path.utf8CString.map { Int8($0) }
-        return bad_query(&pathC, true, nil, false)
+        if let group = scope.group, !group.isEmpty {
+            return group.withCString { groupPtr in
+                bad_query_with_flags(
+                    &pathC,
+                    true,
+                    UnsafeMutablePointer(mutating: groupPtr),
+                    scope.flags
+                )
+            }
+        }
+        return bad_query_with_flags(&pathC, true, nil, scope.flags)
         #endif
     }
 
@@ -392,41 +449,73 @@ enum SandboxGrantRouter {
         return 0
         #else
         let mode: Int32 = requireWrite ? (R_OK | W_OK) : R_OK
+        var resolvedPath = path
+
         errno = 0
-        if access(path, mode) == 0 {
-            return 0
-        }
-        let initialErrno = errno
-        if initialErrno == ENOENT {
-            let ancestor = nearestExistingAncestor(of: path)
-            if ancestor != "/" && ancestor != "/private" && ancestor != "/var" && ancestor != "/private/var" {
-                errno = 0
-                if access(ancestor, mode) == 0 {
-                    return 0
+        if access(path, mode) != 0 {
+            let initialErrno = errno
+            if initialErrno == ENOENT {
+                let ancestor = nearestExistingAncestor(of: path)
+                guard ancestor != "/", ancestor != "/private",
+                      ancestor != "/var", ancestor != "/private/var" else {
+                    return badQueryAccessError(forErrno: initialErrno)
                 }
-                return badQueryAccessError(forErrno: errno)
-            }
-        } else if requireWrite && (initialErrno == EACCES || initialErrno == EPERM) {
-            // If `path` is an existing regular file with read-only POSIX mode bits (e.g. 0444),
-            // FileIOEngine atomically stages a new file in the parent directory and renames it.
-            // Only parent directory W_OK is required; don't misclassify POSIX 0444 as a sandbox block.
-            var st = stat()
-            if lstat(path, &st) == 0,
-               (st.st_mode & S_IFMT) == S_IFREG,
-               (st.st_mode & 0o222) == 0,
-               access(path, R_OK) == 0 {
-                let parent = (path as NSString).deletingLastPathComponent
-                if !parent.isEmpty && parent != "/" && parent != "/private" && parent != "/var" && parent != "/private/var" {
-                    errno = 0
-                    if access(parent, R_OK | W_OK) == 0 {
-                        return 0
-                    }
+                errno = 0
+                if access(ancestor, mode) != 0 {
                     return badQueryAccessError(forErrno: errno)
                 }
+                resolvedPath = ancestor
+            } else if requireWrite && (initialErrno == EACCES || initialErrno == EPERM) {
+                // If `path` is an existing regular file with read-only POSIX mode bits (e.g. 0444),
+                // FileIOEngine atomically stages a new file in the parent directory and renames it.
+                // Only parent directory W_OK is required; don't misclassify POSIX 0444 as a sandbox block.
+                var st = stat()
+                let parent = (path as NSString).deletingLastPathComponent
+                guard lstat(path, &st) == 0,
+                      (st.st_mode & S_IFMT) == S_IFREG,
+                      (st.st_mode & 0o222) == 0,
+                      access(path, R_OK) == 0,
+                      !parent.isEmpty, parent != "/", parent != "/private",
+                      parent != "/var", parent != "/private/var" else {
+                    return badQueryAccessError(forErrno: initialErrno)
+                }
+                errno = 0
+                if access(parent, mode) != 0 {
+                    return badQueryAccessError(forErrno: errno)
+                }
+                resolvedPath = parent
+            } else {
+                return badQueryAccessError(forErrno: initialErrno)
             }
         }
-        return badQueryAccessError(forErrno: initialErrno)
+
+        // access(2) is not proof of a usable grant on iOS 26/27. The 27.2.1 device
+        // log shows the POSIX permission check passing for a freshly consumed
+        // handle while open(2)/readdir(3) on the same path keep returning EPERM —
+        // the daemon hands out a token that does not cover the target, but
+        // `access` only evaluates mode bits. Verifying with a real `open` is what
+        // makes a useless handle fail here instead of later, and it keeps the
+        // `grantedAccessMask` latch (and the negative cache) honest.
+        return openProbeError(resolvedPath)
         #endif
+    }
+
+    /// Opens the path for real and closes it again.
+    /// Returns `0` on success, `-errno` (never `0`) on failure.
+    private static func openProbeError(_ path: String) -> Int64 {
+        var st = stat()
+        var flags = O_RDONLY | O_CLOEXEC
+        if lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR {
+            flags |= O_DIRECTORY
+        }
+        errno = 0
+        let fd = open(path, flags)
+        if fd >= 0 {
+            close(fd)
+            return 0
+        }
+        let code = errno
+        return -Int64(code == 0 ? EPERM : code)
     }
 
     /// Maps a failed `access(2)` errno to the synthetic error code the router
@@ -450,7 +539,8 @@ enum SandboxGrantRouter {
 
         switch backend {
         case .badQuery:
-            log("grant: backend=bad_query handle=\(handle)")
+            log("grant: backend=bad_query scope=\(group == nil ? "system" : "group") " +
+                "handle=\(handle)")
         case .worseQuery:
             log("grant: backend=worse_query variant=\(variant) group=\(group ?? "-") handle=\(handle)")
         }
