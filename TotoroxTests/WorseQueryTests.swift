@@ -268,11 +268,15 @@ final class WorseQueryTests: XCTestCase {
 
     // MARK: - Variant retry policy
 
-    func testRetryPolicySkipsDeterministicFailures() {
-        // Retried: missing target, daemon denial without result/token.
+    func testRetryPolicyOnlyRetriesMissingTargets() {
+        // Retried: a missing target is exactly what the other flags fix.
         XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-255))
-        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-5))
-        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-6))
+
+        // NOT retried any more. iOS 26/27 device logs show both variants
+        // returning -6 for every tree root, so a second attempt only pays for a
+        // second filesystem swap + daemon round-trip for the same answer.
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-5))
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-6))
 
         // Not retried: flags cannot fix these.
         XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-1))
@@ -281,9 +285,42 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-4))
         XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-7))
 
-        // Unknown negatives keep the reference behaviour (retry).
-        XCTAssertTrue(WorseQuery.shouldRetryAnyPath(-42))
+        // Unknown negatives are not retried either (fail fast, no double swap).
+        XCTAssertFalse(WorseQuery.shouldRetryAnyPath(-42))
         XCTAssertFalse(WorseQuery.shouldRetryAnyPath(0))
+    }
+
+    // MARK: - Variant selection
+
+    func testVariantOppositeAndLabels() {
+        XCTAssertEqual(WorseQuery.Variant.primary.opposite, .anyPath)
+        XCTAssertEqual(WorseQuery.Variant.anyPath.opposite, .primary)
+        XCTAssertEqual(WorseQuery.Variant.primary.rawValue, 0)
+        XCTAssertEqual(WorseQuery.Variant.anyPath.rawValue, 1)
+        XCTAssertEqual(WorseQuery.Variant.primary.label, "primary")
+        XCTAssertEqual(WorseQuery.Variant.anyPath.label, "any_path")
+    }
+
+    // MARK: - Memo strictness
+
+    func testAncestorOnlySuccessDoesNotBlockTierOne() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-3)
+        state.noteWorseQuerySuccess(strict: false)
+
+        // The grant only covered an existing ancestor, so Tier 1 keeps its turn.
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.lastBadQueryError, 0)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+    }
+
+    func testStrictTierFourSuccessStillBlocksTierOne() {
+        var state = SandboxTierState()
+        state.noteBadQueryFailure(-3)
+        state.noteWorseQuerySuccess(strict: true)
+
+        XCTAssertTrue(state.badQueryBlocked)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
     }
 
     // MARK: - Ancestor resolution

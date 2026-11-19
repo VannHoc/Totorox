@@ -18,6 +18,12 @@ import Darwin
 /// round-trip. While that memo is on, Tier 1 is kept as the *last* attempt for
 /// each new path, so a later Tier 4 regression degrades instead of breaking.
 ///
+/// Two guards keep the hot path cheap on iOS 26/27, where the device logs show
+/// whole tree roots (`/var`, `/var/mobile`, `/Applications`, …) failing forever:
+/// 1. a missing target is rejected before either tier runs (the reference
+///    `_wq_grant` does the same) — granting it only yields the App-Group token;
+/// 2. a path that failed both tiers is not retried for 60 s (`negativeGrants`).
+///
 /// Handles stay cached by `ContainerStore.activeGrantHandles`; this router never
 /// keeps its own handle cache.
 enum SandboxGrantRouter {
@@ -25,6 +31,30 @@ enum SandboxGrantRouter {
     private static let stateLock = NSLock()
     private static var state = SandboxTierState()
     private static var lastBackendValue: SandboxBackend?
+
+    /// Recent failures per `canonical path|mode`. Re-attempting them costs two
+    /// filesystem swaps plus two daemon round-trips each time, while the answer
+    /// cannot change within a minute.
+    private struct NegativeEntry {
+        let code: Int64
+        let expiresAt: Date
+    }
+    private static var negativeGrants: [String: NegativeEntry] = [:]
+    /// Short enough that a new app install, a daemon restart or a fresh grant
+    /// heals by itself.
+    private static let negativeTTL: TimeInterval = 60
+
+    /// Ancestors that never carry a usable token (they are where the iOS 26/27
+    /// logs show `-6 WQ_ERR_NO_TOKEN` for both variants).
+    private static let unGrantableAncestors: Set<String> = [
+        "/", "/private", "/var", "/private/var",
+        "/var/mobile", "/private/var/mobile",
+        "/var/containers", "/private/var/containers",
+        "/var/mobile/Containers", "/private/var/mobile/Containers",
+        "/var/mobile/Containers/Data", "/private/var/mobile/Containers/Data",
+        "/var/mobile/Containers/Shared", "/private/var/mobile/Containers/Shared",
+        "/Applications", "/System", "/usr", "/private/etc", "/etc"
+    ]
 
     // MARK: - Diagnostics
 
@@ -51,8 +81,58 @@ enum SandboxGrantRouter {
         stateLock.lock()
         state.reset()
         lastBackendValue = nil
+        negativeGrants.removeAll()
         stateLock.unlock()
         WorseQuery.invalidateGroupCache()
+    }
+
+    // MARK: - Negative cache
+
+    private static func negativeKey(_ path: String, requireWrite: Bool) -> String {
+        let canonical = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+        return requireWrite ? canonical + "|w" : canonical + "|r"
+    }
+
+    private static func cachedFailure(path: String, requireWrite: Bool) -> Int64? {
+        let key = negativeKey(path, requireWrite: requireWrite)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let entry = negativeGrants[key] else { return nil }
+        if entry.expiresAt > Date() { return entry.code }
+        negativeGrants.removeValue(forKey: key)
+        return nil
+    }
+
+    private static func rememberFailure(_ code: Int64, path: String, requireWrite: Bool) {
+        guard code < 0 else { return }
+        let key = negativeKey(path, requireWrite: requireWrite)
+        stateLock.lock()
+        // A full scan can fail on thousands of existing-but-denied folders, so
+        // keep the map bounded instead of growing for the whole session.
+        if negativeGrants.count > 4096 {
+            let now = Date()
+            negativeGrants = negativeGrants.filter { $0.value.expiresAt > now }
+        }
+        negativeGrants[key] = NegativeEntry(
+            code: code,
+            expiresAt: Date().addingTimeInterval(negativeTTL)
+        )
+        stateLock.unlock()
+    }
+
+    /// `stat` that treats a sandbox denial as "exists": inside a strict sandbox
+    /// `stat` on another app's container can fail with `EPERM`/`EACCES` even
+    /// when the entry is there (same reason `WQSwapCachesAtPath` tolerates it).
+    private static func targetExists(_ path: String) -> Bool {
+        var st = stat()
+        errno = 0
+        if stat(path, &st) == 0 { return true }
+        return errno == EPERM || errno == EACCES
+    }
+
+    private static func isGrantableAncestor(_ ancestor: String) -> Bool {
+        guard ancestor.count > 1 else { return false }
+        return !unGrantableAncestors.contains(ancestor)
     }
 
     // MARK: - Grant
@@ -73,7 +153,37 @@ enum SandboxGrantRouter {
     /// toggled it off): without them the memo would make every following grant
     /// fail instead of degrading to Tier 1.
     static func grant(path: String, requireWrite: Bool = false) -> Int64 {
-        guard !path.isEmpty else { return -1 }
+        guard path.count > 1, path.hasPrefix("/") else { return -1 }
+
+        // The reference `_wq_grant` refuses a target that `lstat` cannot find.
+        // iOS 26/27 still answer with the App-Group token for variant 1, which
+        // looks like success (device logs: the same handle repeated for
+        // Library/Caches/Snapshots, Library/Cookies, …) but unlocks nothing.
+        let exists = targetExists(path)
+
+        if !exists && !requireWrite {
+            // Reading something that is not there stays ENOENT with or without
+            // a sandbox extension: skip both tiers, quietly.
+            return -1
+        }
+
+        if let cached = cachedFailure(path: path, requireWrite: requireWrite) {
+            return cached
+        }
+
+        // Writing into a not-yet-created file: grant the closest existing
+        // ancestor so the caller can create it (the reference grants the parent
+        // folder as well). Granting the leaf itself only returns a group token.
+        var grantPath = path
+        if !exists {
+            let ancestor = nearestExistingAncestor(of: path)
+            guard isGrantableAncestor(ancestor) else {
+                log("grant: skip write target with no grantable ancestor \(path) -> \(ancestor)")
+                rememberFailure(-1, path: path, requireWrite: requireWrite)
+                return -1
+            }
+            grantPath = ancestor
+        }
 
         // Resolved lazily on purpose: while Tier 1 keeps working this call uses
         // the cached group and costs a lock + a dictionary lookup. On iOS <= 25
@@ -89,7 +199,7 @@ enum SandboxGrantRouter {
         for backend in order {
             switch backend {
             case .badQuery:
-                switch attemptBadQuery(path: path, requireWrite: requireWrite) {
+                switch attemptBadQuery(path: grantPath, requireWrite: requireWrite) {
                 case .granted(let handle):
                     return handle
                 case .failed(let code):
@@ -97,7 +207,10 @@ enum SandboxGrantRouter {
                 }
             case .worseQuery:
                 guard let group = group else { continue }
-                switch attemptWorseQuery(path: path, group: group, requireWrite: requireWrite) {
+                switch attemptWorseQuery(path: grantPath,
+                                         group: group,
+                                         requireWrite: requireWrite,
+                                         targetExists: exists) {
                 case .granted(let handle):
                     return handle
                 case .failed(let code):
@@ -106,7 +219,9 @@ enum SandboxGrantRouter {
             }
         }
 
-        return failure != 0 ? failure : -1
+        let result = failure != 0 ? failure : -1
+        rememberFailure(result, path: path, requireWrite: requireWrite)
+        return result
     }
 
     /// Release a handle obtained from either backend.
@@ -148,38 +263,63 @@ enum SandboxGrantRouter {
         return .failed(accessError)
     }
 
-    private static func attemptWorseQuery(path: String, group: String, requireWrite: Bool) -> Attempt {
-        var variant: Int32 = -1
-        let handle = WorseQuery.grantRaw(path: path, group: group, usedVariant: &variant)
-        guard handle >= 0 else {
-            log("grant: worse_query failed path=\(path) group=\(group) " +
-                "code=\(handle) \(WorseQuery.errorName(handle)) detail=\(WorseQuery.lastError())")
-            return .failed(handle)
-        }
+    private static func attemptWorseQuery(path: String,
+                                         group: String,
+                                         requireWrite: Bool,
+                                         targetExists: Bool) -> Attempt {
+        // iOS < 27 prefers 1<<35, iOS >= 27 prefers 1<<39; a variant that once
+        // produced a verified handle stays pinned (reference `_wq_grant` keeps
+        // the same per-process memo).
+        var variant = WorseQuery.preferredVariant
+        var lastCode = Int64(WQ_ERR_NO_TOKEN)
 
-        // A consumed extension is not proof either: when the daemon resolves the
-        // group container from its own cache it hands back a token for
-        // `<group>` instead of the swapped target. Verifying here keeps a
-        // useless handle out of `ContainerStore.activeGrantHandles`.
-        let accessError = verifyAccess(path: path, requireWrite: requireWrite)
-        guard accessError == 0 else {
+        for round in 0..<2 {
+            let handle = WorseQuery.grantVariant(path: path, group: group, variant: variant)
+            guard handle >= 0 else {
+                lastCode = handle
+                log("grant: worse_query failed path=\(path) group=\(group) " +
+                    "variant=\(variant.label) code=\(handle) \(WorseQuery.errorName(handle)) " +
+                    "detail=\(WorseQuery.lastError())")
+                // Only a missing target is worth the other flags. -6/-5 are the
+                // same for both variants on iOS 27 (device logs), so retrying
+                // there only burns a second swap + daemon round-trip.
+                if round == 0 && handle == Int64(WQ_ERR_INVALID_PATH) {
+                    variant = variant.opposite
+                    continue
+                }
+                return .failed(handle)
+            }
+
+            // A consumed extension is not proof either: when the daemon resolves
+            // the group container from its own cache it hands back a token for
+            // `<group>` instead of the swapped target. Verifying here keeps a
+            // useless handle out of `ContainerStore.activeGrantHandles`.
+            let accessError = verifyAccess(path: path, requireWrite: requireWrite)
+            if accessError == 0 {
+                WorseQuery.noteVariant(variant.rawValue)
+                noteWorseQuerySuccess(strict: targetExists)
+                record(backend: .worseQuery,
+                       handle: handle,
+                       variant: variant.rawValue,
+                       group: group)
+                return .granted(handle)
+            }
+
             release(handle)
-            log("grant: worse_query handle=\(handle) variant=\(variant) group=\(group) " +
-                "does not cover path=\(path) requireWrite=\(requireWrite) errno=\(-accessError) — next tier")
+            lastCode = accessError
+            log("grant: worse_query handle=\(handle) variant=\(variant.label) group=\(group) " +
+                "does not cover path=\(path) requireWrite=\(requireWrite) " +
+                "errno=\(-accessError)")
+            // Consumed but denied: exactly the case the reference retries with
+            // the other flags ("trying the other flags").
+            if round == 0 && (accessError == -Int64(EPERM) || accessError == -Int64(EACCES)) {
+                variant = variant.opposite
+                continue
+            }
             return .failed(accessError)
         }
 
-        stateLock.lock()
-        let wasBlocked = state.badQueryBlocked
-        state.noteWorseQuerySuccess()
-        let nowBlocked = state.badQueryBlocked
-        stateLock.unlock()
-        if !wasBlocked && nowBlocked {
-            log("grant: bad_query marked BLOCKED for this session " +
-                "(tier 4 works, tier 1 does not)")
-        }
-        record(backend: .worseQuery, handle: handle, variant: variant, group: group)
-        return .granted(handle)
+        return .failed(lastCode)
     }
 
     private static func noteBadQueryFailure(_ code: Int64) {
@@ -192,6 +332,21 @@ enum SandboxGrantRouter {
         stateLock.lock()
         state.noteBadQuerySuccess()
         stateLock.unlock()
+    }
+
+    /// Flip the `badQueryBlocked` memo only for a *strict* success (the token
+    /// covered the requested path itself). A grant that only covered an existing
+    /// ancestor says nothing about Tier 1 and must not disable it session-wide.
+    private static func noteWorseQuerySuccess(strict: Bool) {
+        stateLock.lock()
+        let wasBlocked = state.badQueryBlocked
+        state.noteWorseQuerySuccess(strict: strict)
+        let nowBlocked = state.badQueryBlocked
+        stateLock.unlock()
+        if !wasBlocked && nowBlocked {
+            log("grant: bad_query marked BLOCKED for this session " +
+                "(tier 4 works, tier 1 does not)")
+        }
     }
 
     private static func callBadQuery(path: String) -> Int64 {

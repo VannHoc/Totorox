@@ -681,9 +681,53 @@ enum ContainerStore {
 
     // MARK: Filesystem discovery
 
+    /// POSIX `opendir`/`readdir` subdirectory listing.
+    /// `nil` when the directory cannot be opened at all (sandbox denial);
+    /// an empty array when it is genuinely empty.
+    private static func posixSubdirectories(at clean: String,
+                                            includeHidden: Bool = true) -> [String]? {
+        guard let dir = opendir(clean) else { return nil }
+        defer { closedir(dir) }
+        var subdirs: [String] = []
+        while let dp = readdir(dir) {
+            let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
+                String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+            }
+            if name == "." || name == ".." { continue }
+            if !includeHidden && name.hasPrefix(".") { continue }
+            let full = (clean as NSString).appendingPathComponent(name)
+            var st = stat()
+            if lstat(full, &st) == 0 {
+                if (st.st_mode & S_IFMT) == S_IFDIR {
+                    subdirs.append(full)
+                }
+            } else if dp.pointee.d_type == DT_DIR {
+                subdirs.append(full)
+            }
+        }
+        return subdirs
+    }
+
+    /// True only when the entry is definitively absent. Inside a strict sandbox
+    /// `stat` can also fail with `EPERM`/`EACCES` for a path that *does* exist,
+    /// so a denial must never be treated as "missing".
+    private static func isDefinitelyMissing(_ path: String) -> Bool {
+        var st = stat()
+        errno = 0
+        if stat(path, &st) == 0 { return false }
+        return errno == ENOENT
+    }
+
     static func enumerateDirectories(path: String, maxInode: Int64 = 2_000_000) -> [String] {
         let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
         guard clean.hasPrefix("/") else { return [] }
+
+        // A folder that does not exist can neither be granted nor enumerated.
+        // Device logs on iOS 26/27 show every missing sibling
+        // (Library/Cookies, Library/WebKit, Library/Caches/Snapshots, …) paying
+        // for a full bad_query + worse_query round-trip and then logging
+        // "enumerate: NULL" — pure latency for a folder that was never there.
+        if isDefinitelyMissing(clean) { return [] }
 
         let isAppDataRoot = ContainerMetadataCache.isApplicationContainersRoot(clean)
         if isAppDataRoot, let cached = ContainerMetadataCache.shared.cachedFilesystemDirs, !cached.isEmpty {
@@ -691,30 +735,11 @@ enum ContainerStore {
         }
 
         // 1. Try low-level POSIX opendir/readdir
-        if let dir = opendir(clean) {
-            defer { closedir(dir) }
-            var subdirs: [String] = []
-            while let dp = readdir(dir) {
-                let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                    String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
-                }
-                if name == "." || name == ".." { continue }
-                let full = (clean as NSString).appendingPathComponent(name)
-                var st = stat()
-                if lstat(full, &st) == 0 {
-                    if (st.st_mode & S_IFMT) == S_IFDIR {
-                        subdirs.append(full)
-                    }
-                } else if dp.pointee.d_type == DT_DIR {
-                    subdirs.append(full)
-                }
+        if let subdirs = posixSubdirectories(at: clean), !subdirs.isEmpty {
+            if isAppDataRoot {
+                ContainerMetadataCache.shared.cachedFilesystemDirs = subdirs
             }
-            if !subdirs.isEmpty {
-                if isAppDataRoot {
-                    ContainerMetadataCache.shared.cachedFilesystemDirs = subdirs
-                }
-                return subdirs
-            }
+            return subdirs
         }
 
         // 2. Try standard FileManager
@@ -726,7 +751,24 @@ enum ContainerStore {
             return list
         }
 
-        // 3. Fallback to bad_query inode enumeration
+        // 3. Container-level grant, then retry POSIX. iOS 27 only honors the
+        //    container token, so nested folders (Library/Preferences, Library,
+        //    …) stay unreadable until the router granted the container root.
+        //    `ensureContainerAccess` is a cache hit once the root is verified.
+        //    The app-data root itself is handled by MCMMetadata/MHA, so skip it.
+        if !isAppDataRoot,
+           (clean.hasPrefix("/var/mobile/Containers/")
+            || clean.hasPrefix("/private/var/mobile/Containers/")) {
+            _ = ensureContainerAccess(for: clean)
+            if let subdirs = posixSubdirectories(at: clean), !subdirs.isEmpty {
+                return subdirs
+            }
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: clean), !names.isEmpty {
+                return names.map { (clean as NSString).appendingPathComponent($0) }
+            }
+        }
+
+        // 4. Fallback to bad_query inode enumeration
         var pathC = clean.utf8CString.map { Int8($0) }
         guard let result = bad_query_list(&pathC, maxInode) else {
             log("enumerate: NULL for \(clean)")
@@ -746,30 +788,15 @@ enum ContainerStore {
     }
 
     static func enumerateDirectoriesWithTraversalGrant(path: String) -> [String] {
+        // Missing folder: no grant can help, and the reference refuses to grant
+        // a path that does not exist (it only hands back the App-Group token).
+        if isDefinitelyMissing(path) { return [] }
+
         let handle = grantContainerAccess(path)
         if handle >= 0 || !shouldUseBadQuery {
             let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
-            if let dir = opendir(clean) {
-                defer { closedir(dir) }
-                var subdirs: [String] = []
-                while let dp = readdir(dir) {
-                    let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                        String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
-                    }
-                    if name == "." || name == ".." || name.hasPrefix(".") { continue }
-                    let full = (clean as NSString).appendingPathComponent(name)
-                    var st = stat()
-                    if lstat(full, &st) == 0 {
-                        if (st.st_mode & S_IFMT) == S_IFDIR {
-                            subdirs.append(full)
-                        }
-                    } else if dp.pointee.d_type == DT_DIR {
-                        subdirs.append(full)
-                    }
-                }
-                if !subdirs.isEmpty {
-                    return subdirs
-                }
+            if let subdirs = posixSubdirectories(at: clean, includeHidden: false), !subdirs.isEmpty {
+                return subdirs
             }
             if let names = try? FileManager.default.contentsOfDirectory(atPath: clean), !names.isEmpty {
                 return names.filter { !$0.hasPrefix(".") }.map { (clean as NSString).appendingPathComponent($0) }
@@ -923,6 +950,9 @@ enum ContainerStore {
 
     static func enumerateDirectoryNames(path: String) -> [String] {
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+        // Missing folder: nothing to list, and a grant would only return the
+        // App-Group token (see SandboxGrantRouter.grant).
+        if isDefinitelyMissing(clean) { return [] }
         if let dir = opendir(clean) {
             defer { closedir(dir) }
             var names: [String] = []
@@ -1493,6 +1523,13 @@ enum ContainerStore {
     /// based on the exact absolute path. Never triggers AppContainerScanner or replaces an empty
     /// directory with the installed apps list.
     static func readDirectoryEntriesFromDisk(at path: String) -> [FileEntry] {
+        // A path that does not exist has no entries. Returning here also keeps
+        // `ensureContainerAccess` from paying for a doomed grant (the reference
+        // `_wq_grant` refuses missing targets for the same reason).
+        if isDefinitelyMissing(path) {
+            return []
+        }
+
         let accessPath = ensureContainerAccess(for: path)
 
         var candidates: [String] = []

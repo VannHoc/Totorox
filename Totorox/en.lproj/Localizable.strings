@@ -707,3 +707,16 @@
 "modstore.action.cached_merge" = "Send %lld Saved Mods to Merge";
 "modstore.error.invalid_zip" = "Downloaded file is not a valid .zip archive.";
 "modstore.error.checksum_mismatch" = "Downloaded file failed SHA-256 verification. Please retry.";
+
+/* --- Files Document Picker Folders & Live Overwrite Progress --- */
+"folders.quick.open_files_folder" = "Open Folder from Files...";
+"folders.quick.saved_folders_section" = "Saved Files Folders";
+"folders.quick.clear_saved_folders" = "Clear Saved Folders";
+"folders.task.cancelling" = "Cancelling...";
+"folders.error.task_already_running" = "Another file operation is already running. Please wait or tap Cancel.";
+"overwrite.target_app.choose_files_folder" = "Choose Folder from Files";
+"overwrite.target_app.change_files_folder" = "Change Files Folder";
+"overwrite.target_app.files_folder_badge" = "User-authorized Files folder";
+"overwrite.progress.extracting" = "Extracting archive...";
+"overwrite.progress.planning" = "Preparing file mapping plan...";
+"overwrite.progress.writing" = "Writing files to destination...";

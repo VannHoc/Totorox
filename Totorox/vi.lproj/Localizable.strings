@@ -707,3 +707,16 @@
 "modstore.action.cached_merge" = "Gửi %lld gói đã lưu sang Gộp file";
 "modstore.error.invalid_zip" = "Tệp tải về không phải gói nén .zip hợp lệ.";
 "modstore.error.checksum_mismatch" = "Tệp tải về không khớp mã kiểm tra SHA-256 từ máy chủ. Vui lòng thử tải lại.";
+
+/* --- Thư mục Tệp (Document Picker) & Tiến trình Đè file --- */
+"folders.quick.open_files_folder" = "Mở thư mục từ Tệp (Files)...";
+"folders.quick.saved_folders_section" = "Thư mục đã mở từ Tệp";
+"folders.quick.clear_saved_folders" = "Xóa danh sách thư mục đã lưu";
+"folders.task.cancelling" = "Đang hủy...";
+"folders.error.task_already_running" = "Đang có một tác vụ tệp khác đang chạy. Vui lòng đợi hoàn tất hoặc bấm Hủy.";
+"overwrite.target_app.choose_files_folder" = "Chọn thư mục từ Tệp (Files)";
+"overwrite.target_app.change_files_folder" = "Đổi thư mục Tệp";
+"overwrite.target_app.files_folder_badge" = "Thư mục do bạn cấp quyền qua Tệp (Files)";
+"overwrite.progress.extracting" = "Đang giải nén gói tệp...";
+"overwrite.progress.planning" = "Đang lập kế hoạch ánh xạ tệp...";
+"overwrite.progress.writing" = "Đang ghi đè tệp vào thư mục đích...";

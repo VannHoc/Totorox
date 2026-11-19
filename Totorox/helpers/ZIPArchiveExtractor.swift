@@ -153,11 +153,13 @@ enum ZIPArchiveExtractor {
 
     /// Streams all ZIP entries directly into `stagingDirectory` without wrapping them in an extra
     /// archive-named subfolder and without loading the entire archive into RAM.
-    /// Ideal for multi-hundred-MB archives in FolderExplorerView.
+    /// Ideal for multi-hundred-MB archives in FolderExplorerView and OverwriteFileView.
     static func extractFlatContents(
         archiveURL: URL,
         into stagingDirectory: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        shouldCancel: (() -> Bool)? = nil,
+        progressHandler: ((_ extractedCount: Int, _ totalCount: Int, _ entryName: String) -> Void)? = nil
     ) throws -> Int {
         let archive = archiveURL.standardizedFileURL
         let staging = stagingDirectory.standardizedFileURL
@@ -182,6 +184,7 @@ enum ZIPArchiveExtractor {
         let entries = try readEntriesForFlatExtraction(handle: handle, archiveSize: UInt64(archiveSizeValue))
 
         var totalExpandedBytes: UInt64 = 0
+        var totalFiles = 0
         for entry in entries {
             let (sum, overflow) = totalExpandedBytes.addingReportingOverflow(entry.uncompressedSize)
             guard !overflow, sum <= UInt64(Int64.max) else {
@@ -191,12 +194,18 @@ enum ZIPArchiveExtractor {
                 throw ZIPArchiveExtractorError.expandedTooLarge
             }
             totalExpandedBytes = sum
+            if !entry.isDirectory {
+                totalFiles += 1
+            }
         }
 
         var extractedFiles = 0
         var createdDirectories = Set<String>([staging.path])
         var seenTargetPaths = Set<String>()
         for entry in entries {
+            if shouldCancel?() == true || Task.isCancelled {
+                throw CancellationError()
+            }
             let target = try destinationURL(
                 components: entry.components,
                 root: staging,
@@ -236,9 +245,15 @@ enum ZIPArchiveExtractor {
                 throw ZIPArchiveExtractorError.extractionFailed
             }
             extractedFiles += 1
+            if let progressHandler,
+               extractedFiles == 1 || extractedFiles == totalFiles || extractedFiles % 8 == 0 {
+                progressHandler(extractedFiles, max(totalFiles, 1), entry.components.last ?? target.lastPathComponent)
+            }
         }
         return extractedFiles
     }
+
+    private static let maximumCentralDirectoryBytes: UInt64 = 64 * 1_024 * 1_024
 
     private static func readEntriesForFlatExtraction(
         handle: FileHandle,
@@ -258,31 +273,35 @@ enum ZIPArchiveExtractor {
         guard entryCount != 0xffff,
               centralSize != 0xffff_ffff,
               centralOffset != 0xffff_ffff,
+              UInt64(centralSize) <= maximumCentralDirectoryBytes,
               UInt64(centralOffset) + UInt64(centralSize) <= endOffset else {
             throw ZIPArchiveExtractorError.invalidArchive
         }
 
+        // Read entire Central Directory in a single syscall instead of 2*N seeks.
+        let centralData = try read(handle: handle, offset: UInt64(centralOffset), count: Int(centralSize))
         var entries: [Entry] = []
-        var cursor = UInt64(centralOffset)
-        let centralEnd = cursor + UInt64(centralSize)
+        entries.reserveCapacity(Int(entryCount))
+        var cursor = 0
+        let centralLen = centralData.count
         for _ in 0..<Int(entryCount) {
-            let header = try read(handle: handle, offset: cursor, count: 46)
-            guard u32(header, 0) == centralHeaderSignature else {
+            guard cursor + 46 <= centralLen,
+                  u32(centralData, cursor) == centralHeaderSignature else {
                 throw ZIPArchiveExtractorError.invalidArchive
             }
-            let flags = u16(header, 8)
-            let method = u16(header, 10)
-            let checksum = u32(header, 16)
-            let compressedSize = u32(header, 20)
-            let uncompressedSize = u32(header, 24)
-            let nameLength = Int(u16(header, 28))
-            let extraLength = Int(u16(header, 30))
-            let itemCommentLength = Int(u16(header, 32))
-            let externalAttributes = u32(header, 38)
-            let localOffset = u32(header, 42)
+            let flags = u16(centralData, cursor + 8)
+            let method = u16(centralData, cursor + 10)
+            let checksum = u32(centralData, cursor + 16)
+            let compressedSize = u32(centralData, cursor + 20)
+            let uncompressedSize = u32(centralData, cursor + 24)
+            let nameLength = Int(u16(centralData, cursor + 28))
+            let extraLength = Int(u16(centralData, cursor + 30))
+            let itemCommentLength = Int(u16(centralData, cursor + 32))
+            let externalAttributes = u32(centralData, cursor + 38)
+            let localOffset = u32(centralData, cursor + 42)
             let variableCount = nameLength + extraLength + itemCommentLength
             guard nameLength > 0,
-                  cursor + 46 + UInt64(variableCount) <= centralEnd,
+                  cursor + 46 + variableCount <= centralLen,
                   flags & 0x0001 == 0,
                   method == 0 || method == 8,
                   compressedSize != 0xffff_ffff,
@@ -291,14 +310,22 @@ enum ZIPArchiveExtractor {
                 throw ZIPArchiveExtractorError.invalidArchive
             }
 
-            let nameData = try read(handle: handle, offset: cursor + 46, count: nameLength)
+            let nameStart = cursor + 46
+            let nameEnd = nameStart + nameLength
+            let nameData = centralData[nameStart..<nameEnd]
             let rawName = String(data: nameData, encoding: .utf8)
                 ?? String(data: nameData, encoding: .isoLatin1)
                 ?? ""
-            cursor += 46 + UInt64(variableCount)
+            cursor += 46 + variableCount
+
+            let mode = UInt16((externalAttributes >> 16) & 0xffff)
+            let fileType = mode & 0o170000
+            guard fileType != 0o120000 else {
+                throw ZIPArchiveExtractorError.symbolicLinkUnsupported
+            }
 
             let normalized = rawName.replacingOccurrences(of: "\\", with: "/")
-            let isDirectory = normalized.hasSuffix("/") || ((UInt16((externalAttributes >> 16) & 0xffff) & 0o170000) == 0o040000)
+            let isDirectory = normalized.hasSuffix("/") || (fileType == 0o040000)
             var components = normalized
                 .split(separator: "/", omittingEmptySubsequences: true)
                 .map(String.init)
@@ -362,34 +389,37 @@ enum ZIPArchiveExtractor {
               entryCount != 0xffff,
               centralSize != 0xffff_ffff,
               centralOffset != 0xffff_ffff,
+              UInt64(centralSize) <= maximumCentralDirectoryBytes,
               relativeEndOffset + 22 + commentLength == tail.count,
               UInt64(centralOffset) + UInt64(centralSize) == endOffset else {
             throw ZIPArchiveExtractorError.invalidArchive
         }
 
+        let centralData = try read(handle: handle, offset: UInt64(centralOffset), count: Int(centralSize))
         var entries: [Entry] = []
+        entries.reserveCapacity(Int(entryCount))
         var seen: [String: Bool] = [:]
-        var cursor = UInt64(centralOffset)
-        let centralEnd = cursor + UInt64(centralSize)
+        var cursor = 0
+        let centralLen = centralData.count
         for _ in 0..<Int(entryCount) {
-            let header = try read(handle: handle, offset: cursor, count: 46)
-            guard u32(header, 0) == centralHeaderSignature else {
+            guard cursor + 46 <= centralLen,
+                  u32(centralData, cursor) == centralHeaderSignature else {
                 throw ZIPArchiveExtractorError.invalidArchive
             }
-            let flags = u16(header, 8)
-            let method = u16(header, 10)
-            let checksum = u32(header, 16)
-            let compressedSize = u32(header, 20)
-            let uncompressedSize = u32(header, 24)
-            let nameLength = Int(u16(header, 28))
-            let extraLength = Int(u16(header, 30))
-            let itemCommentLength = Int(u16(header, 32))
-            let diskStart = u16(header, 34)
-            let externalAttributes = u32(header, 38)
-            let localOffset = u32(header, 42)
+            let flags = u16(centralData, cursor + 8)
+            let method = u16(centralData, cursor + 10)
+            let checksum = u32(centralData, cursor + 16)
+            let compressedSize = u32(centralData, cursor + 20)
+            let uncompressedSize = u32(centralData, cursor + 24)
+            let nameLength = Int(u16(centralData, cursor + 28))
+            let extraLength = Int(u16(centralData, cursor + 30))
+            let itemCommentLength = Int(u16(centralData, cursor + 32))
+            let diskStart = u16(centralData, cursor + 34)
+            let externalAttributes = u32(centralData, cursor + 38)
+            let localOffset = u32(centralData, cursor + 42)
             let variableCount = nameLength + extraLength + itemCommentLength
             guard nameLength > 0,
-                  cursor + 46 + UInt64(variableCount) <= centralEnd,
+                  cursor + 46 + variableCount <= centralLen,
                   flags & 0x0001 == 0,
                   method == 0 || method == 8,
                   diskStart == 0,
@@ -399,7 +429,9 @@ enum ZIPArchiveExtractor {
                 throw ZIPArchiveExtractorError.invalidArchive
             }
 
-            let nameData = try read(handle: handle, offset: cursor + 46, count: nameLength)
+            let nameStart = cursor + 46
+            let nameEnd = nameStart + nameLength
+            let nameData = Data(centralData[nameStart..<nameEnd])
             guard let rawName = String(data: nameData, encoding: .utf8) else {
                 throw ZIPArchiveExtractorError.invalidArchive
             }
@@ -453,9 +485,9 @@ enum ZIPArchiveExtractor {
                 uncompressedSize: UInt64(uncompressedSize),
                 dataOffset: dataOffset
             ))
-            cursor += 46 + UInt64(variableCount)
+            cursor += 46 + variableCount
         }
-        guard cursor == centralEnd else { throw ZIPArchiveExtractorError.invalidArchive }
+        guard cursor == centralLen else { throw ZIPArchiveExtractorError.invalidArchive }
         return entries
     }
 
@@ -539,13 +571,15 @@ enum ZIPArchiveExtractor {
     }
 
     private static func u16(_ data: Data, _ offset: Int) -> UInt16 {
-        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+        let base = data.startIndex + offset
+        return UInt16(data[base]) | (UInt16(data[base + 1]) << 8)
     }
 
     private static func u32(_ data: Data, _ offset: Int) -> UInt32 {
-        UInt32(data[offset])
-            | (UInt32(data[offset + 1]) << 8)
-            | (UInt32(data[offset + 2]) << 16)
-            | (UInt32(data[offset + 3]) << 24)
+        let base = data.startIndex + offset
+        return UInt32(data[base])
+            | (UInt32(data[base + 1]) << 8)
+            | (UInt32(data[base + 2]) << 16)
+            | (UInt32(data[base + 3]) << 24)
     }
 }
