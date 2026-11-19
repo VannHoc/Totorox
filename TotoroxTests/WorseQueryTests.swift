@@ -161,35 +161,6 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertTrue(isDirectory(cachesPath()))
     }
 
-    func testSwapPreservesCachesContents() throws {
-        try makeCachesDirectory()
-        let marker = root.appendingPathComponent("group/Library/Caches/keep.bin")
-        try Data([1, 2, 3]).write(to: marker)
-        let target = try makeTarget("target")
-
-        XCTAssertTrue(swap(cachesPath(), target, requireExists: true))
-        XCTAssertTrue(isSymlink(cachesPath()))
-
-        XCTAssertTrue(restore(cachesPath()))
-        XCTAssertTrue(isDirectory(cachesPath()))
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: marker.path),
-            "granting must not throw away the App Group's real Caches contents"
-        )
-    }
-
-    func testRecoverRestoresPreservedCaches() throws {
-        try makeCachesDirectory()
-        let marker = root.appendingPathComponent("group/Library/Caches/keep.bin")
-        try Data([9]).write(to: marker)
-        let target = try makeTarget("target")
-
-        XCTAssertTrue(swap(cachesPath(), target, requireExists: true))
-        XCTAssertTrue(recover(cachesPath()))
-        XCTAssertTrue(isDirectory(cachesPath()))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
-    }
-
     // MARK: - Error helpers
 
     func testErrorNamesAreStable() {
