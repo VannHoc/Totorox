@@ -410,8 +410,12 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 || (normalizedKey.contains("stablesystems_") && normalizedKey.hasSuffix(".pkg.bytes"))
             let isThanosConfig = normalizedKey.contains("/thanos/")
             let isPkgWithThanos = hasThanosFile && normalizedKey.hasSuffix(".pkg.bytes")
+            // Databin nhỏ (vd: BattleEffect.bytes ~45KB) dù chỉ 1 mod có vẫn gửi server để kiểm tra & sửa MD5 MSES tránh kẹt 88%
+            let isSingleSmallDatabin = normalizedKey.contains("/databin/")
+                && normalizedKey.hasSuffix(".bytes")
+                && refs.allSatisfy { $0.header.uncompressedSize <= 512 * 1024 }
 
-            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos {
+            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos || isSingleSmallDatabin {
                 if distinctMods.count >= 2 && uniqueVariants.count >= 2 {
                     detectedConflicts += 1
                 } else if isThanosConfig || isCorePkg {
@@ -919,12 +923,19 @@ public final class AovModMergerEngine: @unchecked Sendable {
     static func isGlobalHudConflictPath(_ lowerPath: String) -> Bool {
         let unified = lowerPath.replacingOccurrences(of: "\\", with: "/").lowercased()
         if unified.hasSuffix("/assetbundle/uisystem/atlas/primary/allshared.assetbundle")
-            || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle") {
+            || unified.hasSuffix("/assetbundle/uisystem/atlas/primary/allshared_raw.assetbundle")
+            || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle")
+            || unified.hasSuffix("/assetbundle/uisystem/allshared_raw.assetbundle") {
             return true
         }
         if let slashIdx = unified.lastIndex(of: "/") {
             let dirPart = String(unified[..<slashIdx])
             let fileName = String(unified[unified.index(after: slashIdx)...])
+            if (dirPart.hasSuffix("/assetbundle/uisystem") || dirPart.hasSuffix("/assetbundle/uisystem/atlas/primary"))
+                && fileName.hasPrefix("allshared")
+                && fileName.hasSuffix(".assetbundle") {
+                return true
+            }
             if dirPart.hasSuffix("/assetbundle/uisystem/battle")
                 && (fileName.hasPrefix("battlecommon") || fileName.hasPrefix("battleotherui")) {
                 return true
@@ -947,6 +958,10 @@ public final class AovModMergerEngine: @unchecked Sendable {
         if modsWithGlobalHud.count >= 2 {
             return true
         }
+        let heroModsCount = summaries.filter { !$0.heroIDs.isEmpty }.count
+        if heroModsCount >= 2 {
+            return true
+        }
         let distinctHeroSets = Set(summaries.map { $0.heroIDs.sorted() }.filter { !$0.isEmpty })
         return distinctHeroSets.count >= 2
     }
@@ -964,7 +979,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
         for key in pathKeys {
             let unified = key.replacingOccurrences(of: "\\", with: "/").lowercased()
             if unified.hasSuffix("/assetbundle/uisystem/atlas/primary/allshared.assetbundle")
-                || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle") {
+                || unified.hasSuffix("/assetbundle/uisystem/allshared.assetbundle")
+                || unified.hasSuffix("/assetbundle/uisystem/allshared_raw.assetbundle") {
                 if let mods = modIndicesByPath[key] {
                     modsWithAllShared.formUnion(mods)
                 }
@@ -1032,6 +1048,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
         return lower.contains("commonactions")
             || lower.contains("databin")
             || lower.contains("thanos")
+            || lower.contains("/assetrefs/")
+            || lower.hasSuffix("_assetref.bytes")
             || lower.hasSuffix(".xml")
             || lower.hasSuffix(".mses")
             || lower.hasSuffix(".pkg.bytes")
