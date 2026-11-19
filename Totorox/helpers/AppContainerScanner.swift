@@ -577,6 +577,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             #endif
 
             let finalSorted = self.buildSortedSnapshotFromCache()
+            log("browser: inventory scan done apps=\(finalSorted.count) " +
+                "tier=\(SandboxGrantRouter.lastBackend?.rawValue ?? "none") " +
+                "badQueryBlocked=\(SandboxGrantRouter.badQueryBlocked)")
             self.cacheLock.lock()
             self.hasCompletedFullScan = true
             self.activeScanTask = nil
