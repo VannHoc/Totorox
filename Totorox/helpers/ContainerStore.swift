@@ -198,6 +198,22 @@ enum ContainerStore {
     private static let grantHandlesLock = NSLock()
     private static let cachedHomeCanonical: String = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
 
+    /// `identifier -> container path` for every app-data container, taken from a
+    /// single container-manager metadata query.
+    ///
+    /// This is the reference app's container source (`_wq_mcm_list_containers`):
+    /// containermanagerd reports the identifier and the path for the same object,
+    /// so the list needs no sandbox extension at all. That matters on iOS 26/27,
+    /// where listing `/var/mobile/Containers/Data/Application` over POSIX is
+    /// denied and previously left the browser with no app whatsoever.
+    static func containerManagerPairs() -> [String: String] {
+        var mcmError: NSString? = nil
+        let pairs = MCMEnumerateContainersForClass(2, 4_096, &mcmError)
+        log("browser: MCM class-2 containers=\(pairs.count) " +
+            "detail=\(mcmError.map(String.init) ?? "none")")
+        return pairs
+    }
+
     static var uuidMap: [String: String] {
         uuidMapLock.lock()
         defer { uuidMapLock.unlock() }
@@ -205,18 +221,18 @@ enum ContainerStore {
         var map = (containerUUIDToBundleIDMap() as? [String: String] ?? [:]).filter { key, val in
             !val.isEmpty && UUID(uuidString: val) == nil && val.caseInsensitiveCompare(key) != .orderedSame
         }
-        var mcmErr: NSString? = nil
-        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
-        for bid in mcmIDs where !bid.isEmpty && UUID(uuidString: bid) == nil {
-            var actErr: NSString? = nil
-            if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
-                let u = (p as NSString).lastPathComponent
-                if u.caseInsensitiveCompare(bid) != .orderedSame {
-                    map[u] = bid
-                    map[u.uppercased()] = bid
-                    map[u.lowercased()] = bid
-                }
-            }
+        for (identifier, containerPath) in containerManagerPairs() {
+            // Class-2 identifiers are bundle ids on older builds and the
+            // container UUID on newer ones. Only the bundle-id shape can be
+            // mapped here; the UUID shape is resolved from the container's
+            // metadata plist instead of paying a lease per entry.
+            guard isValidAppBundleID(identifier) else { continue }
+            let uuid = (containerPath as NSString).lastPathComponent
+            guard UUID(uuidString: uuid) != nil,
+                  uuid.caseInsensitiveCompare(identifier) != .orderedSame else { continue }
+            map[uuid] = identifier
+            map[uuid.uppercased()] = identifier
+            map[uuid.lowercased()] = identifier
         }
         _uuidMap = map
         return map
@@ -226,18 +242,18 @@ enum ContainerStore {
         var map = (containerUUIDToBundleIDMap() as? [String: String] ?? [:]).filter { key, val in
             !val.isEmpty && UUID(uuidString: val) == nil && val.caseInsensitiveCompare(key) != .orderedSame
         }
-        var mcmErr: NSString? = nil
-        let mcmIDs = MCMEnumerateIdentifiersForClass(2, 2048, &mcmErr)
-        for bid in mcmIDs where !bid.isEmpty && UUID(uuidString: bid) == nil {
-            var actErr: NSString? = nil
-            if let p = MCMActivateContainerPath(2, bid, false, &actErr), !p.isEmpty {
-                let u = (p as NSString).lastPathComponent
-                if u.caseInsensitiveCompare(bid) != .orderedSame {
-                    map[u] = bid
-                    map[u.uppercased()] = bid
-                    map[u.lowercased()] = bid
-                }
-            }
+        for (identifier, containerPath) in containerManagerPairs() {
+            // Class-2 identifiers are bundle ids on older builds and the
+            // container UUID on newer ones. Only the bundle-id shape can be
+            // mapped here; the UUID shape is resolved from the container's
+            // metadata plist instead of paying a lease per entry.
+            guard isValidAppBundleID(identifier) else { continue }
+            let uuid = (containerPath as NSString).lastPathComponent
+            guard UUID(uuidString: uuid) != nil,
+                  uuid.caseInsensitiveCompare(identifier) != .orderedSame else { continue }
+            map[uuid] = identifier
+            map[uuid.uppercased()] = identifier
+            map[uuid.lowercased()] = identifier
         }
         uuidMapLock.lock()
         if let existing = _uuidMap {
