@@ -480,6 +480,16 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     /// Scans all application containers on a background thread using a deduplicated two-stage pipeline.
     func scanAllContainers(forceRefresh: Bool = false) async -> [AppContainerInfo] {
         cacheLock.lock()
+        // A scan already in flight answers both a plain and a forced request:
+        // it re-resolves every container it finds anyway. The iOS 27.0.1 log
+        // shows four overlapping scans (refresh button + app-list load + prewarm)
+        // paying 549 Tier-4 grants for 276 containers, with one scan stalled at
+        // 44.9s waiting on the same serialized grant session while the others
+        // were still resolving — the browser then looked like it was missing apps.
+        if let inFlight = activeScanTask {
+            cacheLock.unlock()
+            return await inFlight.value
+        }
         if !forceRefresh && hasCompletedFullScan && !_cachedAppsSnapshot.isEmpty {
             let existing = _cachedAppsSnapshot
             cacheLock.unlock()
@@ -490,9 +500,10 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
             return existing
         }
-        if !forceRefresh, let inFlight = activeScanTask {
-            cacheLock.unlock()
-            return await inFlight.value
+        if forceRefresh {
+            // Retry the containers a previous pass could not name, so a
+            // transient token failure does not hide an app for the session.
+            ContainerMetadataCache.shared.retryUnresolvedContainers()
         }
 
         let task = Task.detached(priority: .userInitiated) { [weak self] () -> [AppContainerInfo] in
@@ -652,7 +663,16 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                             preferredIcon: inferred.icon
                         )
                     } else {
+                        // Still list the container when its metadata cannot be
+                        // read. Dropping it is what made a pass that found 276
+                        // containers show only 274 entries, and on a build whose
+                        // tier hands out no token it emptied the browser even
+                        // though the UUIDs had been enumerated.
                         ContainerMetadataCache.shared.markUnresolved(uuid: udid)
+                        ContainerMetadataCache.shared.storeUnresolvedContainer(
+                            uuid: udid,
+                            containerPath: dirPath
+                        )
                     }
                 }
             }
@@ -660,6 +680,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             let finalSorted = self.buildSortedSnapshotFromCache()
             log("browser: inventory scan done apps=\(finalSorted.count) " +
+                "unresolved=\(ContainerMetadataCache.shared.unresolvedContainerCount) " +
                 "tier=\(SandboxGrantRouter.lastBackend?.rawValue ?? "none") " +
                 "badQueryBlocked=\(SandboxGrantRouter.badQueryBlocked)")
             self.cacheLock.lock()
