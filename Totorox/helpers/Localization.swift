@@ -47,12 +47,21 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         String(format: text(key), locale: locale, arguments: arguments)
     }
 
-    private var localizedBundle: Bundle {
-        guard let path = Bundle.main.path(forResource: rawValue, ofType: "lproj"),
-              let bundle = Bundle(path: path) else {
-            return .main
+    private static let cachedBundles: [AppLanguage: Bundle] = {
+        var map: [AppLanguage: Bundle] = [:]
+        for lang in AppLanguage.allCases {
+            if let path = Bundle.main.path(forResource: lang.rawValue, ofType: "lproj"),
+               let bundle = Bundle(path: path) {
+                map[lang] = bundle
+            } else {
+                map[lang] = .main
+            }
         }
-        return bundle
+        return map
+    }()
+
+    private var localizedBundle: Bundle {
+        Self.cachedBundles[self] ?? .main
     }
 }
 

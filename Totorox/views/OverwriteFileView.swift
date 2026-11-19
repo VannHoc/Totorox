@@ -1,6 +1,119 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Isolated Execution Progress Model (prevents full-form re-renders on progress ticks)
+
+@MainActor
+private final class OverwriteExecutionProgress: ObservableObject {
+    @Published var stageText: String = ""
+    @Published var detailText: String = ""
+    @Published var completedCount: Int = 0
+    @Published var totalCount: Int = 0
+    @Published var isCancelling: Bool = false
+
+    private var activeTask: Task<Void, Never>? = nil
+
+    func begin(stage: String, detail: String = "") {
+        stageText = stage
+        detailText = detail
+        completedCount = 0
+        totalCount = 0
+        isCancelling = false
+    }
+
+    func attach(_ task: Task<Void, Never>) {
+        activeTask = task
+    }
+
+    func update(stage: String? = nil, detail: String? = nil, completed: Int? = nil, total: Int? = nil) {
+        if let stage { stageText = stage }
+        if let detail { detailText = detail }
+        if let completed { completedCount = completed }
+        if let total { totalCount = total }
+    }
+
+    func cancel() {
+        isCancelling = true
+        activeTask?.cancel()
+    }
+
+    func finish() {
+        activeTask = nil
+        stageText = ""
+        detailText = ""
+        completedCount = 0
+        totalCount = 0
+        isCancelling = false
+    }
+}
+
+private struct OverwriteProgressCard: View {
+    @ObservedObject var progress: OverwriteExecutionProgress
+    let language: AppLanguage
+
+    var body: some View {
+        let fraction: Double? = {
+            guard progress.totalCount > 0 else { return nil }
+            return min(max(Double(progress.completedCount) / Double(progress.totalCount), 0.02), 1.0)
+        }()
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.85)
+                    .tint(TotoroxTheme.mintAccent)
+
+                Text(progress.stageText.isEmpty ? language.text("overwrite.execute.running") : progress.stageText)
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if let frac = fraction {
+                    Text("\(Int(frac * 100))%")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                }
+
+                Button {
+                    progress.cancel()
+                } label: {
+                    Text(progress.isCancelling
+                         ? language.text("folders.task.cancelling")
+                         : language.text("common.cancel"))
+                        .font(.system(size: 11.5, weight: .bold))
+                        .foregroundStyle(Color.red)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(progress.isCancelling)
+            }
+
+            if let frac = fraction {
+                ProgressView(value: frac, total: 1.0)
+                    .tint(TotoroxTheme.mintAccent)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .tint(TotoroxTheme.mintAccent)
+            }
+
+            if !progress.detailText.isEmpty {
+                Text(progress.detailText)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .modifier(TotoroxCardModifier(cornerRadius: 14, padding: 14))
+    }
+}
+
 // MARK: - OverwriteFileView (Giao diện chuẩn UI Dự án Totorox)
 
 struct OverwriteFileView: View {
@@ -8,6 +121,7 @@ struct OverwriteFileView: View {
 
     // Selection State
     @State private var selectedApp: AppContainerInfo? = nil
+    @State private var selectedExternalFolder: BookmarkedFolder? = nil
     @State private var targetBundleIDInput: String = ""
     @State private var selectedTargetFolder: String = "Documents"
     @State private var selectedPatchURL: URL? = nil
@@ -16,6 +130,7 @@ struct OverwriteFileView: View {
     @State private var isPatchPasswordProtected: Bool = false
     @State private var isShowPassword: Bool = false
     @State private var showPasswordPromptDialog: Bool = false
+    @State private var passwordDetectTask: Task<Void, Never>? = nil
     
     // Custom folder dialog
     @State private var showCustomFolderSheet: Bool = false
@@ -30,11 +145,13 @@ struct OverwriteFileView: View {
     
     // Modal Sheets
     @State private var showInstalledAppsSheet: Bool = false
+    @State private var showExternalFolderPicker: Bool = false
     @State private var showDocumentPicker: Bool = false
     @State private var appSearchQuery: String = ""
     
     // Execution State
     @State private var isExecuting: Bool = false
+    @StateObject private var executionProgress = OverwriteExecutionProgress()
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: FileIOResultWrapper? = nil
     @State private var alertMessage: String? = nil
@@ -45,22 +162,38 @@ struct OverwriteFileView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     
     // Form validation
+    private var hasDestinationTarget: Bool {
+        selectedApp != nil || selectedExternalFolder != nil
+    }
+
     private var isReadyToExecute: Bool {
-        selectedApp != nil && selectedPatchURL != nil && !selectedTargetFolder.isEmpty && !isExecuting
+        guard selectedPatchURL != nil && !isExecuting else { return false }
+        if selectedExternalFolder != nil {
+            return true
+        }
+        return selectedApp != nil && !selectedTargetFolder.isEmpty
     }
     
     var body: some View {
         ZStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 16) {
-                    // MARK: - Khối 1: Chọn ứng dụng mục tiêu
+                    // MARK: - Khối 1: Chọn ứng dụng mục tiêu hoặc thư mục từ Tệp (Files)
                     targetAppCard
                     
                     // MARK: - Khối 2: Thư mục đích (Mặc định Documents & Library, ấn Đổi để tùy chọn)
-                    destinationFolderCard
+                    if selectedExternalFolder == nil {
+                        destinationFolderCard
+                    }
                     
                     // MARK: - Khối 3: Gói tệp bản vá
                     patchPackageCard
+
+                    // MARK: - Thanh tiến trình thực thi & nút Hủy
+                    if isExecuting {
+                        OverwriteProgressCard(progress: executionProgress, language: language)
+                            .transition(.opacity)
+                    }
                     
                     // MARK: - Nút Thực thi
                     executeButton
@@ -87,6 +220,19 @@ struct OverwriteFileView: View {
         .sheet(isPresented: $showInstalledAppsSheet) {
             installedAppsPickerSheet
                 .preferredColorScheme(themeManager.mode.colorScheme)
+        }
+        .sheet(isPresented: $showExternalFolderPicker) {
+            DocumentPickerWrapper(
+                allowedContentTypes: [.folder],
+                asCopy: false
+            ) { pickedFolderURL in
+                let saved = SecurityScopedFolderManager.shared.addFolder(url: pickedFolderURL)
+                selectedApp = nil
+                targetBundleIDInput = ""
+                selectedExternalFolder = saved
+                log("overwrite: selected Files folder \(saved.displayName)")
+            }
+            .preferredColorScheme(themeManager.mode.colorScheme)
         }
         .sheet(isPresented: $showCustomFolderSheet) {
             customFolderPickerSheet
@@ -153,7 +299,7 @@ struct OverwriteFileView: View {
                 
                 Spacer()
                 
-                if selectedApp != nil {
+                if hasDestinationTarget {
                     Text(language.text("overwrite.target_app.selected"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.mintAccent)
@@ -164,7 +310,70 @@ struct OverwriteFileView: View {
                 }
             }
             
-            if let app = selectedApp {
+            if let folder = selectedExternalFolder {
+                // Đã chọn thư mục từ ứng dụng Tệp (Files)
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(TotoroxTheme.mintAccent.opacity(0.15))
+                            .frame(width: 48, height: 48)
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(folder.displayName)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                            .lineLimit(1)
+
+                        Text(language.text("overwrite.target_app.files_folder_badge"))
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .lineLimit(1)
+
+                        Text(folder.url.path)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer()
+                }
+                .padding(12)
+                .background(TotoroxTheme.searchBackground.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack(spacing: 10) {
+                    Button {
+                        showExternalFolderPicker = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text(language.text("overwrite.target_app.change_files_folder"))
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    Button {
+                        selectedExternalFolder = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .frame(width: 38, height: 38)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            } else if let app = selectedApp {
                 // Đã chọn app
                 HStack(spacing: 12) {
                     AppIconAvatarView(info: app, size: 48)
@@ -244,6 +453,22 @@ struct OverwriteFileView: View {
                         .background(TotoroxTheme.mintAccent)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: TotoroxTheme.mintAccent.opacity(0.25), radius: 6, y: 3)
+                    }
+
+                    Button {
+                        showExternalFolderPicker = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 14, weight: .bold))
+                            Text(language.text("overwrite.target_app.choose_files_folder"))
+                                .font(.system(size: 13.5, weight: .semibold))
+                        }
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .background(TotoroxTheme.mintAccent.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     
                     // Quick manual Bundle ID input
@@ -572,6 +797,8 @@ struct OverwriteFileView: View {
                     }
                     
                     Button {
+                        passwordDetectTask?.cancel()
+                        passwordDetectTask = nil
                         selectedPatchURL = nil
                         patchFileSizeText = ""
                         patchPassword = ""
@@ -1264,6 +1491,7 @@ struct OverwriteFileView: View {
     }
     
     private func selectApp(_ app: AppContainerInfo) {
+        selectedExternalFolder = nil
         selectedApp = app
         targetBundleIDInput = app.bundleID
         log("overwrite: selected app \(app.appName) (\(app.bundleID))")
@@ -1330,8 +1558,8 @@ struct OverwriteFileView: View {
                 log("overwrite: selected patch \(url.lastPathComponent) (\(sizeText)) isProtected=\(isProtected)")
             }
             if let bid = autoBundleID {
-                let currentSelected = await MainActor.run { self.selectedApp }
-                if currentSelected == nil, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
+                let hasTarget = await MainActor.run { self.selectedApp != nil || self.selectedExternalFolder != nil }
+                if !hasTarget, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
                     await MainActor.run {
                         self.selectApp(resolved)
                     }
@@ -1341,24 +1569,33 @@ struct OverwriteFileView: View {
     }
 
     private func tryAutoDetectBundleID(password: String) {
+        passwordDetectTask?.cancel()
+        passwordDetectTask = nil
+
         guard let url = selectedPatchURL,
               url.pathExtension.lowercased() == "3105",
               !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let hasSecurityAccess = url.startAccessingSecurityScopedResource()
-        Task.detached(priority: .userInitiated) {
+        passwordDetectTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+
+            let hasSecurityAccess = url.startAccessingSecurityScopedResource()
             defer {
                 if hasSecurityAccess { url.stopAccessingSecurityScopedResource() }
             }
             guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
                   !PatchPackageLimits.exceedsExpandedLimit(Int64(size)) else { return }
+            guard !Task.isCancelled else { return }
             guard let project = PatchZipConverter.shared.inspectProjectMetadataLocally(patchURL: url, password: password),
                   let bid = project.allBundleIdentifiers.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !bid.isEmpty else {
                 return
             }
-            let currentSelected = await MainActor.run { self.selectedApp }
-            if currentSelected == nil, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
+            guard !Task.isCancelled else { return }
+            let hasTarget = await MainActor.run { self.selectedApp != nil || self.selectedExternalFolder != nil }
+            if !hasTarget, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.selectApp(resolved)
                     log("overwrite: auto-detected app \(bid) after unlocking with password")
@@ -1386,6 +1623,7 @@ struct OverwriteFileView: View {
     
     /// Only relative paths inside the target app container are valid. Rejecting absolute
     /// paths and `..` components prevents a custom destination from escaping the container.
+    /// Pure helper — never mutates `@State` so it is safe to call during SwiftUI body evaluation.
     private func validatedTargetSubfolder(_ rawValue: String) -> String? {
         // Accept a trailing slash from manual input ("Documents/") but keep leading
         // slashes rejected as absolute paths.
@@ -1393,18 +1631,27 @@ struct OverwriteFileView: View {
         while candidate.hasSuffix("/") {
             candidate.removeLast()
         }
-        do {
-            return try PatchPathValidator.canonicalRelativePath(candidate)
-        } catch {
-            alertMessage = language.text("overwrite.error.invalid_target_subfolder")
-            return nil
-        }
+        return try? PatchPathValidator.canonicalRelativePath(candidate)
     }
 
     // MARK: - Thực thi Ghi đè Tệp
     private func executePatch() {
-        guard let app = selectedApp, let patchURL = selectedPatchURL else { return }
-        guard let targetSubfolder = validatedTargetSubfolder(selectedTargetFolder) else { return }
+        guard let patchURL = selectedPatchURL else { return }
+        guard !isExecuting else { return }
+
+        let externalFolder = selectedExternalFolder
+        let targetApp = selectedApp
+        guard externalFolder != nil || targetApp != nil else { return }
+
+        var resolvedSubfolder: String = ""
+        if externalFolder == nil {
+            guard let validSubfolder = validatedTargetSubfolder(selectedTargetFolder) else {
+                alertMessage = language.text("overwrite.error.invalid_target_subfolder")
+                return
+            }
+            resolvedSubfolder = validSubfolder
+        }
+
         let is3105 = patchURL.pathExtension.lowercased() == "3105"
 
         if isPatchPasswordProtected && patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1416,40 +1663,81 @@ struct OverwriteFileView: View {
         let hasSecurityAccess = patchURL.startAccessingSecurityScopedResource()
         let currentPassword = patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : patchPassword
         let activeLanguage = language
+        let progressModel = executionProgress
+        let targetSubfolder = resolvedSubfolder
 
         isExecuting = true
-        log("overwrite: starting patch into \(app.bundleID) target=\(targetSubfolder) file=\(patchURL.lastPathComponent)")
+        progressModel.begin(
+            stage: activeLanguage.text("overwrite.progress.extracting"),
+            detail: patchURL.lastPathComponent
+        )
+        if let folder = externalFolder {
+            log("overwrite: starting patch into Files folder=\(folder.displayName) file=\(patchURL.lastPathComponent)")
+        } else if let app = targetApp {
+            log("overwrite: starting patch into \(app.bundleID) target=\(targetSubfolder) file=\(patchURL.lastPathComponent)")
+        }
 
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             defer {
                 if hasSecurityAccess { patchURL.stopAccessingSecurityScopedResource() }
             }
 
-            // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
-            var actError: NSString? = nil
-            let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
-            let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
-            _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
+            let destinationDir: URL
+            let cacheInvalidationPath: String
+            var localExternalScope = false
+            var scopedExternalURL: URL? = nil
 
-            let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().standardizedFileURL
-            let destinationDir = containerBase
-                .appendingPathComponent(targetSubfolder, isDirectory: true)
-                .standardizedFileURL
-            let containerPrefix = containerBase.path.hasSuffix("/") ? containerBase.path : containerBase.path + "/"
-            guard destinationDir.path == containerBase.path || destinationDir.path.hasPrefix(containerPrefix) else {
+            if let folder = externalFolder {
+                let folderURL = folder.url.standardizedFileURL
+                if SecurityScopedFolderManager.shared.matchingFolder(forPath: folderURL.path) == nil {
+                    localExternalScope = folderURL.startAccessingSecurityScopedResource()
+                    scopedExternalURL = folderURL
+                }
+                destinationDir = folderURL
+                cacheInvalidationPath = folderURL.path
+            } else if let app = targetApp {
+                // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
+                var actError: NSString? = nil
+                let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
+                let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
+                _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
+
+                let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().standardizedFileURL
+                let candidateDest = containerBase
+                    .appendingPathComponent(targetSubfolder, isDirectory: true)
+                    .standardizedFileURL
+                let containerPrefix = containerBase.path.hasSuffix("/") ? containerBase.path : containerBase.path + "/"
+                guard candidateDest.path == containerBase.path || candidateDest.path.hasPrefix(containerPrefix) else {
+                    await MainActor.run {
+                        progressModel.finish()
+                        self.alertMessage = activeLanguage.text("overwrite.error.outside_container")
+                        self.isExecuting = false
+                    }
+                    return
+                }
+                _ = ContainerStore.ensureContainerAccess(for: candidateDest.path, requireWrite: true)
+                destinationDir = candidateDest
+                cacheInvalidationPath = app.dataPath
+            } else {
                 await MainActor.run {
-                    self.alertMessage = activeLanguage.text("overwrite.error.outside_container")
+                    progressModel.finish()
                     self.isExecuting = false
                 }
                 return
             }
-            _ = ContainerStore.ensureContainerAccess(for: destinationDir.path, requireWrite: true)
+
+            defer {
+                if localExternalScope, let url = scopedExternalURL {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
 
             // Đảm bảo thư mục đích tồn tại
             do {
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
             } catch {
                 await MainActor.run {
+                    progressModel.finish()
                     self.alertMessage = activeLanguage.text("overwrite.error.create_dest_failed", error.localizedDescription)
                     self.isExecuting = false
                 }
@@ -1466,9 +1754,11 @@ struct OverwriteFileView: View {
             }
 
             var rawExtractedRoot: URL = stagingDir
+            var extractedFileCount = 0
 
             if is3105 {
                 do {
+                    if Task.isCancelled { throw CancellationError() }
                     let converter = PatchZipConverter()
                     let zipOutput = stagingDir.appendingPathComponent("converted.zip")
                     try await converter.convertPatch3105ToZip(
@@ -1476,19 +1766,46 @@ struct OverwriteFileView: View {
                         outputZipURL: zipOutput,
                         password: currentPassword
                     )
+                    if Task.isCancelled { throw CancellationError() }
                     let payloadDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                     try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
                     do {
-                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: zipOutput, into: payloadDir)
+                        extractedFileCount = try ZIPArchiveExtractor.extractFlatContents(
+                            archiveURL: zipOutput,
+                            into: payloadDir,
+                            shouldCancel: { Task.isCancelled },
+                            progressHandler: { extracted, total, entryName in
+                                Task { @MainActor in
+                                    progressModel.update(
+                                        stage: activeLanguage.text("overwrite.progress.extracting"),
+                                        detail: activeLanguage.text("folders.task.processed_progress", extracted, total, entryName),
+                                        completed: extracted,
+                                        total: total
+                                    )
+                                }
+                            }
+                        )
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch ZIPArchiveExtractorError.symbolicLinkUnsupported {
+                        throw ZIPArchiveExtractorError.symbolicLinkUnsupported
                     } catch {
                         let result = try ZIPArchiveExtractor.extract(archiveURL: zipOutput, into: payloadDir)
                         rawExtractedRoot = result.destinationURL
+                        extractedFileCount = result.fileCount
                     }
                     if rawExtractedRoot == stagingDir {
                         rawExtractedRoot = payloadDir
                     }
+                } catch is CancellationError {
+                    await MainActor.run {
+                        progressModel.finish()
+                        self.isExecuting = false
+                    }
+                    return
                 } catch {
                     await MainActor.run {
+                        progressModel.finish()
                         if let converterError = error as? PatchZipConverterError {
                             switch converterError {
                             case .cryptoFailed:
@@ -1516,14 +1833,17 @@ struct OverwriteFileView: View {
                     do {
                         let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                         try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
-                        let parseZipManually = {
+                        let parseZipManually = { () throws -> Int in
                             let archiveSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                             guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
                                 throw ZIPArchiveExtractorError.expandedTooLarge
                             }
                             let zipData = try Data(contentsOf: patchURL, options: .alwaysMapped)
                             let entries = try PatchZipConverter.shared.parseZipArchive(zipData, password: currentPassword)
+                            var written = 0
+                            let total = max(entries.count, 1)
                             for (relPath, fileData) in entries {
+                                if Task.isCancelled { throw CancellationError() }
                                 let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
                                 let parts = normalized
                                     .split(separator: "/", omittingEmptySubsequences: true)
@@ -1536,25 +1856,66 @@ struct OverwriteFileView: View {
                                 }
                                 try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
                                 try fileData.write(to: targetFile, options: .atomic)
+                                written += 1
+                                if written == 1 || written == total || written % 8 == 0 {
+                                    let lastName = parts.last ?? targetFile.lastPathComponent
+                                    let snapshot = written
+                                    Task { @MainActor in
+                                        progressModel.update(
+                                            stage: activeLanguage.text("overwrite.progress.extracting"),
+                                            detail: activeLanguage.text("folders.task.processed_progress", snapshot, total, lastName),
+                                            completed: snapshot,
+                                            total: total
+                                        )
+                                    }
+                                }
                             }
+                            return written
                         }
                         if isPatchPasswordProtected || currentPassword != nil {
-                            try parseZipManually()
+                            extractedFileCount = try parseZipManually()
                         } else {
                             do {
-                                _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: patchURL, into: extractedDir)
+                                extractedFileCount = try ZIPArchiveExtractor.extractFlatContents(
+                                    archiveURL: patchURL,
+                                    into: extractedDir,
+                                    shouldCancel: { Task.isCancelled },
+                                    progressHandler: { extracted, total, entryName in
+                                        Task { @MainActor in
+                                            progressModel.update(
+                                                stage: activeLanguage.text("overwrite.progress.extracting"),
+                                                detail: activeLanguage.text("folders.task.processed_progress", extracted, total, entryName),
+                                                completed: extracted,
+                                                total: total
+                                            )
+                                        }
+                                    }
+                                )
+                            } catch is CancellationError {
+                                throw CancellationError()
                             } catch ZIPArchiveExtractorError.expandedTooLarge {
                                 throw ZIPArchiveExtractorError.expandedTooLarge
+                            } catch ZIPArchiveExtractorError.symbolicLinkUnsupported {
+                                throw ZIPArchiveExtractorError.symbolicLinkUnsupported
                             } catch {
-                                try parseZipManually()
+                                extractedFileCount = try parseZipManually()
                             }
                         }
                         rawExtractedRoot = extractedDir
+                    } catch is CancellationError {
+                        await MainActor.run {
+                            progressModel.finish()
+                            self.isExecuting = false
+                        }
+                        return
                     } catch {
                         let message: String
                         if let extractorError = error as? ZIPArchiveExtractorError,
                            extractorError == .expandedTooLarge {
                             message = activeLanguage.text("overwrite.error.size_limit")
+                        } else if let extractorError = error as? ZIPArchiveExtractorError,
+                                  extractorError == .symbolicLinkUnsupported {
+                            message = activeLanguage.text("error.filemanager.symlink_unsupported")
                         } else if let converterError = error as? PatchZipConverterError {
                             switch converterError {
                             case .sizeLimitExceeded:
@@ -1568,6 +1929,7 @@ struct OverwriteFileView: View {
                             message = activeLanguage.text("overwrite.error.unzip_failed", error.localizedDescription)
                         }
                         await MainActor.run {
+                            progressModel.finish()
                             self.alertMessage = message
                             self.isExecuting = false
                         }
@@ -1580,9 +1942,11 @@ struct OverwriteFileView: View {
                         let stagedFile = extractedDir.appendingPathComponent(patchURL.lastPathComponent)
                         try FileManager.default.copyItem(at: patchURL, to: stagedFile)
                         rawExtractedRoot = extractedDir
+                        extractedFileCount = 1
                     } catch {
                         let lang = AppLanguage.current
                         await MainActor.run {
+                            progressModel.finish()
                             self.alertMessage = lang.text("overwrite.error.unzip_failed", error.localizedDescription)
                             self.isExecuting = false
                         }
@@ -1591,66 +1955,170 @@ struct OverwriteFileView: View {
                 }
             }
 
-            // 2. Quét danh sách đường dẫn tương đối nguồn & cấu trúc thư mục đích gửi lên Server
-            let (sourcePaths, sourceSizes) = Self.collectRelativeSourcePaths(at: rawExtractedRoot)
-            let targetPaths = Self.collectTargetStructurePaths(at: destinationDir)
-
-            let planRequest = OverwritePlanRequest(
-                sourcePaths: sourcePaths,
-                targetPaths: targetPaths,
-                targetBundleId: app.bundleID,
-                targetSubfolder: targetSubfolder,
-                sourceSizes: sourceSizes
-            )
-
-            let planResponse: OverwritePlanResponse
-            switch await APIService.shared.overwritePlan(
-                planRequest,
-                token: LicenseManager.shared.authToken,
-                hwid: LicenseManager.shared.deviceIdentifier
-            ) {
-            case .success(let resp):
-                planResponse = resp
-            case .failure(let error):
+            if Task.isCancelled {
                 await MainActor.run {
-                    self.alertMessage = error.localizedDescription
+                    progressModel.finish()
                     self.isExecuting = false
                 }
                 return
             }
 
-            if let note = planResponse.note, !note.isEmpty {
-                log("overwrite: server plan note=\(note) mapped=\(planResponse.mappings.count) skipped=\(planResponse.skipped?.count ?? 0)")
-            }
-
-            // 3. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
             let engine = FileIOEngine.shared
-            let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
-            let result = await engine.applyMappedFiles(
-                mappings,
-                from: rawExtractedRoot,
-                to: destinationDir
-            ) { s, d, k in
-                await promptCoordinator.resolveConflict(
-                    source: s,
-                    destination: d,
-                    kind: k,
-                    presentModal: { info in
-                        self.activeConflict = info
+            let result: FileIOResult
+
+            if externalFolder != nil {
+                // Direct local merge into user-authorized Files folder (Document Picker security scope).
+                let totalToWrite = max(extractedFileCount, 1)
+                await MainActor.run {
+                    progressModel.update(
+                        stage: activeLanguage.text("overwrite.progress.writing"),
+                        detail: destinationDir.lastPathComponent,
+                        completed: 0,
+                        total: totalToWrite
+                    )
+                }
+                result = await engine.copyAndMerge(
+                    from: rawExtractedRoot,
+                    to: destinationDir,
+                    progressHandler: { completed, currentName in
+                        if completed == 1 || completed == totalToWrite || completed % 4 == 0 {
+                            Task { @MainActor in
+                                progressModel.update(
+                                    stage: activeLanguage.text("overwrite.progress.writing"),
+                                    detail: activeLanguage.text("folders.task.copied_progress", completed, totalToWrite, currentName),
+                                    completed: min(completed, totalToWrite),
+                                    total: totalToWrite
+                                )
+                            }
+                        }
                     },
-                    dismissModal: {
-                        self.activeConflict = nil
+                    conflictResolver: { s, d, k in
+                        await promptCoordinator.resolveConflict(
+                            source: s,
+                            destination: d,
+                            kind: k,
+                            presentModal: { info in
+                                self.activeConflict = info
+                            },
+                            dismissModal: {
+                                self.activeConflict = nil
+                            }
+                        )
                     }
                 )
+            } else if let app = targetApp {
+                // 2. Quét danh sách đường dẫn tương đối nguồn & cấu trúc thư mục đích gửi lên Server
+                await MainActor.run {
+                    progressModel.update(
+                        stage: activeLanguage.text("overwrite.progress.planning"),
+                        detail: app.bundleID,
+                        completed: 0,
+                        total: 0
+                    )
+                }
+
+                let (sourcePaths, sourceSizes) = Self.collectRelativeSourcePaths(at: rawExtractedRoot)
+                let targetPaths = Self.collectTargetStructurePaths(at: destinationDir)
+
+                if Task.isCancelled {
+                    await MainActor.run {
+                        progressModel.finish()
+                        self.isExecuting = false
+                    }
+                    return
+                }
+
+                let planRequest = OverwritePlanRequest(
+                    sourcePaths: sourcePaths,
+                    targetPaths: targetPaths,
+                    targetBundleId: app.bundleID,
+                    targetSubfolder: targetSubfolder,
+                    sourceSizes: sourceSizes
+                )
+
+                let planResponse: OverwritePlanResponse
+                switch await APIService.shared.overwritePlan(
+                    planRequest,
+                    token: LicenseManager.shared.authToken,
+                    hwid: LicenseManager.shared.deviceIdentifier
+                ) {
+                case .success(let resp):
+                    planResponse = resp
+                case .failure(let error):
+                    await MainActor.run {
+                        progressModel.finish()
+                        self.alertMessage = error.localizedDescription
+                        self.isExecuting = false
+                    }
+                    return
+                }
+
+                if Task.isCancelled {
+                    await MainActor.run {
+                        progressModel.finish()
+                        self.isExecuting = false
+                    }
+                    return
+                }
+
+                if let note = planResponse.note, !note.isEmpty {
+                    log("overwrite: server plan note=\(note) mapped=\(planResponse.mappings.count) skipped=\(planResponse.skipped?.count ?? 0)")
+                }
+
+                // 3. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
+                let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
+                let totalMappings = max(mappings.count, 1)
+                await MainActor.run {
+                    progressModel.update(
+                        stage: activeLanguage.text("overwrite.progress.writing"),
+                        detail: activeLanguage.text("folders.task.copying_extracted", totalMappings),
+                        completed: 0,
+                        total: totalMappings
+                    )
+                }
+
+                result = await engine.applyMappedFiles(
+                    mappings,
+                    from: rawExtractedRoot,
+                    to: destinationDir,
+                    progressHandler: { completed, currentName in
+                        if completed == 1 || completed == totalMappings || completed % 4 == 0 {
+                            Task { @MainActor in
+                                progressModel.update(
+                                    stage: activeLanguage.text("overwrite.progress.writing"),
+                                    detail: activeLanguage.text("folders.task.copied_progress", completed, totalMappings, currentName),
+                                    completed: min(completed, totalMappings),
+                                    total: totalMappings
+                                )
+                            }
+                        }
+                    }
+                ) { s, d, k in
+                    await promptCoordinator.resolveConflict(
+                        source: s,
+                        destination: d,
+                        kind: k,
+                        presentModal: { info in
+                            self.activeConflict = info
+                        },
+                        dismissModal: {
+                            self.activeConflict = nil
+                        }
+                    )
+                }
+            } else {
+                result = FileIOResult(isCancelled: true)
             }
 
             await MainActor.run {
+                progressModel.finish()
                 self.isExecuting = false
-                ContainerMetadataCache.shared.invalidate(path: app.dataPath)
+                ContainerMetadataCache.shared.invalidate(path: cacheInvalidationPath)
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 log("overwrite: completed succeeded=\(result.succeeded.count) skipped=\(result.skipped.count) failed=\(result.failed.count) cancelled=\(result.isCancelled)")
             }
         }
+        progressModel.attach(worker)
     }
 
     private static func collectRelativeSourcePaths(at rootURL: URL) -> (paths: [String], sizes: [String: Int]) {

@@ -688,6 +688,7 @@ struct ActivityViewControllerWrapper: UIViewControllerRepresentable {
 
 struct DocumentPickerWrapper: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
+    var asCopy: Bool = true
     var onPick: (URL) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -695,7 +696,12 @@ struct DocumentPickerWrapper: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: allowedContentTypes, asCopy: true)
+        // iOS requires `asCopy: false` when picking `.folder` (security-scoped directory access).
+        let effectiveAsCopy = allowedContentTypes.contains(.folder) ? false : asCopy
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: allowedContentTypes,
+            asCopy: effectiveAsCopy
+        )
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker

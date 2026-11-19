@@ -6,6 +6,13 @@ struct DirectorySizeResult: Sendable, Equatable {
     let fileCount: Int
     let folderCount: Int
 
+    private static let formatterLock = NSLock()
+    private static let sharedNumberFormatter: NumberFormatter = {
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        return nf
+    }()
+
     init(totalBytes: Int64 = 0, fileCount: Int = 0, folderCount: Int = 0) {
         self.totalBytes = totalBytes
         self.fileCount = fileCount
@@ -13,15 +20,20 @@ struct DirectorySizeResult: Sendable, Equatable {
     }
 
     var formattedText: String {
-        let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        let byteStr = nf.string(from: NSNumber(value: totalBytes)) ?? "\(totalBytes)"
+        Self.formatterLock.lock()
+        let byteStr = Self.sharedNumberFormatter.string(from: NSNumber(value: totalBytes)) ?? "\(totalBytes)"
+        Self.formatterLock.unlock()
         let humanSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
         return AppLanguage.current.text("dirsize.formatted", humanSize, byteStr, fileCount, folderCount)
     }
 }
 
 enum DirectorySizeService {
+    private struct FileIdentity: Hashable {
+        let device: dev_t
+        let inode: UInt64
+    }
+
     static func calculateSize(at path: String) async -> DirectorySizeResult {
         await Task.detached(priority: .userInitiated) {
             calculateSizeSync(at: path)
@@ -34,7 +46,7 @@ enum DirectorySizeService {
         var folderCount: Int = 0
 
         var stack: [String] = [path]
-        var visitedInodes = Set<UInt64>()
+        var visited = Set<FileIdentity>()
 
         while let currentPath = stack.popLast() {
             if Task.isCancelled { break }
@@ -44,27 +56,34 @@ enum DirectorySizeService {
             while let dp = readdir(dir) {
                 if Task.isCancelled { break }
 
+                let firstByte = dp.pointee.d_name.0
+                if firstByte == 46 { // '.'
+                    let secondByte = dp.pointee.d_name.1
+                    if secondByte == 0 || (secondByte == 46 && dp.pointee.d_name.2 == 0) {
+                        continue
+                    }
+                }
+
                 let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
                     String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
                 }
-                if name == "." || name == ".." { continue }
 
-                let itemPath = (currentPath as NSString).appendingPathComponent(name)
+                let itemPath = currentPath.hasSuffix("/")
+                    ? currentPath + name
+                    : currentPath + "/" + name
                 var st = stat()
                 guard lstat(itemPath, &st) == 0 else { continue }
 
-                let inode = UInt64(st.st_ino)
-                if !visitedInodes.insert(inode).inserted {
+                let identity = FileIdentity(device: st.st_dev, inode: UInt64(st.st_ino))
+                if !visited.insert(identity).inserted {
                     continue
                 }
 
-                let isDir = (st.st_mode & S_IFMT) == S_IFDIR
-                let isLink = (st.st_mode & S_IFMT) == S_IFLNK
-
-                if isDir {
+                let fileType = st.st_mode & S_IFMT
+                if fileType == S_IFDIR {
                     folderCount += 1
                     stack.append(itemPath)
-                } else if !isLink {
+                } else if fileType != S_IFLNK {
                     fileCount += 1
                     totalBytes += Int64(st.st_size)
                 } else {
@@ -82,10 +101,13 @@ enum DirectorySizeService {
         defer { closedir(dir) }
         var count = 0
         while let dp = readdir(dir) {
-            let name = withUnsafePointer(to: &dp.pointee.d_name) { ptr in
-                String(cString: UnsafeRawPointer(ptr).assumingMemoryBound(to: CChar.self))
+            let firstByte = dp.pointee.d_name.0
+            if firstByte == 46 { // '.'
+                let secondByte = dp.pointee.d_name.1
+                if secondByte == 0 || (secondByte == 46 && dp.pointee.d_name.2 == 0) {
+                    continue
+                }
             }
-            if name == "." || name == ".." { continue }
             count += 1
         }
         return count

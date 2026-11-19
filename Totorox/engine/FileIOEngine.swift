@@ -687,9 +687,10 @@ public final class FileIOEngine: @unchecked Sendable {
             return
         }
 
-        // 3. Direct POSIX stream in-place to destination (handles containers that block temp sibling creation).
-        //    A backup is kept first so a partial write can always be rolled back.
-        let inPlaceBackupURL = parentDir.appendingPathComponent(".totorox-backup-\(UUID().uuidString).tmp")
+        // 3. Direct POSIX stream in-place to destination (handles directories that block temp sibling creation).
+        //    Keep the rollback backup in `temporaryDirectory` so it succeeds even when `parentDir` forbids sibling temps.
+        let inPlaceBackupURL = fileManager.temporaryDirectory
+            .appendingPathComponent(".totorox-backup-\(UUID().uuidString).tmp")
         defer {
             _ = unlink(inPlaceBackupURL.path)
             try? fileManager.removeItem(at: inPlaceBackupURL)
@@ -1080,6 +1081,7 @@ public final class FileIOEngine: @unchecked Sendable {
         _ mappings: [(source: String, destination: String)],
         from sourceRoot: URL,
         to destinationRoot: URL,
+        progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)? = nil,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
         let cancelState = FileIOCancellationState()
@@ -1176,7 +1178,7 @@ public final class FileIOEngine: @unchecked Sendable {
                     conflictSession: conflictSession,
                     result: &result,
                     cancelState: cancelState,
-                    progressHandler: nil,
+                    progressHandler: progressHandler,
                     conflictResolver: conflictResolver,
                     batchContext: batchContext
                 )

@@ -31,13 +31,22 @@ final class DirectoryViewModel: ObservableObject {
     @Published private(set) var entries: [FileEntry] = []
     @Published var isLoading: Bool = false
     private(set) var activeCanonicalPath: String = ""
+    private var loadTask: Task<Void, Never>? = nil
+
+    func cancelPendingLoad() {
+        loadTask?.cancel()
+        loadTask = nil
+    }
 
     /// Strictly Read-Only directory loader. Never executes mkdir/copyItem/moveItem
-    /// and never invokes AppContainerScanner. Always clears old entries before assigning
-    /// fresh results from disk.
+    /// and never invokes AppContainerScanner. Cancels stale loads when navigating rapidly
+    /// and clears old entries before assigning fresh results from disk.
     func loadDirectory(at url: URL, forceRefresh: Bool = false) {
         let path = url.path
         let canonPath = ContainerMetadataCache.canonicalPath(path)
+
+        loadTask?.cancel()
+        loadTask = nil
 
         if activeCanonicalPath != canonPath {
             entries.removeAll()
@@ -51,12 +60,16 @@ final class DirectoryViewModel: ObservableObject {
             isLoading = false
 
             // Background read-only verification
-            Task.detached(priority: .utility) {
-                let loaded = ContainerStore.readDirectoryEntriesFromDisk(at: path)
+            loadTask = Task.detached(priority: .utility) {
+                guard !Task.isCancelled else { return }
+                let loaded = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
+                    ContainerStore.readDirectoryEntriesFromDisk(at: path)
+                }
+                guard !Task.isCancelled else { return }
                 ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
                 if loaded != cached {
                     await MainActor.run {
-                        guard self.activeCanonicalPath == canonPath else { return }
+                        guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
                         self.entries.removeAll()
                         self.entries = loaded
                     }
@@ -68,16 +81,156 @@ final class DirectoryViewModel: ObservableObject {
         entries.removeAll()
         isLoading = true
 
-        Task.detached(priority: .userInitiated) {
-            let loaded = ContainerStore.readDirectoryEntriesFromDisk(at: path)
+        loadTask = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return }
+            let loaded = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
+                ContainerStore.readDirectoryEntriesFromDisk(at: path)
+            }
+            guard !Task.isCancelled else { return }
             ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
 
             await MainActor.run {
-                guard self.activeCanonicalPath == canonPath else { return }
+                guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
                 self.entries.removeAll()
                 self.entries = loaded
                 self.isLoading = false
             }
+        }
+    }
+}
+
+/// Isolated observable model for file-operation progress so rapid progress ticks
+/// only re-render the progress banner instead of re-evaluating the entire file list.
+@MainActor
+final class FolderTaskProgressModel: ObservableObject {
+    @Published var title: String? = nil
+    @Published var subtitle: String = ""
+    @Published var completedCount: Int = 0
+    @Published var totalCount: Int = 0
+    @Published var isCancelling: Bool = false
+
+    private var activeTask: Task<Void, Never>? = nil
+
+    var isRunning: Bool {
+        title != nil
+    }
+
+    func begin(title: String, subtitle: String, totalCount: Int = 0) {
+        self.title = title
+        self.subtitle = subtitle
+        self.completedCount = 0
+        self.totalCount = totalCount
+        self.isCancelling = false
+    }
+
+    func attach(_ task: Task<Void, Never>) {
+        activeTask = task
+    }
+
+    func update(completed: Int, total: Int? = nil, subtitle: String? = nil) {
+        self.completedCount = completed
+        if let total {
+            self.totalCount = total
+        }
+        if let subtitle {
+            self.subtitle = subtitle
+        }
+    }
+
+    func cancelCurrentTask() {
+        isCancelling = true
+        activeTask?.cancel()
+    }
+
+    func finish() {
+        activeTask = nil
+        title = nil
+        subtitle = ""
+        completedCount = 0
+        totalCount = 0
+        isCancelling = false
+    }
+}
+
+private struct FolderTaskProgressBanner: View {
+    @ObservedObject var progress: FolderTaskProgressModel
+    let language: AppLanguage
+
+    var body: some View {
+        if let title = progress.title {
+            let fraction: Double? = {
+                guard progress.totalCount > 0 else { return nil }
+                return min(max(Double(progress.completedCount) / Double(progress.totalCount), 0.02), 1.0)
+            }()
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.85)
+                        .tint(TotoroxTheme.mintAccent)
+
+                    Text(title)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if let frac = fraction {
+                        Text("\(Int(frac * 100))%")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                    } else if progress.completedCount > 0 {
+                        Text(language.text("common.items_count", progress.completedCount))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                    }
+
+                    Button {
+                        progress.cancelCurrentTask()
+                    } label: {
+                        Text(progress.isCancelling
+                             ? language.text("folders.task.cancelling")
+                             : language.text("common.cancel"))
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.red.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(progress.isCancelling)
+                }
+
+                if let frac = fraction {
+                    ProgressView(value: frac, total: 1.0)
+                        .tint(TotoroxTheme.mintAccent)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(TotoroxTheme.mintAccent)
+                }
+
+                if !progress.subtitle.isEmpty {
+                    Text(progress.subtitle)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(TotoroxTheme.mintAccent.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(TotoroxTheme.mintAccent.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 }
@@ -152,8 +305,10 @@ final class AppListViewModel: ObservableObject {
 struct FolderExplorerView: View {
     @Environment(\.appLanguage) private var language
     @ObservedObject private var themeManager = ThemeManager.shared
+    @ObservedObject private var folderBookmarks = SecurityScopedFolderManager.shared
     @StateObject private var directoryVM = DirectoryViewModel()
     @StateObject private var appListVM = AppListViewModel()
+    @StateObject private var taskProgress = FolderTaskProgressModel()
     @State private var currentURL: URL
     @State private var breadcrumbs: [URL] = []
     @State private var searchText: String = ""
@@ -191,6 +346,7 @@ struct FolderExplorerView: View {
     @State private var showShareSheet = false
     @State private var shareURL: URL? = nil
     @State private var showImportPicker = false
+    @State private var showFolderPicker = false
 
     // Inspector & Archive Extraction
     @State private var inspectingEntry: FileEntry? = nil
@@ -199,12 +355,6 @@ struct FolderExplorerView: View {
     // Conflict & Outcome modals
     @State private var activeConflict: FileConflictInfo? = nil
     @State private var outcomeResult: FileIOResultWrapper? = nil
-
-    // File operation progress state
-    @State private var activeTaskTitle: String? = nil
-    @State private var activeTaskSubtitle: String = ""
-    @State private var activeTaskCompletedCount: Int = 0
-    @State private var activeTaskTotalCount: Int = 0
 
     private var canGoBack: Bool {
         currentURL.path != "/" && breadcrumbs.count > 1
@@ -255,15 +405,43 @@ struct FolderExplorerView: View {
 
                     // Quick location shortcuts
                     Menu {
-                        Button(language.text("folders.quick.documents")) {
+                        Button {
                             navigateTo(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!)
+                        } label: {
+                            Label(language.text("folders.quick.documents"), systemImage: "doc.fill")
                         }
-                        Button(language.text("folders.quick.containers")) {
+                        Button {
+                            showFolderPicker = true
+                        } label: {
+                            Label(language.text("folders.quick.open_files_folder"), systemImage: "folder.badge.plus")
+                        }
+                        Button {
                             let containers = URL(fileURLWithPath: ContainerStore.appDataRoot)
                             navigateTo(containers)
+                        } label: {
+                            Label(language.text("folders.quick.containers"), systemImage: "app.dashed")
                         }
-                        Button(language.text("folders.quick.tmp")) {
+                        Button {
                             navigateTo(FileManager.default.temporaryDirectory)
+                        } label: {
+                            Label(language.text("folders.quick.tmp"), systemImage: "clock")
+                        }
+
+                        if !folderBookmarks.folders.isEmpty {
+                            Section(language.text("folders.quick.saved_folders_section")) {
+                                ForEach(folderBookmarks.folders) { folder in
+                                    Button {
+                                        navigateTo(folder.url)
+                                    } label: {
+                                        Label(folder.displayName, systemImage: "folder.fill")
+                                    }
+                                }
+                                Button(role: .destructive) {
+                                    folderBookmarks.clearAll()
+                                } label: {
+                                    Label(language.text("folders.quick.clear_saved_folders"), systemImage: "trash")
+                                }
+                            }
                         }
                     } label: {
                         HStack(spacing: 5) {
@@ -402,12 +580,7 @@ struct FolderExplorerView: View {
                 )
 
                 // Thanh hiển thị tiến trình tác vụ tệp (Copy/Paste, Giải nén, Nhập, Xóa...)
-                if let taskTitle = activeTaskTitle {
-                    fileOperationProgressBanner(title: taskTitle)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 2)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                FolderTaskProgressBanner(progress: taskProgress, language: language)
             }
             .padding(.bottom, 8)
             .background(TotoroxTheme.cardBackground)
@@ -491,6 +664,9 @@ struct FolderExplorerView: View {
             rebuildBreadcrumbs()
             loadCurrentDirectory()
         }
+        .onDisappear {
+            directoryVM.cancelPendingLoad()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .totoroxContainersDidUpdate)) { _ in
             guard isAtAppContainersRoot else { return }
             appListVM.applyUpdatedCacheIfNeeded()
@@ -537,6 +713,16 @@ struct FolderExplorerView: View {
         .sheet(isPresented: $showImportPicker) {
             DocumentPickerWrapper { pickedURL in
                 importFileIntoCurrentDirectory(pickedURL)
+            }
+            .preferredColorScheme(themeManager.mode.colorScheme)
+        }
+        .sheet(isPresented: $showFolderPicker) {
+            DocumentPickerWrapper(
+                allowedContentTypes: [.folder],
+                asCopy: false
+            ) { pickedFolderURL in
+                let saved = folderBookmarks.addFolder(url: pickedFolderURL)
+                navigateTo(saved.url)
             }
             .preferredColorScheme(themeManager.mode.colorScheme)
         }
@@ -920,64 +1106,6 @@ struct FolderExplorerView: View {
         loadCurrentDirectory(forceRefresh: false)
     }
 
-    // MARK: - Thanh hiển thị tiến trình tác vụ tệp trong tab Thư mục
-    private func fileOperationProgressBanner(title: String) -> some View {
-        let fraction: Double? = {
-            guard activeTaskTotalCount > 0 else { return nil }
-            return min(max(Double(activeTaskCompletedCount) / Double(activeTaskTotalCount), 0.02), 1.0)
-        }()
-
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.85)
-                    .tint(TotoroxTheme.mintAccent)
-
-                Text(title)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .lineLimit(1)
-
-                Spacer()
-
-                if let frac = fraction {
-                    Text("\(Int(frac * 100))%")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                } else if activeTaskCompletedCount > 0 {
-                    Text(language.text("common.items_count", activeTaskCompletedCount))
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                }
-            }
-
-            if let frac = fraction {
-                ProgressView(value: frac, total: 1.0)
-                    .tint(TotoroxTheme.mintAccent)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
-                    .tint(TotoroxTheme.mintAccent)
-            }
-
-            if !activeTaskSubtitle.isEmpty {
-                Text(activeTaskSubtitle)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(TotoroxTheme.mintAccent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(TotoroxTheme.mintAccent.opacity(0.35), lineWidth: 1)
-        )
-    }
-
     private nonisolated static func countItemsRecursively(at url: URL) -> Int {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
@@ -1127,30 +1255,39 @@ struct FolderExplorerView: View {
 
     private func applyDelete() {
         guard let item = itemToDelete else { return }
+        guard !taskProgress.isRunning else {
+            presentOperationError(language.text("folders.error.task_already_running"))
+            return
+        }
         let baseDir = currentURL
         let src = URL(fileURLWithPath: item.path)
         let activeLanguage = language
-        activeTaskTitle = activeLanguage.text("folders.task.deleting", item.name)
-        activeTaskSubtitle = item.name
-        activeTaskCompletedCount = 0
-        activeTaskTotalCount = 0
+        let progressModel = taskProgress
+        progressModel.begin(
+            title: activeLanguage.text("folders.task.deleting", item.name),
+            subtitle: item.name
+        )
 
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
+            let needsLocalScope = SecurityScopedFolderManager.shared.matchingFolder(forPath: baseDir.path) == nil
+            let localScope = needsLocalScope ? baseDir.startAccessingSecurityScopedResource() : false
+            defer { if localScope { baseDir.stopAccessingSecurityScopedResource() } }
             do {
                 try await FileIOEngine.shared.deleteItem(at: src)
             } catch {
                 await MainActor.run {
-                    self.activeTaskTitle = nil
+                    progressModel.finish()
                     self.presentOperationError(activeLanguage.text("folders.error.delete_failed", error.localizedDescription))
                 }
                 return
             }
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
-                self.activeTaskTitle = nil
+                progressModel.finish()
                 self.loadCurrentDirectory(forceRefresh: true)
             }
         }
+        progressModel.attach(worker)
     }
 
     private func makeConflictResolver(
@@ -1172,6 +1309,10 @@ struct FolderExplorerView: View {
     }
 
     private func importFileIntoCurrentDirectory(_ src: URL) {
+        guard !taskProgress.isRunning else {
+            presentOperationError(language.text("folders.error.task_already_running"))
+            return
+        }
         let baseDir = currentURL.standardizedFileURL
         let fileName = src.lastPathComponent
         guard !fileName.isEmpty, fileName != "/", fileName != "." else { return }
@@ -1181,19 +1322,21 @@ struct FolderExplorerView: View {
         let resolver = makeConflictResolver(using: promptCoordinator)
 
         let activeLanguage = language
-        activeTaskTitle = activeLanguage.text("folders.task.importing", fileName)
-        activeTaskSubtitle = fileName
-        activeTaskCompletedCount = 0
-        activeTaskTotalCount = 1
+        let progressModel = taskProgress
+        progressModel.begin(
+            title: activeLanguage.text("folders.task.importing", fileName),
+            subtitle: fileName,
+            totalCount: 1
+        )
 
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             defer {
                 if hasSecurityAccess { src.stopAccessingSecurityScopedResource() }
             }
             _ = ContainerStore.ensureContainerAccess(for: baseDir.path, requireWrite: true)
             let totalItems = Self.countItemsRecursively(at: src)
             await MainActor.run {
-                self.activeTaskTotalCount = totalItems
+                progressModel.update(completed: 0, total: totalItems)
             }
             let result = await FileIOEngine.shared.copyAndMerge(
                 from: src,
@@ -1201,8 +1344,10 @@ struct FolderExplorerView: View {
                 progressHandler: { completed, currentName in
                     if completed == 1 || completed == totalItems || completed % 4 == 0 {
                         Task { @MainActor in
-                            self.activeTaskCompletedCount = completed
-                            self.activeTaskSubtitle = activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
+                            progressModel.update(
+                                completed: completed,
+                                subtitle: activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
+                            )
                         }
                     }
                 },
@@ -1210,14 +1355,19 @@ struct FolderExplorerView: View {
             )
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
-                self.activeTaskTitle = nil
+                progressModel.finish()
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 self.loadCurrentDirectory(forceRefresh: true)
             }
         }
+        progressModel.attach(worker)
     }
 
     private func executePasteAction(_ clip: ClipboardItem) {
+        guard !taskProgress.isRunning else {
+            presentOperationError(language.text("folders.error.task_already_running"))
+            return
+        }
         let baseDir = currentURL.standardizedFileURL
         let destName = clip.url.lastPathComponent
         guard !destName.isEmpty, destName != "/", destName != "." else { return }
@@ -1243,20 +1393,24 @@ struct FolderExplorerView: View {
         let promptCoordinator = ConflictPromptCoordinator()
         let resolver = makeConflictResolver(using: promptCoordinator)
         let activeLanguage = language
+        let progressModel = taskProgress
 
-        activeTaskTitle = clip.isCut
-            ? activeLanguage.text("folders.task.moving", destName)
-            : activeLanguage.text("folders.task.copying", destName)
-        activeTaskSubtitle = activeLanguage.text("folders.task.preparing")
-        activeTaskCompletedCount = 0
-        activeTaskTotalCount = 0
+        progressModel.begin(
+            title: clip.isCut
+                ? activeLanguage.text("folders.task.moving", destName)
+                : activeLanguage.text("folders.task.copying", destName),
+            subtitle: activeLanguage.text("folders.task.preparing")
+        )
 
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: baseDir.path, requireWrite: true)
             let totalItems = Self.countItemsRecursively(at: source)
             await MainActor.run {
-                self.activeTaskTotalCount = totalItems
-                self.activeTaskSubtitle = activeLanguage.text("folders.task.item_progress_init", totalItems, destName)
+                progressModel.update(
+                    completed: 0,
+                    total: totalItems,
+                    subtitle: activeLanguage.text("folders.task.item_progress_init", totalItems, destName)
+                )
             }
             let result = await FileIOEngine.shared.copyAndMerge(
                 from: source,
@@ -1264,8 +1418,10 @@ struct FolderExplorerView: View {
                 progressHandler: { completed, currentName in
                     if completed == 1 || completed == totalItems || completed % 4 == 0 {
                         Task { @MainActor in
-                            self.activeTaskCompletedCount = completed
-                            self.activeTaskSubtitle = activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
+                            progressModel.update(
+                                completed: completed,
+                                subtitle: activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
+                            )
                         }
                     }
                 },
@@ -1279,7 +1435,10 @@ struct FolderExplorerView: View {
                     result: result
                 ) {
                     await MainActor.run {
-                        self.activeTaskSubtitle = activeLanguage.text("folders.task.cleaning_cut_source")
+                        progressModel.update(
+                            completed: totalItems,
+                            subtitle: activeLanguage.text("folders.task.cleaning_cut_source")
+                        )
                     }
                     do {
                         try await FileIOEngine.shared.deleteItem(at: source)
@@ -1294,16 +1453,21 @@ struct FolderExplorerView: View {
 
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
             await MainActor.run {
-                self.activeTaskTitle = nil
+                progressModel.finish()
                 self.clipboardItem = nil
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 self.loadCurrentDirectory(forceRefresh: true)
             }
         }
+        progressModel.attach(worker)
     }
 
     private func extractArchive(entry: FileEntry, intoNewFolder: Bool) {
         guard entry.name.lowercased().hasSuffix(".zip") else { return }
+        guard !taskProgress.isRunning else {
+            presentOperationError(language.text("folders.error.task_already_running"))
+            return
+        }
         let srcURL = URL(fileURLWithPath: entry.path)
         let baseDir = currentURL.standardizedFileURL
         let destinationDir: URL
@@ -1318,13 +1482,13 @@ struct FolderExplorerView: View {
         let resolver = makeConflictResolver(using: promptCoordinator)
 
         let activeLanguage = language
-        activeTaskTitle = activeLanguage.text("folders.task.extracting", entry.name)
-        activeTaskSubtitle = activeLanguage.text("folders.task.unpacking_archive")
-        activeTaskCompletedCount = 0
-        activeTaskTotalCount = 0
+        let progressModel = taskProgress
+        progressModel.begin(
+            title: activeLanguage.text("folders.task.extracting", entry.name),
+            subtitle: activeLanguage.text("folders.task.unpacking_archive")
+        )
 
-        directoryVM.isLoading = true
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             _ = ContainerStore.ensureContainerAccess(for: destinationDir.path, requireWrite: true)
             let tempStaging = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Extract_\(UUID().uuidString)", isDirectory: true)
@@ -1332,14 +1496,32 @@ struct FolderExplorerView: View {
             defer { try? FileManager.default.removeItem(at: tempStaging) }
 
             do {
+                var extractedFileCount = 0
                 let ext = srcURL.pathExtension.lowercased()
                 if ext == "zip" {
                     // Prefer low-memory C streaming extractor so multi-hundred-MB ZIPs never bloat RAM;
                     // fallback to PatchZipConverter for ZIP64 archives.
                     do {
-                        _ = try ZIPArchiveExtractor.extractFlatContents(archiveURL: srcURL, into: tempStaging)
+                        extractedFileCount = try ZIPArchiveExtractor.extractFlatContents(
+                            archiveURL: srcURL,
+                            into: tempStaging,
+                            shouldCancel: { Task.isCancelled },
+                            progressHandler: { extracted, total, entryName in
+                                Task { @MainActor in
+                                    progressModel.update(
+                                        completed: extracted,
+                                        total: total,
+                                        subtitle: activeLanguage.text("folders.task.processed_progress", extracted, total, entryName)
+                                    )
+                                }
+                            }
+                        )
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch ZIPArchiveExtractorError.expandedTooLarge {
                         throw ZIPArchiveExtractorError.expandedTooLarge
+                    } catch ZIPArchiveExtractorError.symbolicLinkUnsupported {
+                        throw ZIPArchiveExtractorError.symbolicLinkUnsupported
                     } catch {
                         let archiveSize = (try? srcURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                         guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
@@ -1348,6 +1530,7 @@ struct FolderExplorerView: View {
                         let zipData = try Data(contentsOf: srcURL)
                         let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
                         for (relPath, fileData) in entries {
+                            if Task.isCancelled { throw CancellationError() }
                             let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
                             let parts = normalized
                                 .split(separator: "/", omittingEmptySubsequences: true)
@@ -1366,6 +1549,7 @@ struct FolderExplorerView: View {
                             }
                             try FileManager.default.createDirectory(at: targetFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                             try fileData.write(to: targetFileURL, options: .atomic)
+                            extractedFileCount += 1
                         }
                     }
                     // Strip stray patch.json if present at archive root
@@ -1375,10 +1559,15 @@ struct FolderExplorerView: View {
                     }
                 }
 
-                let totalItems = Self.countItemsRecursively(at: tempStaging)
+                if Task.isCancelled { throw CancellationError() }
+
+                let totalItems = extractedFileCount > 0 ? extractedFileCount : Self.countItemsRecursively(at: tempStaging)
                 await MainActor.run {
-                    self.activeTaskTotalCount = totalItems
-                    self.activeTaskSubtitle = activeLanguage.text("folders.task.copying_extracted", totalItems)
+                    progressModel.update(
+                        completed: 0,
+                        total: totalItems,
+                        subtitle: activeLanguage.text("folders.task.copying_extracted", totalItems)
+                    )
                 }
 
                 try FileIOEngine.createDirectoryIfNeeded(at: destinationDir)
@@ -1388,8 +1577,10 @@ struct FolderExplorerView: View {
                     progressHandler: { completed, currentName in
                         if completed == 1 || completed == totalItems || completed % 4 == 0 {
                             Task { @MainActor in
-                                self.activeTaskCompletedCount = completed
-                                self.activeTaskSubtitle = activeLanguage.text("folders.task.copied_progress", completed, totalItems, currentName)
+                                progressModel.update(
+                                    completed: min(completed, totalItems),
+                                    subtitle: activeLanguage.text("folders.task.copied_progress", completed, totalItems, currentName)
+                                )
                             }
                         }
                     },
@@ -1398,20 +1589,27 @@ struct FolderExplorerView: View {
 
                 ContainerMetadataCache.shared.invalidate(path: baseDir.path)
                 await MainActor.run {
-                    self.activeTaskTitle = nil
-                    self.directoryVM.isLoading = false
+                    progressModel.finish()
                     self.selectedArchiveForExtraction = nil
                     self.outcomeResult = FileIOResultWrapper(result: result)
                     self.loadCurrentDirectory(forceRefresh: true)
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    progressModel.finish()
+                    self.selectedArchiveForExtraction = nil
+                    self.loadCurrentDirectory(forceRefresh: true)
+                }
             } catch {
                 await MainActor.run {
-                    self.activeTaskTitle = nil
-                    self.directoryVM.isLoading = false
+                    progressModel.finish()
                     self.selectedArchiveForExtraction = nil
                     if let extractorError = error as? ZIPArchiveExtractorError,
                        extractorError == .expandedTooLarge {
                         self.presentOperationError(activeLanguage.text("folders.error.zip_size_limit"))
+                    } else if let extractorError = error as? ZIPArchiveExtractorError,
+                              extractorError == .symbolicLinkUnsupported {
+                        self.presentOperationError(activeLanguage.text("error.filemanager.symlink_unsupported"))
                     } else {
                         self.presentOperationError(activeLanguage.text("folders.error.extract_failed", error.localizedDescription))
                     }
@@ -1419,6 +1617,7 @@ struct FolderExplorerView: View {
                 }
             }
         }
+        progressModel.attach(worker)
     }
 
     // MARK: - Icon Helpers

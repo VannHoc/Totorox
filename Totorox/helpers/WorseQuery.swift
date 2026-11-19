@@ -148,6 +148,51 @@ enum WorseQuery {
 
     // MARK: - Grant / release
 
+    /// Operation-flags variant used by `worse_query`.
+    enum Variant: Int32 {
+        /// Flags `1 << 39` — the reference "traversal" set. The target must
+        /// already exist. This is what iOS 27+ honors.
+        case primary = 0
+        /// Flags `1 << 35` — "create if missing" set. iOS < 27 prefers it.
+        case anyPath = 1
+
+        var opposite: Variant { self == .primary ? .anyPath : .primary }
+
+        var label: String { self == .primary ? "primary" : "any_path" }
+    }
+
+    /// Variant to try first, mirroring the reference `_wq_grant`:
+    /// iOS < 27 → `.anyPath`, iOS >= 27 → `.primary`. Once a variant produced a
+    /// verified handle it is pinned for the session by `noteVariant(_:)`.
+    static var preferredVariant: Variant {
+        #if targetEnvironment(simulator)
+        return .primary
+        #else
+        return Variant(rawValue: worse_query_preferred_variant()) ?? .primary
+        #endif
+    }
+
+    /// Remember the variant that actually unlocked the target (call only after
+    /// the handle was verified with `access(2)`).
+    static func noteVariant(_ used: Int32) {
+        #if !targetEnvironment(simulator)
+        worse_query_note_variant(used)
+        #endif
+    }
+
+    /// Grant with one explicit variant. Returns a handle `>= 0` or a `WQ_ERR_*`.
+    static func grantVariant(path: String, group: String, variant: Variant) -> Int64 {
+        #if targetEnvironment(simulator)
+        return Int64(WQ_ERR_API_UNAVAILABLE)
+        #else
+        return path.withCString { pathPtr in
+            group.withCString { groupPtr in
+                worse_query(pathPtr, groupPtr, variant.rawValue)
+            }
+        }
+        #endif
+    }
+
     /// Raw grant. Returns a handle `>= 0` on success, or a negative `WQ_ERR_*`.
     static func grantRaw(path: String, group: String, usedVariant: inout Int32) -> Int64 {
         usedVariant = -1
@@ -292,7 +337,17 @@ struct SandboxTierState {
         lastBadQueryError = 0
     }
 
-    mutating func noteWorseQuerySuccess() {
+    /// Tier 4 produced a handle for this path.
+    ///
+    /// `strict == false` means the extension only covered the closest existing
+    /// *ancestor* of the requested path (write into a file that does not exist
+    /// yet). That says nothing about Tier 1, so the memo must not flip; the
+    /// stale failure evidence is dropped instead.
+    mutating func noteWorseQuerySuccess(strict: Bool = true) {
+        guard strict else {
+            lastBadQueryError = 0
+            return
+        }
         guard !badQueryBlocked, lastBadQueryError < 0 else { return }
         badQueryBlocked = true
         lastBadQueryError = 0

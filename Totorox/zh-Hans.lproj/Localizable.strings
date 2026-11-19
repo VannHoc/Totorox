@@ -707,3 +707,16 @@
 "modstore.action.cached_merge" = "将 %lld 个已存 Mod 送至合并";
 "modstore.error.invalid_zip" = "下载的文件不是有效的 .zip 压缩包。";
 "modstore.error.checksum_mismatch" = "下载的文件 SHA-256 校验不匹配，请重新下载。";
+
+/* --- 文件 App 目录选择与实时覆盖进度 --- */
+"folders.quick.open_files_folder" = "从“文件”打开文件夹...";
+"folders.quick.saved_folders_section" = "已保存的文件夹";
+"folders.quick.clear_saved_folders" = "清除已保存的文件夹";
+"folders.task.cancelling" = "正在取消...";
+"folders.error.task_already_running" = "当前有其他文件操作正在运行，请等待完成或点击取消。";
+"overwrite.target_app.choose_files_folder" = "从“文件”选择目标文件夹";
+"overwrite.target_app.change_files_folder" = "更换目标文件夹";
+"overwrite.target_app.files_folder_badge" = "通过“文件”授权的目录";
+"overwrite.progress.extracting" = "正在解压数据包...";
+"overwrite.progress.planning" = "正在生成文件映射计划...";
+"overwrite.progress.writing" = "正在写入目标目录...";

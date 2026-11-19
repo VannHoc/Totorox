@@ -688,4 +688,216 @@ final class FileIOEngineTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: destFile), expected)
         }
     }
+
+    // MARK: - 17. Mapped Progress Reporting, Security-Scoped Bookmarks & Fast ZIP Extractor
+    func testApplyMappedFilesReportsProgress() async throws {
+        let sourceRoot = tempDirectory.appendingPathComponent("ProgressSource", isDirectory: true)
+        let destinationRoot = tempDirectory.appendingPathComponent("ProgressDest", isDirectory: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        var mappings: [(source: String, destination: String)] = []
+        for idx in 1...6 {
+            let name = "item_\(idx).bin"
+            try Data("payload_\(idx)".utf8).write(to: sourceRoot.appendingPathComponent(name))
+            mappings.append((source: name, destination: name))
+        }
+
+        final class ProgressRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var counts: [Int] = []
+
+            func record(_ count: Int) {
+                lock.lock()
+                counts.append(count)
+                lock.unlock()
+            }
+
+            var snapshot: [Int] {
+                lock.lock()
+                defer { lock.unlock() }
+                return counts
+            }
+        }
+
+        let recorder = ProgressRecorder()
+        let result = await engine.applyMappedFiles(
+            mappings,
+            from: sourceRoot,
+            to: destinationRoot,
+            progressHandler: { completed, _ in
+                recorder.record(completed)
+            },
+            conflictResolver: { _, _, _ in .replaceAll }
+        )
+
+        let reportedCounts = recorder.snapshot
+        XCTAssertEqual(result.succeeded.count, 6)
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertEqual(reportedCounts.last, 6)
+        XCTAssertEqual(reportedCounts.count, 6)
+    }
+
+    func testSecurityScopedFolderManagerBookmarksDeduplicationAndPathMatching() throws {
+        let suiteName = "totorox.test.bookmarks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let folderA = tempDirectory.appendingPathComponent("FolderA", isDirectory: true)
+        let folderA2 = tempDirectory.appendingPathComponent("FolderA2", isDirectory: true)
+        let folderB = tempDirectory.appendingPathComponent("FolderB", isDirectory: true)
+        try fileManager.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: folderA2, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: folderB, withIntermediateDirectories: true)
+
+        let manager = SecurityScopedFolderManager(defaults: defaults, storageKey: "test.bookmarks")
+        let entryA = manager.addFolder(url: folderA)
+        _ = manager.addFolder(url: folderB)
+        XCTAssertEqual(manager.folders.count, 2)
+        XCTAssertEqual(manager.folders.first?.displayName, "FolderB")
+
+        // Re-adding FolderA deduplicates and promotes it to the front
+        _ = manager.addFolder(url: folderA)
+        XCTAssertEqual(manager.folders.count, 2)
+        XCTAssertEqual(manager.folders.first?.id, entryA.id)
+
+        // Subpath matching accepts nested paths and rejects sibling prefix collisions
+        let nestedPath = folderA.appendingPathComponent("Sub/file.txt").path
+        XCTAssertEqual(manager.matchingFolder(forPath: nestedPath)?.id, entryA.id)
+        XCTAssertNil(manager.matchingFolder(forPath: folderA2.path))
+
+        // Persistence across fresh manager instance
+        let restored = SecurityScopedFolderManager(defaults: defaults, storageKey: "test.bookmarks")
+        XCTAssertEqual(restored.folders.count, 2)
+        XCTAssertEqual(restored.folders.first?.id, entryA.id)
+
+        restored.removeFolder(id: entryA.id)
+        XCTAssertEqual(restored.folders.count, 1)
+
+        restored.clearAll()
+        XCTAssertTrue(restored.folders.isEmpty)
+    }
+
+    func testZIPArchiveExtractorFlatContentsProgressCancellationAndSymlinkRejection() throws {
+        let converter = PatchZipConverter()
+        let zipData = try converter.buildZipArchive(entries: [
+            ("Resources/alpha.txt", Data("ALPHA".utf8)),
+            ("Resources/Sub/beta.bin", Data([0x01, 0x02, 0x03, 0x04]))
+        ])
+        let zipURL = tempDirectory.appendingPathComponent("sample_flat.zip")
+        try zipData.write(to: zipURL)
+
+        let extractDir = tempDirectory.appendingPathComponent("FlatOut", isDirectory: true)
+        var progressEvents: [(Int, Int)] = []
+        let count = try ZIPArchiveExtractor.extractFlatContents(
+            archiveURL: zipURL,
+            into: extractDir,
+            progressHandler: { extracted, total, _ in
+                progressEvents.append((extracted, total))
+            }
+        )
+
+        XCTAssertEqual(count, 2)
+        XCTAssertFalse(progressEvents.isEmpty)
+        XCTAssertEqual(progressEvents.last?.0, 2)
+        XCTAssertEqual(progressEvents.last?.1, 2)
+        XCTAssertEqual(try String(contentsOf: extractDir.appendingPathComponent("Resources/alpha.txt")), "ALPHA")
+        XCTAssertEqual(try Data(contentsOf: extractDir.appendingPathComponent("Resources/Sub/beta.bin")), Data([0x01, 0x02, 0x03, 0x04]))
+
+        // Immediate cancellation must throw CancellationError
+        let cancelDir = tempDirectory.appendingPathComponent("FlatCancelled", isDirectory: true)
+        XCTAssertThrowsError(
+            try ZIPArchiveExtractor.extractFlatContents(
+                archiveURL: zipURL,
+                into: cancelDir,
+                shouldCancel: { true }
+            )
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        // Symlink entry inside ZIP must be rejected with symbolicLinkUnsupported
+        let symlinkZipURL = tempDirectory.appendingPathComponent("symlink_entry.zip")
+        var symArchive = Data()
+        func appendU16(_ v: UInt16, to d: inout Data) {
+            d.append(UInt8(v & 0xFF))
+            d.append(UInt8((v >> 8) & 0xFF))
+        }
+        func appendU32(_ v: UInt32, to d: inout Data) {
+            d.append(UInt8(v & 0xFF))
+            d.append(UInt8((v >> 8) & 0xFF))
+            d.append(UInt8((v >> 16) & 0xFF))
+            d.append(UInt8((v >> 24) & 0xFF))
+        }
+        let nameBytes = Data("link.txt".utf8)
+        let targetBytes = Data("/etc/passwd".utf8)
+        appendU32(0x0403_4b50, to: &symArchive)
+        appendU16(20, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU32(0, to: &symArchive)
+        appendU32(UInt32(targetBytes.count), to: &symArchive)
+        appendU32(UInt32(targetBytes.count), to: &symArchive)
+        appendU16(UInt16(nameBytes.count), to: &symArchive)
+        appendU16(0, to: &symArchive)
+        symArchive.append(nameBytes)
+        symArchive.append(targetBytes)
+
+        let cdOffset = UInt32(symArchive.count)
+        var cd = Data()
+        appendU32(0x0201_4b50, to: &cd)
+        appendU16(0x0314, to: &cd) // Unix
+        appendU16(20, to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU32(0, to: &cd)
+        appendU32(UInt32(targetBytes.count), to: &cd)
+        appendU32(UInt32(targetBytes.count), to: &cd)
+        appendU16(UInt16(nameBytes.count), to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU16(0, to: &cd)
+        appendU32(UInt32(0o120777) << 16, to: &cd) // S_IFLNK
+        appendU32(0, to: &cd)
+        cd.append(nameBytes)
+        symArchive.append(cd)
+
+        appendU32(0x0605_4b50, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        appendU16(1, to: &symArchive)
+        appendU16(1, to: &symArchive)
+        appendU32(UInt32(cd.count), to: &symArchive)
+        appendU32(cdOffset, to: &symArchive)
+        appendU16(0, to: &symArchive)
+        try symArchive.write(to: symlinkZipURL)
+
+        let symOut = tempDirectory.appendingPathComponent("SymOut", isDirectory: true)
+        XCTAssertThrowsError(
+            try ZIPArchiveExtractor.extractFlatContents(archiveURL: symlinkZipURL, into: symOut)
+        ) { error in
+            XCTAssertEqual(error as? ZIPArchiveExtractorError, .symbolicLinkUnsupported)
+        }
+    }
+
+    func testDirectorySizeServiceCountsAndCalculatesAccurately() throws {
+        let root = tempDirectory.appendingPathComponent("DirSizeRoot", isDirectory: true)
+        let child = root.appendingPathComponent("Child", isDirectory: true)
+        try fileManager.createDirectory(at: child, withIntermediateDirectories: true)
+        try Data(repeating: 0xAA, count: 120).write(to: root.appendingPathComponent("a.bin"))
+        try Data(repeating: 0xBB, count: 380).write(to: child.appendingPathComponent("b.bin"))
+        try Data().write(to: child.appendingPathComponent("empty.bin"))
+
+        let result = DirectorySizeService.calculateSizeSync(at: root.path)
+        XCTAssertEqual(result.totalBytes, 500)
+        XCTAssertEqual(result.fileCount, 3)
+        XCTAssertEqual(result.folderCount, 1)
+        XCTAssertEqual(DirectorySizeService.countImmediateChildren(at: root.path), 2)
+        XCTAssertEqual(DirectorySizeService.countImmediateChildren(at: child.path), 2)
+    }
 }
