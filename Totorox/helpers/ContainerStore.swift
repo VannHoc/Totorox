@@ -987,6 +987,21 @@ enum ContainerStore {
             }
         }
 
+        // Content-based fallback: when the metadata plist is unreadable (the
+        // common iOS 27 case where the per-file grant is refused), name the
+        // container from its own files so it still shows up and stays browsable.
+        if plistData == nil,
+           UUID(uuidString: uuid) != nil,
+           isApplicationContainerPath(cleanContainer) {
+            if let guessed = bundleIdentifierFromContainerContents(cleanContainer),
+               isValidAppBundleID(guessed, uuid: uuid) {
+                setCachedMapping(uuid: uuid, bundleID: guessed)
+                let displayName = applicationBundleMetadataCatalog()[guessed]?.displayName ?? ""
+                log("browser: content-identified \(uuid) -> \(guessed)")
+                return ContainerMetadata(bundleID: guessed, displayName: displayName)
+            }
+        }
+
         guard let data = plistData,
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
             return nil
@@ -1044,6 +1059,68 @@ enum ContainerStore {
             return dirs.map { ($0 as NSString).lastPathComponent }.filter { !$0.isEmpty && !$0.hasPrefix(".") }
         }
         return []
+    }
+
+    /// Apps whose containers must always be readable even when their MCM
+    /// metadata plist refuses a sandbox token. These are probed with extra
+    /// fallbacks (container contents) during every scan.
+    static let requiredAppIdentifiers: [String] = [
+        "com.garena.game.kgvn"
+    ]
+
+    /// Derives a bundle id from the contents of an app-data container when its
+    /// MCM metadata plist cannot be read at all. Most apps leave a
+    /// `<bundle-id>.plist` in `Library/Preferences` (and a saved-state or
+    /// snapshot directory named after the bundle id), so the container can still
+    /// be named and browsed instead of being dropped as an unlabelled UUID.
+    static func bundleIdentifierFromContainerContents(_ containerPath: String) -> String? {
+        guard isApplicationContainerPath(containerPath) else { return nil }
+        let relativeDirs = [
+            "Library/Preferences",
+            "Library/Saved Application State",
+            "Library/SplashBoard/Snapshots"
+        ]
+        var candidates: [String] = []
+        var seen = Set<String>()
+        for relative in relativeDirs {
+            let dir = (containerPath as NSString).appendingPathComponent(relative)
+            for name in enumerateDirectoryNames(path: dir) {
+                var candidate = name
+                if candidate.hasSuffix(".plist") {
+                    candidate = String(candidate.dropLast(".plist".count))
+                } else if candidate.hasSuffix(".savedState") {
+                    candidate = String(candidate.dropLast(".savedState".count))
+                }
+                let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isValidAppBundleID(trimmed),
+                      !trimmed.hasPrefix("group."),
+                      !trimmed.hasPrefix("systemgroup.") else { continue }
+                if seen.insert(trimmed).inserted {
+                    candidates.append(trimmed)
+                }
+            }
+        }
+        guard !candidates.isEmpty else { return nil }
+        if candidates.count == 1 { return candidates[0] }
+
+        // Prefer a bundle id we already know about (required apps, research
+        // apps, or anything LaunchServices/App Store reported).
+        var known = Set(requiredAppIdentifiers)
+        known.formUnion(researchAppIdentifiers)
+        for key in installedAppInfo().keys {
+            known.insert(key)
+        }
+        for candidate in candidates where known.contains(candidate) {
+            return candidate
+        }
+        // Otherwise prefer the non-Apple entries; a container normally holds
+        // only its own app's domain, so a single non-Apple name is the app.
+        let nonApple = candidates.filter { !$0.hasPrefix("com.apple.") }
+        if nonApple.count == 1 { return nonApple[0] }
+        for rid in requiredAppIdentifiers where nonApple.contains(rid) {
+            return rid
+        }
+        return nil
     }
 
     static func metadataPath(for containerPath: String) -> String {

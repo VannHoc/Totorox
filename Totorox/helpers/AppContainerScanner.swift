@@ -586,6 +586,31 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             self.cacheLock.lock()
             let containerManagerDirs = self.mcmContainerPaths
             self.cacheLock.unlock()
+            // Guaranteed resolution for required apps: try direct MCM lookup
+            // before the traversal pass, so an app like com.garena.game.kgvn is
+            // named even if its container's metadata plist is denied.
+            for bid in ContainerStore.requiredAppIdentifiers where self.getCachedInfo(forBundleID: bid) == nil {
+                var actErr: NSString?
+                if let path = MCMActivateContainerPath(2, bid, false, &actErr)
+                    ?? MCMContainerPathForIdentifier(2, bid, false, &actErr),
+                   ContainerStore.isApplicationContainerPath(path) {
+                    ContainerMetadataCache.shared.markBundleActivated(bid)
+                    if let meta = ContainerStore.readContainerMetadata(containerPath: path),
+                       ContainerStore.isValidAppBundleID(meta.bundleID) {
+                        _ = self.registerResolvedApp(
+                            bundleID: meta.bundleID,
+                            containerPath: path,
+                            preferredName: meta.displayName
+                        )
+                    } else {
+                        _ = self.registerResolvedApp(
+                            bundleID: bid,
+                            containerPath: path
+                        )
+                    }
+                }
+            }
+
             if canReadRawUUIDContainers || !containerManagerDirs.isEmpty {
                 // Prefer the container manager's list: it costs no grant and skips
                 // the 2,000,000-inode `fsgetpath` walk that made this scan look
@@ -678,6 +703,15 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
             #endif
 
+            log("browser: unresolved containers: " +
+                ContainerMetadataCache.shared.unresolvedContainerUUIDList().sorted().joined(separator: ","))
+            for bid in ContainerStore.requiredAppIdentifiers {
+                if self.getCachedInfo(forBundleID: bid) == nil {
+                    log("browser: REQUIRED \(bid) NOT resolved")
+                } else {
+                    log("browser: required \(bid) resolved")
+                }
+            }
             let finalSorted = self.buildSortedSnapshotFromCache()
             log("browser: inventory scan done apps=\(finalSorted.count) " +
                 "unresolved=\(ContainerMetadataCache.shared.unresolvedContainerCount) " +
