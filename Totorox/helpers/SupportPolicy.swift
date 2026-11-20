@@ -4,7 +4,7 @@ enum ExploitSupportPolicy {
     static let verifiedIOS17Range = "17.0–17.7.x"
     static let verifiedIOS18Range = "18.0–18.7.1"
     static let verifiedIOS26Range = "26.0–26.6.1"
-    static let verifiedWorseQueryRange = "26.6.2–27.2"
+    static let verifiedWorseQueryRange = "26.6.2–27.2.1"
 
     static let verifiedIOS27Builds: [(beta: Int, publicBeta: Int?, build: String)] = [
         (1, nil, "24A5355q"),
@@ -49,7 +49,7 @@ enum ExploitSupportPolicy {
     }
 
     /// Returns true for all supported iOS versions (kernel exploit OR worse_query).
-    /// Includes worse_query range: iOS 26.6.2–27.2.
+    /// Includes worse_query range: iOS 26.6.2–27.2.1.
     static func isSupported(major: Int, minor: Int, patch: Int, build: String) -> Bool {
         if supportsKernelExploit(major: major, minor: minor, patch: patch, build: build) {
             return true
@@ -69,10 +69,9 @@ enum ExploitSupportPolicy {
             if iOS27BetaNumber(for: build) != nil {
                 return true
             }
-            // Release versions: 27.0, 27.1, 27.2
-            if minor >= 0 && minor <= 2 && patch >= 0 {
-                return true
-            }
+            // Release versions covered by worse_query: 27.0.x, 27.1.x, 27.2.0–27.2.1
+            if minor == 0 || minor == 1 { return true }
+            if minor == 2 && patch <= 1 { return true }
             return false
         }
 

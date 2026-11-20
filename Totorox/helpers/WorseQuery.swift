@@ -358,6 +358,14 @@ struct SandboxTierState {
         lastBadQueryError = 0
     }
 
+    /// Force the memo on without requiring a prior Tier 4 success or a Tier 1
+    /// failure code. Used by the enumeration fallback when `bad_query` hands
+    /// back a usable handle but does not unlock traversal of the app-data root.
+    mutating func forceBadQueryBlocked() {
+        badQueryBlocked = true
+        lastBadQueryError = 0
+    }
+
     /// Attempt order for the next grant.
     ///
     /// - memo off: `bad_query` first (the documented order).

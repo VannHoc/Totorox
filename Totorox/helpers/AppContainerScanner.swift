@@ -379,6 +379,17 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         let mcmRecords = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
         log("browser: MCM app containers=\(mcmRecords.count) " +
             "classes=\(mcmDetail.map(String.init) ?? "none")")
+        // Enumeration fallback (Approach B): on iOS 26+ builds without a kernel
+        // sandbox escape, `bad_query` can hand back a handle that passes the open
+        // probe yet does not unlock traversal of the app-data root, so MCM
+        // reports 0/1 containers. When that happens, force Tier 4 (worse_query)
+        // to be preferred for the rest of the session before traversal runs.
+        if mcmRecords.count <= 1,
+           ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26,
+           !KernelExploit.hasSandboxAccess(),
+           WorseQuery.grantGroup != nil {
+            SandboxGrantRouter.forceBadQueryBlockedForEnumeration()
+        }
         var containerManagerPaths: [String] = []
         containerManagerPaths.reserveCapacity(mcmRecords.count)
         var mcmActivationFailures = 0
