@@ -1,13 +1,17 @@
 import SwiftUI
 
+private struct LogShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct LogView: View {
     @ObservedObject var appLog = AppLog.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appLanguage) private var language
     @State private var copied = false
-    @State private var showShare = false
-    @State private var shareFileURL: URL?
+    @State private var shareItem: LogShareItem?
 
     /// Builds the full log text. Computed only inside actions (not in `body`)
     /// so a 100k-line log does not get re-joined on every SwiftUI render.
@@ -37,10 +41,10 @@ struct LogView: View {
 
     /// Deletes the temporary share copy; the log itself stays in memory.
     private func discardShareFile() {
-        if let url = shareFileURL {
+        if let url = shareItem?.url {
             try? FileManager.default.removeItem(at: url)
         }
-        shareFileURL = nil
+        shareItem = nil
     }
 
     var body: some View {
@@ -104,10 +108,8 @@ struct LogView: View {
             .background(TotoroxTheme.pageBackground.ignoresSafeArea())
             .navigationTitle(language.text("logs.title"))
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showShare, onDismiss: discardShareFile) {
-                if let url = shareFileURL {
-                    ActivityViewControllerWrapper(activityItems: [url])
-                }
+            .sheet(item: $shareItem, onDismiss: discardShareFile) { item in
+                ActivityViewControllerWrapper(activityItems: [item.url])
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -127,8 +129,7 @@ struct LogView: View {
 
                     Button {
                         if let url = prepareShareFile() {
-                            shareFileURL = url
-                            showShare = true
+                            shareItem = LogShareItem(url: url)
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
