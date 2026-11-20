@@ -252,7 +252,10 @@ enum WorseQuery {
         #if targetEnvironment(simulator)
         return
         #else
-        guard isEligibleOnThisDevice else { return }
+        // Respect the user toggle: when Tier 4 is disabled, do not touch any
+        // group's `Library/Caches` (including the recovery sweep), so a disabled
+        // tier leaves no `worse_query` trace in the log.
+        guard isEligibleOnThisDevice, isEnabled, !isPatchedBuild else { return }
         let groups = usableGroups()
         guard !groups.isEmpty else { return }
         for group in groups {

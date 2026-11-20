@@ -278,7 +278,7 @@ async def verify_api_hmac(request: Request, call_next):
         return JSONResponse(
             status_code=426,
             content={
-                "detail": f"Bản ứng dụng của bạn đã quá cũ. Vui lòng tải bản mới tại {DOWNLOAD_URL}.",
+                "detail": f"Bản ứng dụng của bạn đã quá cũ. Vui lòng tải bản mới tại \n{DOWNLOAD_URL}.",
             },
         )
 
@@ -427,7 +427,7 @@ async def health():
 # Tăng MIN_REQUIRED_BUILD trên VPS (env TOTOROX_MIN_BUILD) là ép toàn bộ
 # client cũ bị khoá ngay — không cần deploy code mới.
 # ---------------------------------------------------------------------------
-MIN_REQUIRED_BUILD: int = int(os.environ.get("TOTOROX_MIN_BUILD", "1"))
+MIN_REQUIRED_BUILD: int = int(os.environ.get("TOTOROX_MIN_BUILD", "2"))
 DOWNLOAD_URL: str = os.environ.get(
     "TOTOROX_DOWNLOAD_URL",
     "https://t.me/+wurdGhvbcT0wZGJl",   # TODO: thay bằng link tải IPA thực tế
