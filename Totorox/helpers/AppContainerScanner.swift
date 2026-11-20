@@ -180,7 +180,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     private var cacheByUDID: [String: AppContainerInfo] = [:]
     private var _cachedAppsSnapshot: [AppContainerInfo] = []
     private var mcmContainerPaths: [String] = []
-    private var hasCompletedFullScan: Bool = false
+    private(set) var hasCompletedFullScan: Bool = false
     private var hasCompletedFastPass: Bool = false
     private var activeScanTask: Task<[AppContainerInfo], Never>? = nil
 
