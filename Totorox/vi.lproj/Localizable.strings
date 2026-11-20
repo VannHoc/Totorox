@@ -283,8 +283,8 @@
 "account.uses_remaining_fmt" = "Còn %lld/%lld lượt";
 "account.uses_unlimited" = "Vô hạn";
 "account.daily_usage_label" = "Lượt dùng hôm nay";
-"account.redeem_button" = "Nhập mã kích hoạt (Redeem Code)";
-"account.redeem_more_button" = "Nhập mã kích hoạt thêm (Redeem Code)";
+"account.redeem_button" = "Nhập mã kích hoạt";
+"account.redeem_more_button" = "Nhập mã kích hoạt thêm";
 "account.status_redeem" = "Nạp mã";
 "account.logout_button" = "Đăng xuất";
 "account.logout_confirm_title" = "Đăng xuất tài khoản?";
@@ -301,7 +301,7 @@
 "auth.title_login" = "Đăng nhập Totorox";
 "auth.title_register" = "Tạo tài khoản mới";
 "auth.subtitle_login" = "Đăng nhập bằng tài khoản của bạn. Mỗi tài khoản chỉ trực tuyến trên 1 thiết bị tại một thời điểm.";
-"auth.subtitle_register" = "Đăng ký tài khoản miễn phí, sau đó nạp mã kích hoạt (Redeem Code) trong phần Cài đặt.";
+"auth.subtitle_register" = "Đăng ký tài khoản miễn phí, sau đó nạp mã kích hoạt trong phần Cài đặt.";
 "auth.username_label" = "Tên đăng nhập";
 "auth.username_placeholder" = "Nhập tên đăng nhập";
 "auth.password_label" = "Mật khẩu";
