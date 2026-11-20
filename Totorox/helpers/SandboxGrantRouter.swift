@@ -49,6 +49,14 @@ enum SandboxGrantRouter {
     /// heals by itself.
     private static let negativeTTL: TimeInterval = 60
 
+    /// Tier 4 (worse_query) is considered non-functional when it keeps returning
+    /// WQ_ERR_NO_TOKEN for every path while Tier 1 (bad_query) still grants.
+    /// Once that is observed repeatedly we stop paying for the doomed Tier 4
+    /// round-trip and treat it as unusable for the rest of the session.
+    private static var tier4ConsecutiveNoTokenFailures: Int = 0
+    private static let tier4NoTokenThreshold: Int = 3
+    private static var tier4Disabled: Bool = false
+
     /// Ancestors that never carry a usable token (they are where the iOS 26/27
     /// logs show `-6 WQ_ERR_NO_TOKEN` for both variants).
     private static let unGrantableAncestors: Set<String> = [
@@ -87,6 +95,8 @@ enum SandboxGrantRouter {
         state.reset()
         lastBackendValue = nil
         negativeGrants.removeAll()
+        tier4ConsecutiveNoTokenFailures = 0
+        tier4Disabled = false
         stateLock.unlock()
         WorseQuery.invalidateGroupCache()
     }
@@ -110,6 +120,28 @@ enum SandboxGrantRouter {
             log("grant: bad_query marked BLOCKED for this session " +
                 "(enumeration returned <= 1 container; tier 4 preferred)")
         }
+    }
+
+    /// Whether Tier 4 (worse_query) has been auto-disabled for this session
+    /// because it kept returning `WQ_ERR_NO_TOKEN`. Read-only accessor for
+    /// callers outside this type (e.g. AppContainerScanner).
+    static var isTier4Disabled: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return tier4Disabled
+    }
+
+    /// Disable Tier 4 (worse_query) for the rest of the session.
+    ///
+    /// Called when Tier 4 keeps returning `WQ_ERR_NO_TOKEN` while Tier 1
+    /// (bad_query) still grants, i.e. Tier 4 is non-functional on this device.
+    /// Thread-safe: acquires `stateLock`.
+    static func disableTier4() {
+        stateLock.lock()
+        tier4Disabled = true
+        tier4ConsecutiveNoTokenFailures = 0
+        stateLock.unlock()
+        log("grant: Tier 4 (worse_query) disabled for this session (repeated WQ_ERR_NO_TOKEN)")
     }
 
     // MARK: - Negative cache
@@ -225,16 +257,23 @@ enum SandboxGrantRouter {
         let group = WorseQuery.grantGroup
 
         stateLock.lock()
-        let order = state.attemptOrder(worseQueryUsable: group != nil)
+        let tier4Usable = (group != nil) && !tier4Disabled
+        let order = state.attemptOrder(worseQueryUsable: tier4Usable)
         stateLock.unlock()
 
         var failure: Int64 = 0
+        var worseQueryFailedNoToken = false
 
         for backend in order {
             switch backend {
             case .badQuery:
                 switch attemptBadQuery(path: grantPath, requireWrite: requireWrite) {
                 case .granted(let handle):
+                    // Tier 1 succeeded after Tier 4 failed with NO_TOKEN: Tier 4
+                    // is non-functional on this device, stop using it.
+                    if worseQueryFailedNoToken {
+                        disableTier4()
+                    }
                     return handle
                 case .failed(let code):
                     failure = code
@@ -246,9 +285,26 @@ enum SandboxGrantRouter {
                                          requireWrite: requireWrite,
                                          targetExists: exists) {
                 case .granted(let handle):
+                    stateLock.lock()
+                    tier4ConsecutiveNoTokenFailures = 0
+                    stateLock.unlock()
                     return handle
                 case .failed(let code):
                     failure = code
+                    if code == Int64(WQ_ERR_NO_TOKEN) {
+                        worseQueryFailedNoToken = true
+                        stateLock.lock()
+                        tier4ConsecutiveNoTokenFailures += 1
+                        let hitThreshold = tier4ConsecutiveNoTokenFailures >= tier4NoTokenThreshold
+                        stateLock.unlock()
+                        if hitThreshold {
+                            disableTier4()
+                        }
+                    } else {
+                        stateLock.lock()
+                        tier4ConsecutiveNoTokenFailures = 0
+                        stateLock.unlock()
+                    }
                 }
             }
         }

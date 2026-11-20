@@ -379,22 +379,22 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         let mcmRecords = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
         log("browser: MCM app containers=\(mcmRecords.count) " +
             "classes=\(mcmDetail.map(String.init) ?? "none")")
-        // Enumeration fallback (Approach B): on iOS builds that do not support bad_query
-        // (iOS 26.6.2+, iOS 27 release) and lack kernel sandbox escape, MCM reports <= 1 containers.
-        // Force Tier 4 (worse_query) to be preferred for the rest of the session before traversal runs.
-        let osVer = ProcessInfo.processInfo.operatingSystemVersion
-        let isBadQuerySupported = ExploitSupportPolicy.supportsKernelExploit(
-            major: osVer.majorVersion,
-            minor: osVer.minorVersion,
-            patch: osVer.patchVersion,
-            build: AppInfo.osBuild
-        )
-        if mcmRecords.count <= 1,
-           !isBadQuerySupported,
-           !KernelExploit.hasSandboxAccess(),
-           WorseQuery.grantGroup != nil {
-            SandboxGrantRouter.forceBadQueryBlockedForEnumeration()
-        }
+        // Enumeration fallback (Approach B): only on iOS builds where bad_query is
+        // genuinely broken (iOS 26.6.2+, iOS 27 release) and there is no kernel
+        // sandbox escape — on those, MCM reports <= 1 container. On iOS 26.0–26.6.1
+        // (incl. 26.6.1, see device log) bad_query still answers, so forcing Tier 4
+        // here only adds a failing worse_query round-trip per container and slows
+        // the scan without improving coverage. Tier 4 must actually be enabled.
+        // NOTE: Do NOT force bad_query blocked here based solely on a short MCM
+        // list. On devices where Tier 4 (worse_query) is non-functional (it returns
+        // WQ_ERR_NO_TOKEN for every path, see device logs), forcing the memo on
+        // makes Tier 4 the primary for every grant while it can never succeed,
+        // doubling the work per container and poisoning the negative cache. Tier 4
+        // must prove itself first (SandboxTierState.noteWorseQuerySuccess only
+        // flips the memo after a strict Tier 4 success), so leave the memo alone
+        // here. Removing this automatic force-block restores the original,
+        // safer ordering: bad_query first, worse_query only as a fallback.
+        _ = mcmRecords
         var containerManagerPaths: [String] = []
         containerManagerPaths.reserveCapacity(mcmRecords.count)
         var mcmActivationFailures = 0
@@ -598,7 +598,10 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 || canOpenRootDirectly
                 // Tier 4 grants traversal of the app-data root exactly like Tier 1
                 // does, so raw UUID containers stay reachable on iOS 26+ sideloads.
-                || WorseQuery.grantGroup != nil
+                // Only counts while Tier 4 is actually functional: once it has
+                // been auto-disabled (repeated WQ_ERR_NO_TOKEN) it must not be
+                // treated as a traversal-capable tier.
+                || (WorseQuery.grantGroup != nil && !SandboxGrantRouter.isTier4Disabled)
             self.cacheLock.lock()
             let containerManagerDirs = self.mcmContainerPaths
             self.cacheLock.unlock()
@@ -606,6 +609,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             // before the traversal pass, so an app like com.garena.game.kgvn is
             // named even if its container's metadata plist is denied.
             for bid in ContainerStore.requiredAppIdentifiers where self.getCachedInfo(forBundleID: bid) == nil {
+                var resolved = false
                 var actErr: NSString?
                 if let path = MCMActivateContainerPath(2, bid, false, &actErr)
                     ?? MCMContainerPathForIdentifier(2, bid, false, &actErr),
@@ -623,6 +627,23 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                             bundleID: bid,
                             containerPath: path
                         )
+                    }
+                    resolved = true
+                }
+                // Fallback: MCM direct lookup can return nil on iOS 26+ even
+                // when the container is among the enumerated UUIDs. Search those
+                // by metadata/content so the required app still shows up labeled.
+                if !resolved {
+                    for dir in containerManagerDirs {
+                        guard let meta = ContainerStore.readContainerMetadata(containerPath: dir),
+                              meta.bundleID == bid else { continue }
+                        _ = self.registerResolvedApp(
+                            bundleID: meta.bundleID,
+                            containerPath: dir,
+                            preferredName: meta.displayName
+                        )
+                        resolved = true
+                        break
                     }
                 }
             }

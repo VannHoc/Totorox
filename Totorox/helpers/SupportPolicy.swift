@@ -1,7 +1,7 @@
 import Foundation
 
 enum ExploitSupportPolicy {
-    static let verifiedIOS16Range = "16.0–16.7.x (MHA-C2, cần TrollStore)"
+    static let verifiedIOS16Range = "16.0–16.7.x (TrollStore)"
     static let verifiedIOS17Range = "17.0–17.7.x"
     static let verifiedIOS18Range = "18.0–18.7.1"
     static let verifiedIOS26Range = "26.0–26.0.1"
