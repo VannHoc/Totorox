@@ -285,7 +285,8 @@ public final class FileIOEngine: @unchecked Sendable {
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
         conflictResolver: FileIOConflictResolver,
-        batchContext: FileIOBatchContext? = nil
+        batchContext: FileIOBatchContext? = nil,
+        beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil
     ) async {
         defer {
             let totalDone = result.succeeded.count + result.skipped.count + result.failed.count
@@ -378,6 +379,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 )
             } else {
                 do {
+                    beforeWriteFile?(exactDestination, false)
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
@@ -408,6 +410,7 @@ public final class FileIOEngine: @unchecked Sendable {
             // 2. File -> File collision
             if conflictSession.shouldReplaceAllConflicts {
                 do {
+                    beforeWriteFile?(exactDestination, true)
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
@@ -420,6 +423,7 @@ public final class FileIOEngine: @unchecked Sendable {
             switch userChoice {
             case .replace:
                 do {
+                    beforeWriteFile?(exactDestination, true)
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
@@ -429,6 +433,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 conflictSession.enableReplaceAll()
                 self.shouldReplaceAllConflicts = true
                 do {
+                    beforeWriteFile?(exactDestination, true)
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
                     result.succeeded.append(exactDestination)
                 } catch {
@@ -1082,6 +1087,7 @@ public final class FileIOEngine: @unchecked Sendable {
         from sourceRoot: URL,
         to destinationRoot: URL,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)? = nil,
+        beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
         let cancelState = FileIOCancellationState()
@@ -1180,7 +1186,8 @@ public final class FileIOEngine: @unchecked Sendable {
                     cancelState: cancelState,
                     progressHandler: progressHandler,
                     conflictResolver: conflictResolver,
-                    batchContext: batchContext
+                    batchContext: batchContext,
+                    beforeWriteFile: beforeWriteFile
                 )
             }
 

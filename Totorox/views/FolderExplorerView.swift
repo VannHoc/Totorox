@@ -305,7 +305,6 @@ final class AppListViewModel: ObservableObject {
 struct FolderExplorerView: View {
     @Environment(\.appLanguage) private var language
     @ObservedObject private var themeManager = ThemeManager.shared
-    @ObservedObject private var folderBookmarks = SecurityScopedFolderManager.shared
     @StateObject private var directoryVM = DirectoryViewModel()
     @StateObject private var appListVM = AppListViewModel()
     @StateObject private var taskProgress = FolderTaskProgressModel()
@@ -346,7 +345,6 @@ struct FolderExplorerView: View {
     @State private var showShareSheet = false
     @State private var shareURL: URL? = nil
     @State private var showImportPicker = false
-    @State private var showFolderPicker = false
 
     // Inspector & Archive Extraction
     @State private var inspectingEntry: FileEntry? = nil
@@ -403,7 +401,7 @@ struct FolderExplorerView: View {
                     }
                     .disabled(!canGoBack)
 
-                    // Quick location shortcuts
+                    // Quick location shortcuts (chỉ giữ Documents & Containers AppData)
                     Menu {
                         Button {
                             navigateTo(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!)
@@ -411,37 +409,10 @@ struct FolderExplorerView: View {
                             Label(language.text("folders.quick.documents"), systemImage: "doc.fill")
                         }
                         Button {
-                            showFolderPicker = true
-                        } label: {
-                            Label(language.text("folders.quick.open_files_folder"), systemImage: "folder.badge.plus")
-                        }
-                        Button {
                             let containers = URL(fileURLWithPath: ContainerStore.appDataRoot)
                             navigateTo(containers)
                         } label: {
                             Label(language.text("folders.quick.containers"), systemImage: "app.dashed")
-                        }
-                        Button {
-                            navigateTo(FileManager.default.temporaryDirectory)
-                        } label: {
-                            Label(language.text("folders.quick.tmp"), systemImage: "clock")
-                        }
-
-                        if !folderBookmarks.folders.isEmpty {
-                            Section(language.text("folders.quick.saved_folders_section")) {
-                                ForEach(folderBookmarks.folders) { folder in
-                                    Button {
-                                        navigateTo(folder.url)
-                                    } label: {
-                                        Label(folder.displayName, systemImage: "folder.fill")
-                                    }
-                                }
-                                Button(role: .destructive) {
-                                    folderBookmarks.clearAll()
-                                } label: {
-                                    Label(language.text("folders.quick.clear_saved_folders"), systemImage: "trash")
-                                }
-                            }
                         }
                     } label: {
                         HStack(spacing: 5) {
@@ -713,16 +684,6 @@ struct FolderExplorerView: View {
         .sheet(isPresented: $showImportPicker) {
             DocumentPickerWrapper { pickedURL in
                 importFileIntoCurrentDirectory(pickedURL)
-            }
-            .preferredColorScheme(themeManager.mode.colorScheme)
-        }
-        .sheet(isPresented: $showFolderPicker) {
-            DocumentPickerWrapper(
-                allowedContentTypes: [.folder],
-                asCopy: false
-            ) { pickedFolderURL in
-                let saved = folderBookmarks.addFolder(url: pickedFolderURL)
-                navigateTo(saved.url)
             }
             .preferredColorScheme(themeManager.mode.colorScheme)
         }

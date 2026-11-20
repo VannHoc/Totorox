@@ -407,6 +407,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 || normalizedKey == "languagemap.txt"
             let isCorePkg = normalizedKey.hasSuffix("kernellua.pkg.bytes")
                 || normalizedKey.hasSuffix("heroinfolua.pkg.bytes")
+                || normalizedKey.hasSuffix("commonactions.pkg.bytes")
                 || (normalizedKey.contains("stablesystems_") && normalizedKey.hasSuffix(".pkg.bytes"))
             let isThanosConfig = normalizedKey.contains("/thanos/")
             let isPkgWithThanos = hasThanosFile && normalizedKey.hasSuffix(".pkg.bytes")
@@ -659,10 +660,23 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
             for normalizedKey in pathGroups.keys.sorted() {
                 guard !serverMergedKeys.contains(normalizedKey) else { continue }
+                if !serverMergedKeys.isEmpty && normalizedKey.hasSuffix("heroinfolua.pkg.bytes") {
+                    // Server đã chủ động loại HeroInfoLua.pkg.bytes phiên bản cũ — không chép đè bản cục bộ vào gói.
+                    continue
+                }
+                if normalizedKey.contains("/sound/android/") {
+                    // Gói iOS không dùng Sound/Android/* — loại bỏ tránh phình dung lượng & rác.
+                    continue
+                }
                 if dropConflictingGlobalHud && Self.isGlobalHudConflictPath(normalizedKey) {
                     continue
                 }
                 guard var candidateRefs = pathGroups[normalizedKey] else { continue }
+                if normalizedKey.contains("/assetbundle/scene/") && normalizedKey.hasSuffix(".assetbundle") {
+                    // Loại bỏ file giả 8 byte (vd: ZMODSKIN) của mod Map Android tránh crash/lỗi mạng trên iOS.
+                    candidateRefs = candidateRefs.filter { $0.header.uncompressedSize == 0 || $0.header.uncompressedSize >= 64 }
+                    if candidateRefs.isEmpty { continue }
+                }
                 if let fam = Self.assetBundleFamilyKey(forNormalizedPath: normalizedKey),
                    let allowedMod = familyResolution.familyWinnerByKey[fam] {
                     candidateRefs = candidateRefs.filter { $0.modIndex == allowedMod }
