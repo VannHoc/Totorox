@@ -5,6 +5,7 @@ import UIKit
 struct TotoroxApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var themeManager = ThemeManager.shared
+    @StateObject private var bootstrapManager = BootstrapManager.shared
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
     @State private var showOnboarding = false
     @State private var updateOffer: AppUpdateChecker.Offer?
@@ -66,6 +67,18 @@ struct TotoroxApp: App {
             }
             .preferredColorScheme(themeManager.mode.colorScheme)
             .tint(TotoroxTheme.mintAccent)
+            // --- Force Update Kill Switch ---
+            // Gọi bootstrap ngay khi app xuất hiện; chặn toàn màn hình nếu server yêu cầu.
+            .task {
+                await bootstrapManager.checkBootstrap()
+            }
+            .fullScreenCover(isPresented: $bootstrapManager.mustUpdate) {
+                ForceUpdateView(
+                    message: bootstrapManager.updateMessage,
+                    downloadURL: bootstrapManager.updateURL
+                )
+            }
+            // --------------------------------
             .alert(item: $updateOffer) { offer in
                 Alert(
                     title: Text(language.text("update.title")),
