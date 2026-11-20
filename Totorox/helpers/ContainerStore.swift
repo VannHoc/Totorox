@@ -791,7 +791,13 @@ enum ContainerStore {
             }
         }
 
-        // 4. Fallback to bad_query inode enumeration
+        // 4. Fallback to bad_query inode enumeration — only useful when a tier
+        //    can actually grant (bad_query supported or Tier 4 usable). On a
+        //    device with no usable tier this loop just burns CPU (2M inodes).
+        if !shouldUseBadQuery && WorseQuery.grantGroup == nil {
+            log("enumerate: no usable tier for \(clean) — skipping inode scan")
+            return []
+        }
         var pathC = clean.utf8CString.map { Int8($0) }
         guard let result = bad_query_list(&pathC, maxInode) else {
             log("enumerate: NULL for \(clean)")
@@ -1169,6 +1175,9 @@ enum ContainerStore {
         if let existing = activeGrantHandles[key],
            existing >= 0,
            ((grantedAccessMask[key] ?? 0) & desiredMask) == desiredMask {
+            // Refresh MRU on a cache hit.
+            grantHandlesOrder.removeAll { $0 == key }
+            grantHandlesOrder.append(key)
             grantHandlesLock.unlock()
             return existing
         }
@@ -1178,21 +1187,28 @@ enum ContainerStore {
         let handle = SandboxGrantRouter.grant(path: clean, requireWrite: requireWrite)
         if handle >= 0 {
             grantHandlesLock.lock()
-            // Evict oldest handles if table gets too large (> 48) to avoid kernel extension handle exhaustion
-            while grantHandlesOrder.count > 48 {
+            // Refresh MRU: a key already tracked must move to the end instead of
+            // being appended a second time (the old code duplicated entries and
+            // never released the stale ones, leaking sandbox-extension handles).
+            grantHandlesOrder.removeAll { $0 == key }
+            // Evict least-recently-used handles when the table reaches the
+            // reference LRU cap (192) to avoid kernel extension-table exhaustion
+            // ("Scene was invalidated" on iOS 26/27).
+            while grantHandlesOrder.count >= 192 {
                 let oldestKey = grantHandlesOrder.removeFirst()
                 if let oldestHandle = activeGrantHandles.removeValue(forKey: oldestKey) {
                     grantedAccessMask.removeValue(forKey: oldestKey)
-                    // If no other key is using oldestHandle, release it in the kernel
+                    // If no other key is using oldestHandle, release it in the kernel.
                     if !activeGrantHandles.values.contains(oldestHandle) {
                         SandboxGrantRouter.release(oldestHandle)
                     }
                 }
             }
+            // Only the canonical key is tracked; the `clean` alias was dropped
+            // because it kept a second reference to the same handle and defeated
+            // eviction (leak). Callers canonicalise before lookup anyway.
             activeGrantHandles[key] = handle
-            activeGrantHandles[clean] = handle
             grantedAccessMask[key] = (grantedAccessMask[key] ?? 0) | desiredMask
-            grantedAccessMask[clean] = (grantedAccessMask[clean] ?? 0) | desiredMask
             grantHandlesOrder.append(key)
             grantHandlesLock.unlock()
         }
@@ -1223,8 +1239,13 @@ enum ContainerStore {
                 grantHandlesOrder.removeAll { $0 == k }
             }
         }
+        // Another tracked key may still point at the same handle; releasing it here
+        // would invalidate that key's live lease. Only release when unreferenced.
+        let stillReferenced = activeGrantHandles.values.contains(handle)
         grantHandlesLock.unlock()
-        SandboxGrantRouter.release(handle)
+        if !stillReferenced {
+            SandboxGrantRouter.release(handle)
+        }
     }
 
     @discardableResult

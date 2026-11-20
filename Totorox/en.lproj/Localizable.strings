@@ -750,3 +750,5 @@
 "overwrite.backup.restore_success" = "Restore completed! Reverted %lld original files and removed %lld newly added files.";
 "overwrite.backup.restore_partial" = "Restored %lld original files and removed %lld new files, with %lld errors.";
 "overwrite.backup.missing_snapshot" = "Original backup snapshot for this file is missing.";
+"overwrite.backup.container_activation_failed" = "Could not activate the target app container; restore aborted to avoid writing to a stale path.";
+"overwrite.backup.already_restored" = "This backup session has already been restored.";

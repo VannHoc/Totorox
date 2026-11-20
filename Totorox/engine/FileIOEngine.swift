@@ -375,7 +375,8 @@ public final class FileIOEngine: @unchecked Sendable {
                     cancelState: cancelState,
                     progressHandler: progressHandler,
                     conflictResolver: conflictResolver,
-                    batchContext: batchContext
+                    batchContext: batchContext,
+                    beforeWriteFile: beforeWriteFile
                 )
             } else {
                 do {
@@ -401,7 +402,8 @@ public final class FileIOEngine: @unchecked Sendable {
                 cancelState: cancelState,
                 progressHandler: progressHandler,
                 conflictResolver: conflictResolver,
-                batchContext: batchContext
+                batchContext: batchContext,
+                beforeWriteFile: beforeWriteFile
             )
             return
         }
@@ -463,7 +465,8 @@ public final class FileIOEngine: @unchecked Sendable {
                         cancelState: cancelState,
                         progressHandler: progressHandler,
                         conflictResolver: conflictResolver,
-                        batchContext: batchContext
+                        batchContext: batchContext,
+                        beforeWriteFile: beforeWriteFile
                     )
                 } else {
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
@@ -499,7 +502,8 @@ public final class FileIOEngine: @unchecked Sendable {
                         cancelState: cancelState,
                         progressHandler: progressHandler,
                         conflictResolver: conflictResolver,
-                        batchContext: batchContext
+                        batchContext: batchContext,
+                        beforeWriteFile: beforeWriteFile
                     )
                 } else {
                     try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
@@ -524,7 +528,8 @@ public final class FileIOEngine: @unchecked Sendable {
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
         conflictResolver: FileIOConflictResolver,
-        batchContext: FileIOBatchContext? = nil
+        batchContext: FileIOBatchContext? = nil,
+        beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil
     ) async {
         // Fast POSIX opendir/readdir yields child names and d_type in one pass without Foundation URL allocation per attribute.
         var children: [(url: URL, isDir: Bool, isSymlink: Bool)] = []
@@ -599,7 +604,8 @@ public final class FileIOEngine: @unchecked Sendable {
                 cancelState: cancelState,
                 progressHandler: progressHandler,
                 conflictResolver: conflictResolver,
-                batchContext: batchContext
+                batchContext: batchContext,
+                beforeWriteFile: beforeWriteFile
             )
 
             if result.isCancelled {

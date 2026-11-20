@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -83,7 +84,10 @@ void totorox_harden_runtime(void) {
     }
 
     if (ttx_is_debugger_attached() || ttx_has_forbidden_dyld()) {
-        _exit(0);
+        /* Do not _exit(0) silently: a silent exit leaves no crash log and
+           makes the cause impossible to diagnose. Log and continue instead;
+           PT_DENY_ATTACH above is still in effect. */
+        fprintf(stderr, "[totorox] debugger/forbidden dyld detected; continuing (not exiting)\n");
     }
 #endif
 }

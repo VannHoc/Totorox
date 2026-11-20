@@ -2321,7 +2321,7 @@ private struct OverwriteBackupDetailSheet: View {
                             .background(isRestoring ? TotoroxTheme.disabledBackground : TotoroxTheme.mintAccent)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
-                        .disabled(isRestoring)
+                        .disabled(isRestoring || liveSession.isRestored)
 
                         // Nút Xóa bản sao lưu này
                         Button {
@@ -2439,12 +2439,18 @@ private struct OverwriteBackupDetailSheet: View {
             await MainActor.run {
                 self.isRestoring = false
                 if res.hasFailures {
-                    self.restoreResultMessage = language.text(
+                    var message = language.text(
                         "overwrite.backup.restore_partial",
                         res.restoredOriginalCount,
                         res.deletedNewCount,
                         res.failedItems.count
                     )
+                    if res.failedItems.count == 1,
+                       let reason = res.failedItems.first?.reason,
+                       !reason.isEmpty {
+                        message += "\n\(reason)"
+                    }
+                    self.restoreResultMessage = message
                 } else {
                     self.restoreResultMessage = language.text(
                         "overwrite.backup.restore_success",
