@@ -377,7 +377,7 @@ enum ContainerStore {
         // extension can make the raw UUID containers readable.
         if KernelExploit.requiresSandboxEscape,
            !KernelExploit.hasSandboxAccess(),
-           WorseQuery.grantGroup == nil {
+           (WorseQuery.grantGroup == nil || SandboxGrantRouter.isTier4Disabled) {
             log("patch: metadata scan skipped — sandbox access not active")
             return nil
         }
@@ -794,7 +794,7 @@ enum ContainerStore {
         // 4. Fallback to bad_query inode enumeration — only useful when a tier
         //    can actually grant (bad_query supported or Tier 4 usable). On a
         //    device with no usable tier this loop just burns CPU (2M inodes).
-        if !shouldUseBadQuery && WorseQuery.grantGroup == nil {
+        if !shouldUseBadQuery && (WorseQuery.grantGroup == nil || SandboxGrantRouter.isTier4Disabled) {
             log("enumerate: no usable tier for \(clean) — skipping inode scan")
             return []
         }
