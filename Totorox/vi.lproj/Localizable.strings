@@ -720,3 +720,33 @@
 "overwrite.progress.extracting" = "Đang giải nén gói tệp...";
 "overwrite.progress.planning" = "Đang lập kế hoạch ánh xạ tệp...";
 "overwrite.progress.writing" = "Đang ghi đè tệp vào thư mục đích...";
+
+/* --- Lịch sử ghi đè & Khôi phục dữ liệu (Auto-Backup & Rollback) --- */
+"overwrite.backup.history_title" = "Lịch sử ghi đè & Khôi phục";
+"overwrite.backup.history_hint" = "Tự động sao lưu tệp gốc trước mỗi lần đè. Chạm vào một phiên để kiểm tra tên tệp hoặc khôi phục về trước khi đè.";
+"overwrite.backup.clear_all" = "Xóa tất cả";
+"overwrite.backup.clear_all_title" = "Xóa toàn bộ lịch sử sao lưu?";
+"overwrite.backup.clear_all_message" = "Các bản sao lưu dữ liệu gốc trước khi đè sẽ bị xóa khỏi bộ nhớ máy để giải phóng dung lượng.";
+"overwrite.backup.badge_ready" = "Có thể khôi phục";
+"overwrite.backup.badge_restored" = "Đã khôi phục";
+"overwrite.backup.session_meta" = "%lld tệp (%lld đè gốc • %lld thêm mới) • %@";
+"overwrite.backup.detail_title" = "Chi tiết tệp đã ghi đè";
+"overwrite.backup.detail_summary" = "Thư mục %@ • %lld tệp đè gốc • %lld tệp mới • Sao lưu %@";
+"overwrite.backup.search_placeholder" = "Tìm tên tệp hoặc đường dẫn đã đè...";
+"overwrite.backup.filter_all" = "Tất cả (%lld)";
+"overwrite.backup.filter_overwritten" = "Đè gốc (%lld)";
+"overwrite.backup.filter_added" = "Thêm mới (%lld)";
+"overwrite.backup.empty_match" = "Không tìm thấy tệp nào khớp từ khóa.";
+"overwrite.backup.entry_overwritten" = "Đè tệp gốc (đã sao lưu)";
+"overwrite.backup.entry_added" = "Tệp mới thêm (sẽ xóa khi khôi phục)";
+"overwrite.backup.restoring_progress" = "Đang khôi phục %lld/%lld tệp...";
+"overwrite.backup.restore_button" = "Khôi phục về trước khi đè";
+"overwrite.backup.delete_session" = "Xóa bản sao lưu này";
+"overwrite.backup.restore_confirm_title" = "Khôi phục dữ liệu gốc?";
+"overwrite.backup.restore_confirm_action" = "Khôi phục ngay";
+"overwrite.backup.restore_confirm_message" = "Ứng dụng %@ sẽ được đưa về đúng trạng thái trước khi đè: khôi phục %lld tệp gốc đã sao lưu và xóa %lld tệp mới thêm vào.";
+"overwrite.backup.delete_confirm_title" = "Xóa lịch sử ghi đè này?";
+"overwrite.backup.delete_confirm_message" = "Bản sao lưu của phiên này sẽ bị xóa khỏi máy và không thể hoàn tác. Dữ liệu hiện tại trong game vẫn giữ nguyên.";
+"overwrite.backup.restore_success" = "Khôi phục thành công! Đã trả lại %lld tệp gốc và xóa %lld tệp mới thêm vào.";
+"overwrite.backup.restore_partial" = "Đã khôi phục %lld tệp gốc, xóa %lld tệp mới thêm, nhưng có %lld tệp gặp lỗi khi ghi.";
+"overwrite.backup.missing_snapshot" = "Không tìm thấy bản sao lưu gốc của tệp này.";

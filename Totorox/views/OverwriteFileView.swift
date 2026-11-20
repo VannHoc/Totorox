@@ -121,7 +121,6 @@ struct OverwriteFileView: View {
 
     // Selection State
     @State private var selectedApp: AppContainerInfo? = nil
-    @State private var selectedExternalFolder: BookmarkedFolder? = nil
     @State private var targetBundleIDInput: String = ""
     @State private var selectedTargetFolder: String = "Documents"
     @State private var selectedPatchURL: URL? = nil
@@ -145,9 +144,10 @@ struct OverwriteFileView: View {
     
     // Modal Sheets
     @State private var showInstalledAppsSheet: Bool = false
-    @State private var showExternalFolderPicker: Bool = false
     @State private var showDocumentPicker: Bool = false
     @State private var appSearchQuery: String = ""
+    @State private var selectedHistorySession: OverwriteBackupSession? = nil
+    @State private var showClearAllBackupsConfirm: Bool = false
     
     // Execution State
     @State private var isExecuting: Bool = false
@@ -156,21 +156,19 @@ struct OverwriteFileView: View {
     @State private var outcomeResult: FileIOResultWrapper? = nil
     @State private var alertMessage: String? = nil
     
-    // Scanner & Navigation Coordinator
+    // Scanner, Backup Manager & Navigation Coordinator
     @ObservedObject private var scanner = AppContainerScanner.shared
+    @ObservedObject private var backupManager = OverwriteBackupManager.shared
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var themeManager = ThemeManager.shared
     
     // Form validation
     private var hasDestinationTarget: Bool {
-        selectedApp != nil || selectedExternalFolder != nil
+        selectedApp != nil
     }
 
     private var isReadyToExecute: Bool {
         guard selectedPatchURL != nil && !isExecuting else { return false }
-        if selectedExternalFolder != nil {
-            return true
-        }
         return selectedApp != nil && !selectedTargetFolder.isEmpty
     }
     
@@ -178,13 +176,11 @@ struct OverwriteFileView: View {
         ZStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 16) {
-                    // MARK: - Khối 1: Chọn ứng dụng mục tiêu hoặc thư mục từ Tệp (Files)
+                    // MARK: - Khối 1: Chọn ứng dụng mục tiêu
                     targetAppCard
                     
                     // MARK: - Khối 2: Thư mục đích (Mặc định Documents & Library, ấn Đổi để tùy chọn)
-                    if selectedExternalFolder == nil {
-                        destinationFolderCard
-                    }
+                    destinationFolderCard
                     
                     // MARK: - Khối 3: Gói tệp bản vá
                     patchPackageCard
@@ -197,6 +193,11 @@ struct OverwriteFileView: View {
                     
                     // MARK: - Nút Thực thi
                     executeButton
+
+                    // MARK: - Lịch sử ghi đè & Khôi phục về trước khi đè
+                    if !backupManager.sessions.isEmpty {
+                        overwriteHistorySection
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -221,19 +222,6 @@ struct OverwriteFileView: View {
             installedAppsPickerSheet
                 .preferredColorScheme(themeManager.mode.colorScheme)
         }
-        .sheet(isPresented: $showExternalFolderPicker) {
-            DocumentPickerWrapper(
-                allowedContentTypes: [.folder],
-                asCopy: false
-            ) { pickedFolderURL in
-                let saved = SecurityScopedFolderManager.shared.addFolder(url: pickedFolderURL)
-                selectedApp = nil
-                targetBundleIDInput = ""
-                selectedExternalFolder = saved
-                log("overwrite: selected Files folder \(saved.displayName)")
-            }
-            .preferredColorScheme(themeManager.mode.colorScheme)
-        }
         .sheet(isPresented: $showCustomFolderSheet) {
             customFolderPickerSheet
                 .preferredColorScheme(themeManager.mode.colorScheme)
@@ -256,6 +244,23 @@ struct OverwriteFileView: View {
                 outcomeResult = nil
             }
             .preferredColorScheme(themeManager.mode.colorScheme)
+        }
+        .sheet(item: $selectedHistorySession) { session in
+            OverwriteBackupDetailSheet(
+                session: session,
+                backupManager: backupManager
+            ) {
+                selectedHistorySession = nil
+            }
+            .preferredColorScheme(themeManager.mode.colorScheme)
+        }
+        .alert(language.text("overwrite.backup.clear_all_title"), isPresented: $showClearAllBackupsConfirm) {
+            Button(language.text("common.delete"), role: .destructive) {
+                backupManager.clearAllSessions()
+            }
+            Button(language.text("common.cancel"), role: .cancel) { }
+        } message: {
+            Text(language.text("overwrite.backup.clear_all_message"))
         }
         .alert(language.text("common.notice"), isPresented: Binding(
             get: { alertMessage != nil },
@@ -310,70 +315,7 @@ struct OverwriteFileView: View {
                 }
             }
             
-            if let folder = selectedExternalFolder {
-                // Đã chọn thư mục từ ứng dụng Tệp (Files)
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(TotoroxTheme.mintAccent.opacity(0.15))
-                            .frame(width: 48, height: 48)
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                    }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(folder.displayName)
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(TotoroxTheme.textPrimary)
-                            .lineLimit(1)
-
-                        Text(language.text("overwrite.target_app.files_folder_badge"))
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(TotoroxTheme.mintAccent)
-                            .lineLimit(1)
-
-                        Text(folder.url.path)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer()
-                }
-                .padding(12)
-                .background(TotoroxTheme.searchBackground.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                HStack(spacing: 10) {
-                    Button {
-                        showExternalFolderPicker = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                            Text(language.text("overwrite.target_app.change_files_folder"))
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 38)
-                        .background(TotoroxTheme.mintAccent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-
-                    Button {
-                        selectedExternalFolder = nil
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                            .frame(width: 38, height: 38)
-                            .background(TotoroxTheme.searchBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
-            } else if let app = selectedApp {
+            if let app = selectedApp {
                 // Đã chọn app
                 HStack(spacing: 12) {
                     AppIconAvatarView(info: app, size: 48)
@@ -453,22 +395,6 @@ struct OverwriteFileView: View {
                         .background(TotoroxTheme.mintAccent)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: TotoroxTheme.mintAccent.opacity(0.25), radius: 6, y: 3)
-                    }
-
-                    Button {
-                        showExternalFolderPicker = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder.badge.plus")
-                                .font(.system(size: 14, weight: .bold))
-                            Text(language.text("overwrite.target_app.choose_files_folder"))
-                                .font(.system(size: 13.5, weight: .semibold))
-                        }
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 40)
-                        .background(TotoroxTheme.mintAccent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     
                     // Quick manual Bundle ID input
@@ -861,6 +787,113 @@ struct OverwriteFileView: View {
             .shadow(color: isReadyToExecute ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, y: 4)
         }
         .disabled(!isReadyToExecute)
+    }
+
+    // MARK: - Lịch sử ghi đè & Khôi phục dữ liệu
+    private var overwriteHistorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.mintAccent)
+                    Text(language.text("overwrite.backup.history_title"))
+                        .font(.system(size: 15.5, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                }
+
+                Spacer()
+
+                if backupManager.totalStoredBackupBytes > 0 {
+                    Text(ByteCountFormatter.string(fromByteCount: backupManager.totalStoredBackupBytes, countStyle: .file))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(Capsule())
+                }
+
+                Button(language.text("overwrite.backup.clear_all")) {
+                    showClearAllBackupsConfirm = true
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.red.opacity(0.85))
+                .buttonStyle(.plain)
+            }
+
+            Text(language.text("overwrite.backup.history_hint"))
+                .font(.system(size: 11.5))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+
+            VStack(spacing: 8) {
+                ForEach(backupManager.sessions) { session in
+                    Button {
+                        selectedHistorySession = session
+                    } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill((session.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.14))
+                                    .frame(width: 40, height: 40)
+                                Image(systemName: session.isRestored ? "checkmark.circle.fill" : "arrow.uturn.backward.circle.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(session.isRestored ? Color.blue : TotoroxTheme.mintAccent)
+                            }
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(session.patchName)
+                                        .font(.system(size: 13.5, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+
+                                    Text(language.text(session.isRestored ? "overwrite.backup.badge_restored" : "overwrite.backup.badge_ready"))
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(session.isRestored ? Color.blue : TotoroxTheme.mintAccent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background((session.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+
+                                Text("\(session.appName) • \(session.targetSubfolder) • \(Self.formatHistoryDate(session.createdAt))")
+                                    .font(.system(size: 11.5, weight: .medium))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+
+                                let backupText = ByteCountFormatter.string(fromByteCount: session.totalBackupBytes, countStyle: .file)
+                                Text(language.text(
+                                    "overwrite.backup.session_meta",
+                                    session.totalFilesCount,
+                                    session.overwrittenCount,
+                                    session.addedCount,
+                                    backupText
+                                ))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.textSecondary)
+                                .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.6))
+                        }
+                        .modifier(TotoroxCardModifier(cornerRadius: 14, padding: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private static func formatHistoryDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd/MM HH:mm"
+        return formatter.string(from: date)
     }
     
     // MARK: - Modal Sheet: Chọn ứng dụng đã cài đặt
@@ -1491,7 +1524,6 @@ struct OverwriteFileView: View {
     }
     
     private func selectApp(_ app: AppContainerInfo) {
-        selectedExternalFolder = nil
         selectedApp = app
         targetBundleIDInput = app.bundleID
         log("overwrite: selected app \(app.appName) (\(app.bundleID))")
@@ -1558,7 +1590,7 @@ struct OverwriteFileView: View {
                 log("overwrite: selected patch \(url.lastPathComponent) (\(sizeText)) isProtected=\(isProtected)")
             }
             if let bid = autoBundleID {
-                let hasTarget = await MainActor.run { self.selectedApp != nil || self.selectedExternalFolder != nil }
+                let hasTarget = await MainActor.run { self.selectedApp != nil }
                 if !hasTarget, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
                     await MainActor.run {
                         self.selectApp(resolved)
@@ -1593,7 +1625,7 @@ struct OverwriteFileView: View {
                 return
             }
             guard !Task.isCancelled else { return }
-            let hasTarget = await MainActor.run { self.selectedApp != nil || self.selectedExternalFolder != nil }
+            let hasTarget = await MainActor.run { self.selectedApp != nil }
             if !hasTarget, let resolved = await self.scanner.resolveContainer(bundleID: bid) {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -1638,18 +1670,11 @@ struct OverwriteFileView: View {
     private func executePatch() {
         guard let patchURL = selectedPatchURL else { return }
         guard !isExecuting else { return }
+        guard let targetApp = selectedApp else { return }
 
-        let externalFolder = selectedExternalFolder
-        let targetApp = selectedApp
-        guard externalFolder != nil || targetApp != nil else { return }
-
-        var resolvedSubfolder: String = ""
-        if externalFolder == nil {
-            guard let validSubfolder = validatedTargetSubfolder(selectedTargetFolder) else {
-                alertMessage = language.text("overwrite.error.invalid_target_subfolder")
-                return
-            }
-            resolvedSubfolder = validSubfolder
+        guard let targetSubfolder = validatedTargetSubfolder(selectedTargetFolder) else {
+            alertMessage = language.text("overwrite.error.invalid_target_subfolder")
+            return
         }
 
         let is3105 = patchURL.pathExtension.lowercased() == "3105"
@@ -1664,73 +1689,43 @@ struct OverwriteFileView: View {
         let currentPassword = patchPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : patchPassword
         let activeLanguage = language
         let progressModel = executionProgress
-        let targetSubfolder = resolvedSubfolder
+        let patchDisplayName = patchURL.lastPathComponent
+        let backupManagerRef = backupManager
 
         isExecuting = true
         progressModel.begin(
             stage: activeLanguage.text("overwrite.progress.extracting"),
-            detail: patchURL.lastPathComponent
+            detail: patchDisplayName
         )
-        if let folder = externalFolder {
-            log("overwrite: starting patch into Files folder=\(folder.displayName) file=\(patchURL.lastPathComponent)")
-        } else if let app = targetApp {
-            log("overwrite: starting patch into \(app.bundleID) target=\(targetSubfolder) file=\(patchURL.lastPathComponent)")
-        }
+        log("overwrite: starting patch into \(targetApp.bundleID) target=\(targetSubfolder) file=\(patchDisplayName)")
 
         let worker = Task.detached(priority: .userInitiated) {
             defer {
                 if hasSecurityAccess { patchURL.stopAccessingSecurityScopedResource() }
             }
 
-            let destinationDir: URL
-            let cacheInvalidationPath: String
-            var localExternalScope = false
-            var scopedExternalURL: URL? = nil
+            // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
+            var actError: NSString? = nil
+            let activatedPath = MCMActivateContainerPath(2, targetApp.bundleID, false, &actError)
+            let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : targetApp.dataPath
+            _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
 
-            if let folder = externalFolder {
-                let folderURL = folder.url.standardizedFileURL
-                if SecurityScopedFolderManager.shared.matchingFolder(forPath: folderURL.path) == nil {
-                    localExternalScope = folderURL.startAccessingSecurityScopedResource()
-                    scopedExternalURL = folderURL
-                }
-                destinationDir = folderURL
-                cacheInvalidationPath = folderURL.path
-            } else if let app = targetApp {
-                // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
-                var actError: NSString? = nil
-                let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
-                let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
-                _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
-
-                let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().standardizedFileURL
-                let candidateDest = containerBase
-                    .appendingPathComponent(targetSubfolder, isDirectory: true)
-                    .standardizedFileURL
-                let containerPrefix = containerBase.path.hasSuffix("/") ? containerBase.path : containerBase.path + "/"
-                guard candidateDest.path == containerBase.path || candidateDest.path.hasPrefix(containerPrefix) else {
-                    await MainActor.run {
-                        progressModel.finish()
-                        self.alertMessage = activeLanguage.text("overwrite.error.outside_container")
-                        self.isExecuting = false
-                    }
-                    return
-                }
-                _ = ContainerStore.ensureContainerAccess(for: candidateDest.path, requireWrite: true)
-                destinationDir = candidateDest
-                cacheInvalidationPath = app.dataPath
-            } else {
+            let containerBase = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().standardizedFileURL
+            let candidateDest = containerBase
+                .appendingPathComponent(targetSubfolder, isDirectory: true)
+                .standardizedFileURL
+            let containerPrefix = containerBase.path.hasSuffix("/") ? containerBase.path : containerBase.path + "/"
+            guard candidateDest.path == containerBase.path || candidateDest.path.hasPrefix(containerPrefix) else {
                 await MainActor.run {
                     progressModel.finish()
+                    self.alertMessage = activeLanguage.text("overwrite.error.outside_container")
                     self.isExecuting = false
                 }
                 return
             }
-
-            defer {
-                if localExternalScope, let url = scopedExternalURL {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
+            _ = ContainerStore.ensureContainerAccess(for: candidateDest.path, requireWrite: true)
+            let destinationDir = candidateDest
+            let cacheInvalidationPath = targetApp.dataPath
 
             // Đảm bảo thư mục đích tồn tại
             do {
@@ -1964,155 +1959,131 @@ struct OverwriteFileView: View {
             }
 
             let engine = FileIOEngine.shared
-            let result: FileIOResult
 
-            if externalFolder != nil {
-                // Direct local merge into user-authorized Files folder (Document Picker security scope).
-                let totalToWrite = max(extractedFileCount, 1)
-                await MainActor.run {
-                    progressModel.update(
-                        stage: activeLanguage.text("overwrite.progress.writing"),
-                        detail: destinationDir.lastPathComponent,
-                        completed: 0,
-                        total: totalToWrite
-                    )
-                }
-                result = await engine.copyAndMerge(
-                    from: rawExtractedRoot,
-                    to: destinationDir,
-                    progressHandler: { completed, currentName in
-                        if completed == 1 || completed == totalToWrite || completed % 4 == 0 {
-                            Task { @MainActor in
-                                progressModel.update(
-                                    stage: activeLanguage.text("overwrite.progress.writing"),
-                                    detail: activeLanguage.text("folders.task.copied_progress", completed, totalToWrite, currentName),
-                                    completed: min(completed, totalToWrite),
-                                    total: totalToWrite
-                                )
-                            }
-                        }
-                    },
-                    conflictResolver: { s, d, k in
-                        await promptCoordinator.resolveConflict(
-                            source: s,
-                            destination: d,
-                            kind: k,
-                            presentModal: { info in
-                                self.activeConflict = info
-                            },
-                            dismissModal: {
-                                self.activeConflict = nil
-                            }
-                        )
-                    }
+            // 2. Quét danh sách đường dẫn tương đối nguồn & cấu trúc thư mục đích gửi lên Server
+            await MainActor.run {
+                progressModel.update(
+                    stage: activeLanguage.text("overwrite.progress.planning"),
+                    detail: targetApp.bundleID,
+                    completed: 0,
+                    total: 0
                 )
-            } else if let app = targetApp {
-                // 2. Quét danh sách đường dẫn tương đối nguồn & cấu trúc thư mục đích gửi lên Server
-                await MainActor.run {
-                    progressModel.update(
-                        stage: activeLanguage.text("overwrite.progress.planning"),
-                        detail: app.bundleID,
-                        completed: 0,
-                        total: 0
-                    )
-                }
-
-                let (sourcePaths, sourceSizes) = Self.collectRelativeSourcePaths(at: rawExtractedRoot)
-                let targetPaths = Self.collectTargetStructurePaths(at: destinationDir)
-
-                if Task.isCancelled {
-                    await MainActor.run {
-                        progressModel.finish()
-                        self.isExecuting = false
-                    }
-                    return
-                }
-
-                let planRequest = OverwritePlanRequest(
-                    sourcePaths: sourcePaths,
-                    targetPaths: targetPaths,
-                    targetBundleId: app.bundleID,
-                    targetSubfolder: targetSubfolder,
-                    sourceSizes: sourceSizes
-                )
-
-                let planResponse: OverwritePlanResponse
-                switch await APIService.shared.overwritePlan(
-                    planRequest,
-                    token: LicenseManager.shared.authToken,
-                    hwid: LicenseManager.shared.deviceIdentifier
-                ) {
-                case .success(let resp):
-                    planResponse = resp
-                case .failure(let error):
-                    await MainActor.run {
-                        progressModel.finish()
-                        self.alertMessage = error.localizedDescription
-                        self.isExecuting = false
-                    }
-                    return
-                }
-
-                if Task.isCancelled {
-                    await MainActor.run {
-                        progressModel.finish()
-                        self.isExecuting = false
-                    }
-                    return
-                }
-
-                if let note = planResponse.note, !note.isEmpty {
-                    log("overwrite: server plan note=\(note) mapped=\(planResponse.mappings.count) skipped=\(planResponse.skipped?.count ?? 0)")
-                }
-
-                // 3. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
-                let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
-                let totalMappings = max(mappings.count, 1)
-                await MainActor.run {
-                    progressModel.update(
-                        stage: activeLanguage.text("overwrite.progress.writing"),
-                        detail: activeLanguage.text("folders.task.copying_extracted", totalMappings),
-                        completed: 0,
-                        total: totalMappings
-                    )
-                }
-
-                result = await engine.applyMappedFiles(
-                    mappings,
-                    from: rawExtractedRoot,
-                    to: destinationDir,
-                    progressHandler: { completed, currentName in
-                        if completed == 1 || completed == totalMappings || completed % 4 == 0 {
-                            Task { @MainActor in
-                                progressModel.update(
-                                    stage: activeLanguage.text("overwrite.progress.writing"),
-                                    detail: activeLanguage.text("folders.task.copied_progress", completed, totalMappings, currentName),
-                                    completed: min(completed, totalMappings),
-                                    total: totalMappings
-                                )
-                            }
-                        }
-                    }
-                ) { s, d, k in
-                    await promptCoordinator.resolveConflict(
-                        source: s,
-                        destination: d,
-                        kind: k,
-                        presentModal: { info in
-                            self.activeConflict = info
-                        },
-                        dismissModal: {
-                            self.activeConflict = nil
-                        }
-                    )
-                }
-            } else {
-                result = FileIOResult(isCancelled: true)
             }
+
+            let (sourcePaths, sourceSizes) = Self.collectRelativeSourcePaths(at: rawExtractedRoot)
+            let targetPaths = Self.collectTargetStructurePaths(at: destinationDir)
+            log("overwrite: extracted=\(extractedFileCount) sourcePaths=\(sourcePaths.count) targetDirs=\(targetPaths.count)")
+
+            if Task.isCancelled {
+                await MainActor.run {
+                    progressModel.finish()
+                    self.isExecuting = false
+                }
+                return
+            }
+
+            let planRequest = OverwritePlanRequest(
+                sourcePaths: sourcePaths,
+                targetPaths: targetPaths,
+                targetBundleId: targetApp.bundleID,
+                targetSubfolder: targetSubfolder,
+                sourceSizes: sourceSizes
+            )
+
+            let planResponse: OverwritePlanResponse
+            switch await APIService.shared.overwritePlan(
+                planRequest,
+                token: LicenseManager.shared.authToken,
+                hwid: LicenseManager.shared.deviceIdentifier
+            ) {
+            case .success(let resp):
+                planResponse = resp
+            case .failure(let error):
+                await MainActor.run {
+                    progressModel.finish()
+                    self.alertMessage = error.localizedDescription
+                    self.isExecuting = false
+                }
+                return
+            }
+
+            if Task.isCancelled {
+                await MainActor.run {
+                    progressModel.finish()
+                    self.isExecuting = false
+                }
+                return
+            }
+
+            if let note = planResponse.note, !note.isEmpty {
+                log("overwrite: server plan note=\(note) mapped=\(planResponse.mappings.count) skipped=\(planResponse.skipped?.count ?? 0)")
+            }
+
+            // 3. Khởi tạo bộ ghi nhận & sao lưu tự động trước khi đè từng file
+            let recorder = await MainActor.run {
+                backupManagerRef.createRecorder(
+                    patchName: patchDisplayName,
+                    bundleID: targetApp.bundleID,
+                    appName: targetApp.appName,
+                    targetSubfolder: targetSubfolder,
+                    destinationRoot: destinationDir
+                )
+            }
+
+            // 4. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
+            let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
+            let totalMappings = max(mappings.count, 1)
+            await MainActor.run {
+                progressModel.update(
+                    stage: activeLanguage.text("overwrite.progress.writing"),
+                    detail: activeLanguage.text("folders.task.copying_extracted", totalMappings),
+                    completed: 0,
+                    total: totalMappings
+                )
+            }
+
+            let result = await engine.applyMappedFiles(
+                mappings,
+                from: rawExtractedRoot,
+                to: destinationDir,
+                progressHandler: { completed, currentName in
+                    if completed == 1 || completed == totalMappings || completed % 4 == 0 {
+                        Task { @MainActor in
+                            progressModel.update(
+                                stage: activeLanguage.text("overwrite.progress.writing"),
+                                detail: activeLanguage.text("folders.task.copied_progress", completed, totalMappings, currentName),
+                                completed: min(completed, totalMappings),
+                                total: totalMappings
+                            )
+                        }
+                    }
+                },
+                beforeWriteFile: { destURL, existedBefore in
+                    recorder.recordBeforeWrite(destinationURL: destURL, existedBefore: existedBefore)
+                }
+            ) { s, d, k in
+                await promptCoordinator.resolveConflict(
+                    source: s,
+                    destination: d,
+                    kind: k,
+                    presentModal: { info in
+                        self.activeConflict = info
+                    },
+                    dismissModal: {
+                        self.activeConflict = nil
+                    }
+                )
+            }
+
+            let recordedSession = recorder.finalize(succeededURLs: result.succeeded)
 
             await MainActor.run {
                 progressModel.finish()
                 self.isExecuting = false
+                if let session = recordedSession {
+                    backupManagerRef.saveSession(session)
+                    log("overwrite-backup: saved session \(session.id.uuidString) files=\(session.totalFilesCount) overwritten=\(session.overwrittenCount) added=\(session.addedCount) backupBytes=\(session.totalBackupBytes)")
+                }
                 ContainerMetadataCache.shared.invalidate(path: cacheInvalidationPath)
                 self.outcomeResult = FileIOResultWrapper(result: result)
                 log("overwrite: completed succeeded=\(result.succeeded.count) skipped=\(result.skipped.count) failed=\(result.failed.count) cancelled=\(result.isCancelled)")
@@ -2182,5 +2153,389 @@ struct OverwriteFileView: View {
             }
         }
         return paths
+    }
+}
+
+// MARK: - Sheet Kiểm tra Chi tiết & Khôi phục Lịch sử Ghi đè
+
+private enum OverwriteBackupFilter: Int, CaseIterable {
+    case all = 0
+    case overwritten = 1
+    case added = 2
+}
+
+private struct OverwriteBackupDetailSheet: View {
+    @Environment(\.appLanguage) private var language
+    let session: OverwriteBackupSession
+    @ObservedObject var backupManager: OverwriteBackupManager
+    let onDismiss: () -> Void
+
+    @State private var searchQuery: String = ""
+    @State private var filter: OverwriteBackupFilter = .all
+    @State private var showRestoreConfirm: Bool = false
+    @State private var showDeleteConfirm: Bool = false
+    @State private var isRestoring: Bool = false
+    @State private var restoreCompleted: Int = 0
+    @State private var restoreTotal: Int = 0
+    @State private var restoreCurrentName: String = ""
+    @State private var restoreResultMessage: String? = nil
+
+    private var liveSession: OverwriteBackupSession {
+        backupManager.sessions.first(where: { $0.id == session.id }) ?? session
+    }
+
+    private var filteredEntries: [OverwriteBackupEntry] {
+        let base: [OverwriteBackupEntry]
+        switch filter {
+        case .all:
+            base = liveSession.entries
+        case .overwritten:
+            base = liveSession.entries.filter { !$0.wasNewFile }
+        case .added:
+            base = liveSession.entries.filter { $0.wasNewFile }
+        }
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return base }
+        return base.filter {
+            $0.fileName.lowercased().contains(q) || $0.relativePath.lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Header tóm tắt
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill((liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.15))
+                                .frame(width: 44, height: 44)
+                            Image(systemName: liveSession.isRestored ? "checkmark.circle.fill" : "clock.arrow.circlepath")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent)
+                        }
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(liveSession.patchName)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(TotoroxTheme.textPrimary)
+                                .lineLimit(2)
+
+                            Text("\(liveSession.appName) (\(liveSession.bundleID))")
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(TotoroxTheme.mintAccent)
+                                .lineLimit(1)
+
+                            let backupSize = ByteCountFormatter.string(fromByteCount: liveSession.totalBackupBytes, countStyle: .file)
+                            Text(language.text(
+                                "overwrite.backup.detail_summary",
+                                liveSession.targetSubfolder,
+                                liveSession.overwrittenCount,
+                                liveSession.addedCount,
+                                backupSize
+                            ))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        }
+
+                        Spacer()
+                    }
+
+                    // Search bar
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 13))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        TextField(
+                            "",
+                            text: $searchQuery,
+                            prompt: Text(language.text("overwrite.backup.search_placeholder"))
+                                .foregroundColor(TotoroxTheme.textSecondary)
+                        )
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .tint(TotoroxTheme.mintAccent)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+
+                        if !searchQuery.isEmpty {
+                            Button {
+                                searchQuery = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(TotoroxTheme.searchBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    // Filter Pills
+                    HStack(spacing: 8) {
+                        filterPill(
+                            title: language.text("overwrite.backup.filter_all", liveSession.totalFilesCount),
+                            option: .all
+                        )
+                        filterPill(
+                            title: language.text("overwrite.backup.filter_overwritten", liveSession.overwrittenCount),
+                            option: .overwritten
+                        )
+                        filterPill(
+                            title: language.text("overwrite.backup.filter_added", liveSession.addedCount),
+                            option: .added
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(TotoroxTheme.cardBackground)
+
+                Divider()
+
+                // Danh sách file đã ghi đè để người dùng kiểm tra tên
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 8) {
+                        if filteredEntries.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.45))
+                                Text(language.text("overwrite.backup.empty_match"))
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 48)
+                        } else {
+                            ForEach(filteredEntries) { entry in
+                                fileEntryRow(entry)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+                .background(TotoroxTheme.pageBackground)
+
+                Divider()
+
+                // Thanh hành động ghim đáy: Khôi phục / Xóa
+                VStack(spacing: 10) {
+                    if isRestoring {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.85)
+                                    .tint(TotoroxTheme.mintAccent)
+                                Text(language.text("overwrite.backup.restoring_progress", restoreCompleted, max(restoreTotal, 1)))
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                Spacer()
+                            }
+                            if restoreTotal > 0 {
+                                ProgressView(value: Double(restoreCompleted), total: Double(restoreTotal))
+                                    .tint(TotoroxTheme.mintAccent)
+                            }
+                            if !restoreCurrentName.isEmpty {
+                                Text(restoreCurrentName)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        .padding(10)
+                        .background(TotoroxTheme.searchBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    Button {
+                        showRestoreConfirm = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.uturn.backward.circle.fill")
+                                .font(.system(size: 15, weight: .bold))
+                            Text(language.text("overwrite.backup.restore_button"))
+                                .font(.system(size: 14.5, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(isRestoring ? TotoroxTheme.disabledBackground : TotoroxTheme.mintAccent)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .disabled(isRestoring)
+
+                    Button {
+                        showDeleteConfirm = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(language.text("overwrite.backup.delete_session"))
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(Color.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(Color.red.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .disabled(isRestoring)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(TotoroxTheme.cardBackground)
+            }
+            .navigationTitle(language.text("overwrite.backup.detail_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(language.text("common.close")) {
+                        onDismiss()
+                    }
+                    .disabled(isRestoring)
+                }
+            }
+        }
+        .alert(language.text("overwrite.backup.restore_confirm_title"), isPresented: $showRestoreConfirm) {
+            Button(language.text("overwrite.backup.restore_confirm_action"), role: .destructive) {
+                runRestore()
+            }
+            Button(language.text("common.cancel"), role: .cancel) { }
+        } message: {
+            Text(language.text(
+                "overwrite.backup.restore_confirm_message",
+                liveSession.appName,
+                liveSession.overwrittenCount,
+                liveSession.addedCount
+            ))
+        }
+        .alert(language.text("overwrite.backup.delete_confirm_title"), isPresented: $showDeleteConfirm) {
+            Button(language.text("common.delete"), role: .destructive) {
+                backupManager.deleteSession(liveSession)
+                onDismiss()
+            }
+            Button(language.text("common.cancel"), role: .cancel) { }
+        } message: {
+            Text(language.text("overwrite.backup.delete_confirm_message"))
+        }
+        .alert(language.text("common.notice"), isPresented: Binding(
+            get: { restoreResultMessage != nil },
+            set: { if !$0 { restoreResultMessage = nil } }
+        )) {
+            Button(language.text("common.ok"), role: .cancel) {
+                restoreResultMessage = nil
+            }
+        } message: {
+            Text(restoreResultMessage ?? "")
+        }
+    }
+
+    private func filterPill(title: String, option: OverwriteBackupFilter) -> some View {
+        let isSelected = (filter == option)
+        return Button {
+            filter = option
+        } label: {
+            Text(title)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(isSelected ? .white : TotoroxTheme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fileEntryRow(_ entry: OverwriteBackupEntry) -> some View {
+        let isAdded = entry.wasNewFile
+        let badgeColor: Color = isAdded ? Color.orange : TotoroxTheme.mintAccent
+        let writtenText = ByteCountFormatter.string(fromByteCount: entry.writtenSize, countStyle: .file)
+        let sizeLine: String = {
+            if let orig = entry.originalSize, !isAdded {
+                let origText = ByteCountFormatter.string(fromByteCount: orig, countStyle: .file)
+                return "\(origText) → \(writtenText)"
+            }
+            return "+\(writtenText)"
+        }()
+
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isAdded ? "doc.badge.plus" : "doc.badge.arrow.up")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(badgeColor)
+                .frame(width: 24, height: 24)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.fileName)
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(entry.relativePath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 8) {
+                    Text(language.text(isAdded ? "overwrite.backup.entry_added" : "overwrite.backup.entry_overwritten"))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(badgeColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(badgeColor.opacity(0.12))
+                        .clipShape(Capsule())
+
+                    Text(sizeLine)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .modifier(TotoroxCardModifier(cornerRadius: 12, padding: 10))
+    }
+
+    private func runRestore() {
+        let target = liveSession
+        isRestoring = true
+        restoreCompleted = 0
+        restoreTotal = target.totalFilesCount
+        restoreCurrentName = ""
+
+        Task {
+            let res = await backupManager.restoreSession(target) { completed, total, name in
+                Task { @MainActor in
+                    self.restoreCompleted = completed
+                    self.restoreTotal = total
+                    self.restoreCurrentName = name
+                }
+            }
+            await MainActor.run {
+                self.isRestoring = false
+                if res.hasFailures {
+                    self.restoreResultMessage = language.text(
+                        "overwrite.backup.restore_partial",
+                        res.restoredOriginalCount,
+                        res.deletedNewCount,
+                        res.failedItems.count
+                    )
+                } else {
+                    self.restoreResultMessage = language.text(
+                        "overwrite.backup.restore_success",
+                        res.restoredOriginalCount,
+                        res.deletedNewCount
+                    )
+                }
+                log("overwrite-backup: restored=\(res.restoredOriginalCount) deletedNew=\(res.deletedNewCount) failed=\(res.failedItems.count)")
+            }
+        }
     }
 }

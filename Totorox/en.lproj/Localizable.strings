@@ -720,3 +720,33 @@
 "overwrite.progress.extracting" = "Extracting archive...";
 "overwrite.progress.planning" = "Preparing file mapping plan...";
 "overwrite.progress.writing" = "Writing files to destination...";
+
+/* --- Overwrite History & Auto-Backup Rollback --- */
+"overwrite.backup.history_title" = "Overwrite History & Restore";
+"overwrite.backup.history_hint" = "Automatically backs up original files before each overwrite. Tap a session to inspect filenames or restore to the pre-overwrite state.";
+"overwrite.backup.clear_all" = "Clear All";
+"overwrite.backup.clear_all_title" = "Delete all backup history?";
+"overwrite.backup.clear_all_message" = "Saved pre-overwrite backup snapshots will be removed from device storage to free up space.";
+"overwrite.backup.badge_ready" = "Restorable";
+"overwrite.backup.badge_restored" = "Restored";
+"overwrite.backup.session_meta" = "%lld files (%lld replaced • %lld added) • %@";
+"overwrite.backup.detail_title" = "Overwritten Files";
+"overwrite.backup.detail_summary" = "Folder %@ • %lld replaced • %lld added • Backup %@";
+"overwrite.backup.search_placeholder" = "Search overwritten filename or path...";
+"overwrite.backup.filter_all" = "All (%lld)";
+"overwrite.backup.filter_overwritten" = "Replaced (%lld)";
+"overwrite.backup.filter_added" = "Added (%lld)";
+"overwrite.backup.empty_match" = "No matching files found.";
+"overwrite.backup.entry_overwritten" = "Replaced original (backed up)";
+"overwrite.backup.entry_added" = "Newly added (removed on restore)";
+"overwrite.backup.restoring_progress" = "Restoring %lld/%lld files...";
+"overwrite.backup.restore_button" = "Restore to Pre-Overwrite State";
+"overwrite.backup.delete_session" = "Delete This Backup";
+"overwrite.backup.restore_confirm_title" = "Restore original data?";
+"overwrite.backup.restore_confirm_action" = "Restore Now";
+"overwrite.backup.restore_confirm_message" = "%@ will be reverted to its state before overwriting: %lld backed-up original files will be restored and %lld newly added files will be deleted.";
+"overwrite.backup.delete_confirm_title" = "Delete this overwrite record?";
+"overwrite.backup.delete_confirm_message" = "The backup snapshot for this session will be deleted permanently. Current game files will remain untouched.";
+"overwrite.backup.restore_success" = "Restore completed! Reverted %lld original files and removed %lld newly added files.";
+"overwrite.backup.restore_partial" = "Restored %lld original files and removed %lld new files, with %lld errors.";
+"overwrite.backup.missing_snapshot" = "Original backup snapshot for this file is missing.";

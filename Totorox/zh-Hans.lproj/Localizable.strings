@@ -720,3 +720,33 @@
 "overwrite.progress.extracting" = "正在解压数据包...";
 "overwrite.progress.planning" = "正在生成文件映射计划...";
 "overwrite.progress.writing" = "正在写入目标目录...";
+
+/* --- 覆盖历史与自动备份恢复 --- */
+"overwrite.backup.history_title" = "覆盖历史与恢复";
+"overwrite.backup.history_hint" = "每次覆盖前自动备份原文件。点击记录可查看文件名，或一键还原至覆盖前的状态。";
+"overwrite.backup.clear_all" = "全部清除";
+"overwrite.backup.clear_all_title" = "删除全部备份历史？";
+"overwrite.backup.clear_all_message" = "已保存的覆盖前备份数据将从设备中删除以释放存储空间。";
+"overwrite.backup.badge_ready" = "可恢复";
+"overwrite.backup.badge_restored" = "已恢复";
+"overwrite.backup.session_meta" = "%lld 个文件（%lld 覆盖原文件 • %lld 新增）• %@";
+"overwrite.backup.detail_title" = "已覆盖文件详情";
+"overwrite.backup.detail_summary" = "目录 %@ • %lld 覆盖原文件 • %lld 新增文件 • 备份 %@";
+"overwrite.backup.search_placeholder" = "搜索已覆盖的文件名或路径...";
+"overwrite.backup.filter_all" = "全部 (%lld)";
+"overwrite.backup.filter_overwritten" = "覆盖原文件 (%lld)";
+"overwrite.backup.filter_added" = "新增 (%lld)";
+"overwrite.backup.empty_match" = "未找到匹配的文件。";
+"overwrite.backup.entry_overwritten" = "已覆盖原文件（已备份）";
+"overwrite.backup.entry_added" = "新增文件（恢复时将删除）";
+"overwrite.backup.restoring_progress" = "正在恢复 %lld/%lld 个文件...";
+"overwrite.backup.restore_button" = "恢复至覆盖前状态";
+"overwrite.backup.delete_session" = "删除此备份";
+"overwrite.backup.restore_confirm_title" = "确认恢复原始数据？";
+"overwrite.backup.restore_confirm_action" = "立即恢复";
+"overwrite.backup.restore_confirm_message" = "将把 %@ 还原至覆盖前的状态：恢复 %lld 个已备份的原文件，并删除 %lld 个新增文件。";
+"overwrite.backup.delete_confirm_title" = "删除此覆盖记录？";
+"overwrite.backup.delete_confirm_message" = "此记录的备份快照将被永久删除，当前游戏中的数据不会受到影响。";
+"overwrite.backup.restore_success" = "恢复成功！已还原 %lld 个原文件，并删除 %lld 个新增文件。";
+"overwrite.backup.restore_partial" = "已还原 %lld 个原文件、删除 %lld 个新增文件，另有 %lld 个文件写入失败。";
+"overwrite.backup.missing_snapshot" = "找不到该文件的原始备份快照。";
