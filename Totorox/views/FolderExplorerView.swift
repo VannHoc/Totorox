@@ -242,61 +242,81 @@ final class AppListViewModel: ObservableObject {
     @Published private(set) var entries: [FileEntry] = []
     @Published var isLoading: Bool = false
 
+    static func fileEntries(from apps: [AppContainerInfo]) -> [FileEntry] {
+        let mapped = apps.map { app in
+            FileEntry(
+                name: app.udid,
+                path: app.dataPath,
+                isDirectory: true,
+                size: -1,
+                modifiedAt: nil,
+                createdAt: nil,
+                isSymlink: false,
+                posixPermissions: 0o755,
+                childCount: nil,
+                appName: app.appName,
+                bundleID: app.bundleID,
+                appIcon: app.appIcon,
+                isAppContainer: true,
+                shortUUID: app.shortUDID
+            )
+        }
+        return ContainerStore.sortedEntries(mapped)
+    }
+
     func loadAppContainers(forceRefresh: Bool = false) {
         let canonRoot = "/var/mobile/Containers/Data/Application"
 
-        if !forceRefresh,
-           let cached = ContainerMetadataCache.shared.cachedList(for: canonRoot),
-           !cached.isEmpty {
-            entries.removeAll()
-            entries = cached
-            isLoading = false
-            AppContainerScanner.shared.prewarmOnLaunch()
+        // 1. If full scan is already complete and apps are available, use them immediately
+        if !forceRefresh && AppContainerScanner.shared.hasCompletedFullScan && !AppContainerScanner.shared.apps.isEmpty {
+            self.entries = Self.fileEntries(from: AppContainerScanner.shared.apps)
+            self.isLoading = false
             return
         }
 
-        entries.removeAll()
-        isLoading = true
+        // 2. Otherwise show whatever is currently cached (e.g. from Fast Pass or prior scan)
+        if !forceRefresh,
+           let cached = ContainerMetadataCache.shared.cachedList(for: canonRoot),
+           !cached.isEmpty {
+            self.entries = cached
+        } else if !AppContainerScanner.shared.apps.isEmpty {
+            self.entries = Self.fileEntries(from: AppContainerScanner.shared.apps)
+        }
 
-        if forceRefresh {
+        // 3. If scan is still pending or forced, keep loading indicator and await full scan
+        if forceRefresh || !AppContainerScanner.shared.hasCompletedFullScan {
+            self.isLoading = true
             Task.detached(priority: .userInitiated) {
-                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: true)
-                let built = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+                let apps = await AppContainerScanner.shared.scanAllContainers(forceRefresh: forceRefresh)
+                let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
                 await MainActor.run {
-                    self.entries.removeAll()
-                    self.entries = built
+                    if !finalEntries.isEmpty {
+                        self.entries = finalEntries
+                    } else if !apps.isEmpty {
+                        self.entries = Self.fileEntries(from: apps)
+                    }
                     self.isLoading = false
                 }
             }
         } else {
-            Task.detached(priority: .userInitiated) {
-                AppContainerScanner.shared.performFastPassSync()
-                let initial = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-                if !initial.isEmpty {
-                    await MainActor.run {
-                        self.entries.removeAll()
-                        self.entries = initial
-                        self.isLoading = false
-                    }
-                }
-                _ = await AppContainerScanner.shared.scanAllContainers(forceRefresh: false)
-                let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-                await MainActor.run {
-                    self.entries.removeAll()
-                    self.entries = finalEntries
-                    self.isLoading = false
-                }
-            }
+            self.isLoading = false
         }
     }
 
     func applyUpdatedCacheIfNeeded() {
         let canonRoot = "/var/mobile/Containers/Data/Application"
-        if let updated = ContainerMetadataCache.shared.cachedList(for: canonRoot),
-           !updated.isEmpty,
-           updated.count != entries.count {
-            entries.removeAll()
-            entries = updated
+        let updated = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+        if !updated.isEmpty {
+            if updated.count != entries.count || entries.isEmpty {
+                entries = updated
+            }
+        } else if !AppContainerScanner.shared.apps.isEmpty {
+            let mapped = Self.fileEntries(from: AppContainerScanner.shared.apps)
+            if mapped.count != entries.count || entries.isEmpty {
+                entries = mapped
+            }
+        }
+        if AppContainerScanner.shared.hasCompletedFullScan {
             isLoading = false
         }
     }

@@ -193,6 +193,7 @@ enum ContainerStore {
     private static var _uuidMap: [String: String]? = nil
     private static let uuidMapLock = NSLock()
     private static var activeGrantHandles: [String: Int64] = [:]
+    private static var grantHandlesOrder: [String] = []
     /// Bitmask of verified access capabilities per canonical path/container root: bit 0 = read, bit 1 = write.
     private static var grantedAccessMask: [String: UInt8] = [:]
     private static let grantHandlesLock = NSLock()
@@ -978,11 +979,19 @@ enum ContainerStore {
             // it 200+ times.
             for candidate in candidateContainers.prefix(1) {
                 let metaPath = metadataPath(for: candidate)
-                if grantContainerAccess(metaPath) >= 0,
-                   let grantedData = readDataDirectly(atPath: metaPath),
-                   !grantedData.isEmpty {
-                    plistData = grantedData
-                    break
+                let metaHandle = grantContainerAccess(metaPath)
+                if metaHandle >= 0 {
+                    if let grantedData = readDataDirectly(atPath: metaPath),
+                       !grantedData.isEmpty {
+                        plistData = grantedData
+                    }
+                    // Release the file-specific plist probe handle immediately.
+                    // Keeping 200+ plist handles open exhausts kernel extension
+                    // tables and causes FrontBoard "Scene was invalidated" errors.
+                    releaseGrantHandle(metaHandle, for: metaPath)
+                    if plistData != nil {
+                        break
+                    }
                 }
             }
         }
@@ -1169,13 +1178,53 @@ enum ContainerStore {
         let handle = SandboxGrantRouter.grant(path: clean, requireWrite: requireWrite)
         if handle >= 0 {
             grantHandlesLock.lock()
+            // Evict oldest handles if table gets too large (> 48) to avoid kernel extension handle exhaustion
+            while grantHandlesOrder.count > 48 {
+                let oldestKey = grantHandlesOrder.removeFirst()
+                if let oldestHandle = activeGrantHandles.removeValue(forKey: oldestKey) {
+                    grantedAccessMask.removeValue(forKey: oldestKey)
+                    // If no other key is using oldestHandle, release it in the kernel
+                    if !activeGrantHandles.values.contains(oldestHandle) {
+                        SandboxGrantRouter.release(oldestHandle)
+                    }
+                }
+            }
             activeGrantHandles[key] = handle
             activeGrantHandles[clean] = handle
             grantedAccessMask[key] = (grantedAccessMask[key] ?? 0) | desiredMask
             grantedAccessMask[clean] = (grantedAccessMask[clean] ?? 0) | desiredMask
+            grantHandlesOrder.append(key)
             grantHandlesLock.unlock()
         }
         return handle
+    }
+
+    /// Releases a specific sandbox extension handle and cleans up internal tracking.
+    static func releaseGrantHandle(_ handle: Int64, for path: String? = nil) {
+        guard handle >= 0 else { return }
+        grantHandlesLock.lock()
+        if let p = path {
+            let clean = ContainerMetadataCache.canonicalPath(p)
+            activeGrantHandles.removeValue(forKey: clean)
+            activeGrantHandles.removeValue(forKey: "\(clean)#ro")
+            activeGrantHandles.removeValue(forKey: "\(clean)#rw")
+            grantedAccessMask.removeValue(forKey: clean)
+            grantedAccessMask.removeValue(forKey: "\(clean)#ro")
+            grantedAccessMask.removeValue(forKey: "\(clean)#rw")
+            grantHandlesOrder.removeAll { $0 == clean || $0 == "\(clean)#ro" || $0 == "\(clean)#rw" }
+        } else {
+            var keysToRemove: [String] = []
+            for (k, v) in activeGrantHandles where v == handle {
+                keysToRemove.append(k)
+            }
+            for k in keysToRemove {
+                activeGrantHandles.removeValue(forKey: k)
+                grantedAccessMask.removeValue(forKey: k)
+                grantHandlesOrder.removeAll { $0 == k }
+            }
+        }
+        grantHandlesLock.unlock()
+        SandboxGrantRouter.release(handle)
     }
 
     @discardableResult
@@ -1226,16 +1275,33 @@ enum ContainerStore {
                 var actErr: NSString?
                 _ = MCMActivateContainerPath(7, info.idOrUUID, true, &actErr)
             } else {
-                let bid = ContainerMetadataCache.shared.bundleID(forUUID: info.idOrUUID)
-                    ?? ContainerStore.bundleID(forUUID: info.idOrUUID)
-                    ?? AppContainerScanner.shared.getCachedInfo(forUDID: info.idOrUUID)?.bundleID
-                    ?? readContainerMetadata(containerPath: info.rootPath)?.bundleID
-                if let bid = bid, isValidAppBundleID(bid, uuid: info.idOrUUID) {
-                    if !ContainerMetadataCache.shared.isBundleActivated(bid) ||
-                        SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) != 0 {
-                        var actErr: NSString?
-                        _ = MCMActivateContainerPath(2, bid, false, &actErr)
-                        ContainerMetadataCache.shared.markBundleActivated(bid)
+                // On iOS 27+, containers are registered under their UUID in containermanagerd.
+                // Try activating by UUID first if idOrUUID is a valid UUID.
+                var leased = false
+                if UUID(uuidString: info.idOrUUID) != nil {
+                    let knownClass = MCMContainerClassForPath(info.rootPath)
+                    var actErr: NSString?
+                    leased = MCMActivateContainerPath(
+                        knownClass != 0 ? knownClass : 2,
+                        info.idOrUUID,
+                        false,
+                        &actErr
+                    ) != nil
+                }
+
+                // If not leased by UUID (or on older iOS builds), activate by bundle ID.
+                if !leased {
+                    let bid = ContainerMetadataCache.shared.bundleID(forUUID: info.idOrUUID)
+                        ?? ContainerStore.bundleID(forUUID: info.idOrUUID)
+                        ?? AppContainerScanner.shared.getCachedInfo(forUDID: info.idOrUUID)?.bundleID
+                        ?? readContainerMetadata(containerPath: info.rootPath)?.bundleID
+                    if let bid = bid, isValidAppBundleID(bid, uuid: info.idOrUUID) {
+                        if !ContainerMetadataCache.shared.isBundleActivated(bid) ||
+                            SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) != 0 {
+                            var actErr: NSString?
+                            _ = MCMActivateContainerPath(2, bid, false, &actErr)
+                            ContainerMetadataCache.shared.markBundleActivated(bid)
+                        }
                     }
                 }
             }

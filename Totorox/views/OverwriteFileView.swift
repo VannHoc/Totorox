@@ -1470,7 +1470,10 @@ struct OverwriteFileView: View {
         isLoadingFolders = true
         Task.detached(priority: .userInitiated) {
             var actError: NSString? = nil
-            let activatedPath = MCMActivateContainerPath(2, app.bundleID, false, &actError)
+            let knownClass = MCMContainerClassForPath(app.dataPath)
+            let actClass = knownClass != 0 ? knownClass : 2
+            let activatedPath = (UUID(uuidString: app.udid) != nil ? MCMActivateContainerPath(actClass, app.udid, false, &actError) : nil)
+                ?? MCMActivateContainerPath(2, app.bundleID, false, &actError)
             let baseRoot = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : app.dataPath
             let securedRoot = ContainerStore.ensureContainerAccess(for: baseRoot)
 
@@ -1706,7 +1709,10 @@ struct OverwriteFileView: View {
 
             // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
             var actError: NSString? = nil
-            let activatedPath = MCMActivateContainerPath(2, targetApp.bundleID, false, &actError)
+            let knownClass = MCMContainerClassForPath(targetApp.dataPath)
+            let actClass = knownClass != 0 ? knownClass : 2
+            let activatedPath = (UUID(uuidString: targetApp.udid) != nil ? MCMActivateContainerPath(actClass, targetApp.udid, false, &actError) : nil)
+                ?? MCMActivateContainerPath(2, targetApp.bundleID, false, &actError)
             let rootPath = (activatedPath != nil && !activatedPath!.isEmpty) ? activatedPath! : targetApp.dataPath
             _ = ContainerStore.ensureContainerAccess(for: rootPath, requireWrite: true)
 
