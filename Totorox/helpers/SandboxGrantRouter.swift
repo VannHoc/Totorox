@@ -546,17 +546,20 @@ enum SandboxGrantRouter {
         // `access` only evaluates mode bits. Verifying with a real `open` is what
         // makes a useless handle fail here instead of later, and it keeps the
         // `grantedAccessMask` latch (and the negative cache) honest.
-        return openProbeError(resolvedPath)
+        return openProbeError(resolvedPath, requireWrite: requireWrite)
         #endif
     }
 
     /// Opens the path for real and closes it again.
     /// Returns `0` on success, `-errno` (never `0`) on failure.
-    private static func openProbeError(_ path: String) -> Int64 {
+    private static func openProbeError(_ path: String, requireWrite: Bool = false) -> Int64 {
         var st = stat()
+        let isDir = (lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR)
         var flags = O_RDONLY | O_CLOEXEC
-        if lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR {
+        if isDir {
             flags |= O_DIRECTORY
+        } else if requireWrite {
+            flags = O_RDWR | O_CLOEXEC
         }
         errno = 0
         let fd = open(path, flags)

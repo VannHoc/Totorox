@@ -408,9 +408,11 @@ public final class OverwriteBackupManager: ObservableObject {
             // 1. Kích hoạt lại quyền sandbox vào container đích (nếu có bundleID)
             let resolvedDestRoot: URL
             let cacheInvalidationPath: String
-            if !session.bundleID.isEmpty {
+            if !session.bundleID.isEmpty || !session.destinationRootPath.isEmpty {
                 var actError: NSString? = nil
-                let activatedPath = MCMActivateContainerPath(2, session.bundleID, false, &actError)
+                let destUUID = (session.destinationRootPath as NSString).lastPathComponent
+                let activatedPath = (UUID(uuidString: destUUID) != nil ? MCMActivateContainerPath(2, destUUID, false, &actError) : nil)
+                    ?? (!session.bundleID.isEmpty ? MCMActivateContainerPath(2, session.bundleID, false, &actError) : nil)
                 if let liveRoot = activatedPath, !liveRoot.isEmpty {
                     _ = ContainerStore.ensureContainerAccess(for: liveRoot, requireWrite: true)
                     let baseURL = URL(fileURLWithPath: liveRoot).resolvingSymlinksInPath().standardizedFileURL
@@ -422,6 +424,7 @@ public final class OverwriteBackupManager: ObservableObject {
                 } else {
                     resolvedDestRoot = URL(fileURLWithPath: session.destinationRootPath).standardizedFileURL
                     cacheInvalidationPath = session.destinationRootPath
+                    _ = ContainerStore.ensureContainerAccess(for: session.destinationRootPath, requireWrite: true)
                 }
             } else {
                 resolvedDestRoot = URL(fileURLWithPath: session.destinationRootPath).standardizedFileURL
