@@ -214,6 +214,12 @@ enum WorseQuery {
         worse_query_release(handle)
     }
 
+    /// Mirrors the retry policy inside `worse_query_try_both` so the decision is
+    /// unified across C and Swift callers and covered by unit tests in all build configurations.
+    static func shouldRetryAnyPath(_ code: Int64) -> Bool {
+        worse_query_should_retry_any_path(code)
+    }
+
     // MARK: - Self-heal
 
     /// One-line diagnostics at launch. This is the first thing to read when a
@@ -402,12 +408,6 @@ extension WorseQuery {
 
     static func recoverCaches(at cachesPath: String) -> Bool {
         cachesPath.withCString { WQRecoverCachesAtPath($0) }
-    }
-
-    /// Mirrors the retry policy inside `worse_query_try_both` so the decision is
-    /// covered by the unit tests instead of only by device logs.
-    static func shouldRetryAnyPath(_ code: Int64) -> Bool {
-        worse_query_should_retry_any_path(code)
     }
 }
 #endif
