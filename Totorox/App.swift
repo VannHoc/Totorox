@@ -7,7 +7,7 @@ struct TotoroxApp: App {
     @StateObject private var themeManager = ThemeManager.shared
     @StateObject private var bootstrapManager = BootstrapManager.shared
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
-    @State private var showOnboarding = false
+    @State private var showOnboarding = OnboardingStore.shouldShow()
     @State private var updateOffer: AppUpdateChecker.Offer?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -93,7 +93,9 @@ struct TotoroxApp: App {
             }
             .onAppear {
                 themeManager.applyToAllWindows()
-                if !showOnboarding {
+                if OnboardingStore.shouldShow() {
+                    showOnboarding = true
+                } else {
                     appState.detectSupport()
                     checkForUpdate()
                 }
