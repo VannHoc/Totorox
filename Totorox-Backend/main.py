@@ -415,7 +415,7 @@ async def health():
 MIN_REQUIRED_BUILD: int = int(os.environ.get("TOTOROX_MIN_BUILD", "1"))
 DOWNLOAD_URL: str = os.environ.get(
     "TOTOROX_DOWNLOAD_URL",
-    "https://t.me/totorox_official",   # TODO: thay bằng link tải IPA thực tế
+    "https://t.me/+wurdGhvbcT0wZGJl",   # TODO: thay bằng link tải IPA thực tế
 )
 
 
