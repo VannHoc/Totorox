@@ -1,6 +1,7 @@
 import Foundation
 
 enum ExploitSupportPolicy {
+    static let verifiedIOS16Range = "16.0–16.7.x (MHA-C2, cần TrollStore)"
     static let verifiedIOS17Range = "17.0–17.7.x"
     static let verifiedIOS18Range = "18.0–18.7.1"
     static let verifiedIOS26Range = "26.0–26.0.1"
@@ -49,9 +50,17 @@ enum ExploitSupportPolicy {
         return false
     }
 
-    /// Returns true for all supported iOS versions (kernel exploit OR worse_query).
+    /// Returns true for all supported iOS versions (MHA-C2 on iOS 16 via TrollStore,
+    /// kernel exploit on 17/18/26.0-26.0.1, worse_query on 26.0.2+).
     /// Includes worse_query range: iOS 26.0.2–27.2.1.
     static func isSupported(major: Int, minor: Int, patch: Int, build: String) -> Bool {
+        // iOS 16: only the MHA-C2 tier (entitlements + MCM) is available,
+        // which requires TrollStore / fake-signing to honor the private
+        // entitlements. No kernel exploit path exists for iOS 16.
+        if major == 16 {
+            return true
+        }
+
         if supportsKernelExploit(major: major, minor: minor, patch: patch, build: build) {
             return true
         }
@@ -79,4 +88,5 @@ enum ExploitSupportPolicy {
 
         return false
     }
+
 }

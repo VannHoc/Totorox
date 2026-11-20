@@ -207,7 +207,9 @@
 "onboarding.developer_beta" = "Developer Beta %@";
 "onboarding.public_beta" = "Public Beta %@";
 "onboarding.versions_footer" = "Thiết bị của bạn: iOS %@ (%@). Các bản build không có trong danh sách có thể vẫn hoạt động nhưng chưa được kiểm chứng.";
-"onboarding.install_title" = "Kiểm tra cách cài đặt";
+"onboarding.device_supported" = "Hỗ trợ đọc file";
+"onboarding.device_unsupported" = "Không hỗ trợ đọc file";
+"onboarding.install_title" = "Lưu ý";
 "onboarding.install_message" = "Khả năng truy cập container phụ thuộc vào cách Totorox được cài đặt.";
 "onboarding.install_ok" = "Cài bằng chứng chỉ hợp lệ và chưa bị thu hồi.";
 "onboarding.install_bad" = "Không dùng chứng chỉ đã bị thu hồi, chứng chỉ dùng chung hoặc enterprise.";

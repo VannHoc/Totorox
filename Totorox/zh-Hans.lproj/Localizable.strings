@@ -207,7 +207,9 @@
 "onboarding.developer_beta" = "开发者测试版 %@";
 "onboarding.public_beta" = "公开测试版 %@";
 "onboarding.versions_footer" = "当前设备：iOS %@ (%@)。未列出的版本可能仍可使用，但尚未验证。";
-"onboarding.install_title" = "安装方式检查";
+"onboarding.device_supported" = "支持读取文件";
+"onboarding.device_unsupported" = "不支持读取文件";
+"onboarding.install_title" = "注意";
 "onboarding.install_message" = "容器访问权限取决于 Totorox 的安装方式。";
 "onboarding.install_ok" = "使用有效且未被吊销的证书安装。";
 "onboarding.install_bad" = "请勿使用已被吊销、共享或企业证书。";
