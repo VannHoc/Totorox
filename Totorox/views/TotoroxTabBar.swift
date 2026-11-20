@@ -51,6 +51,9 @@ struct TotoroxTabBar: View {
                     let isSelected = (selectedTab == tab)
 
                     Button {
+                        if tab == .folders {
+                            AppNavigationCoordinator.shared.folderExplorerTargetURL = URL(fileURLWithPath: ContainerStore.appDataRoot)
+                        }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedTab = tab
                         }
