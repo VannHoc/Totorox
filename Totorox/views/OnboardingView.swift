@@ -224,6 +224,7 @@ struct OnboardingView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                versionRow(icon: "checkmark.circle.fill", title: "iOS 16", value: ExploitSupportPolicy.verifiedIOS16Range, color: .green)
                 versionRow(icon: "checkmark.circle.fill", title: "iOS 17", value: ExploitSupportPolicy.verifiedIOS17Range, color: .green)
                 versionRow(icon: "checkmark.circle.fill", title: "iOS 18", value: ExploitSupportPolicy.verifiedIOS18Range, color: .green)
                 versionRow(icon: "checkmark.circle.fill", title: "iOS 26", value: ExploitSupportPolicy.verifiedIOS26Range, color: .green)
@@ -268,6 +269,25 @@ struct OnboardingView: View {
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
             }
+
+            // Simple device support notice (reading files)
+            let v = AppInfo.versionTuple
+            let supported = ExploitSupportPolicy.isSupported(major: v.major, minor: v.minor, patch: v.patch, build: AppInfo.osBuild)
+            HStack(spacing: 12) {
+                Image(systemName: supported ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(supported ? .green : .red)
+                    .font(.title3)
+                Text(supported ? language.text("onboarding.device_supported") : language.text("onboarding.device_unsupported"))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(TotoroxTheme.textPrimary)
+                Spacer()
+            }
+            .padding(12)
+            .background(TotoroxTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke((supported ? Color.green : Color.red).opacity(0.35), lineWidth: 1)
+            )
 
             Text(language.text("onboarding.versions_footer", AppInfo.osVersion, AppInfo.osBuild))
                 .font(.caption)
