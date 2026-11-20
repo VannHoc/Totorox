@@ -33,12 +33,12 @@ struct ForceUpdateView: View {
                     .foregroundStyle(TotoroxTheme.textSecondary)
                     .padding(.horizontal, 36)
 
-                // Popup/bước nhảy: người dùng bấm "Truy cập" để mở link cài đặt.
+                // Popup/bước nhảy: người dùng bấm để mở link cài đặt bản mới.
                 if !downloadURL.isEmpty, let url = URL(string: downloadURL) {
                     Button {
                         UIApplication.shared.open(url, options: [:], completionHandler: nil)
                     } label: {
-                        Text("Truy cập")
+                        Text("Tải bản mới ngay")
                             .font(.headline)
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
