@@ -286,13 +286,9 @@ enum SandboxGrantRouter {
         let group = WorseQuery.grantGroup
         var failure = Int64(WQ_ERR_NO_RESULT)
 
-        // Once Tier 4 is proven, Tier 1 is only a degradation path. On iOS 27 all
-        // three scopes answer the same "no token", so walking them in order costs
-        // three daemon round-trips per failed path for an answer that cannot
-        // change; one scope is enough to notice a recovered Tier 1.
-        let scopes = badQueryBlocked
-            ? Array(badQueryScopes(group: group).suffix(1))
-            : badQueryScopes(group: group)
+        // Try all scopes starting with system class 13 (mobilegestaltcache), which is
+        // the canonical traversal path for bad_query on iOS <= 26, followed by App Group scopes.
+        let scopes = badQueryScopes(group: group)
 
         for scope in scopes {
             let handle = callBadQuery(path: path, scope: scope)
@@ -367,7 +363,7 @@ enum SandboxGrantRouter {
                 // Only a missing target is worth the other flags. -6/-5 are the
                 // same for both variants on iOS 27 (device logs), so retrying
                 // there only burns a second swap + daemon round-trip.
-                if round == 0 && handle == Int64(WQ_ERR_INVALID_PATH) {
+                if round == 0 && WorseQuery.shouldRetryAnyPath(handle) {
                     variant = variant.opposite
                     continue
                 }
