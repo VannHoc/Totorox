@@ -91,6 +91,27 @@ enum SandboxGrantRouter {
         WorseQuery.invalidateGroupCache()
     }
 
+    /// Force Tier 1 (`bad_query`) to be treated as insufficient for the rest of
+    /// the session, so traversal falls through to Tier 4 (`worse_query`).
+    ///
+    /// Used as an enumeration-level fallback (Approach B): on iOS 26+ builds
+    /// where `bad_query` hands back a handle that passes the open probe but does
+    /// not unlock traversal of the app-data root, MCM returns 0/1 containers.
+    /// Calling this flips the `badQueryBlocked` memo without requiring a prior
+    /// Tier 4 success, so `worse_query` is tried first for every following path.
+    /// Only meaningful when `WorseQuery.grantGroup != nil`.
+    static func forceBadQueryBlockedForEnumeration() {
+        stateLock.lock()
+        let wasBlocked = state.badQueryBlocked
+        state.forceBadQueryBlocked()
+        let nowBlocked = state.badQueryBlocked
+        stateLock.unlock()
+        if !wasBlocked && nowBlocked {
+            log("grant: bad_query marked BLOCKED for this session " +
+                "(enumeration returned <= 1 container; tier 4 preferred)")
+        }
+    }
+
     // MARK: - Negative cache
 
     private static func negativeKey(_ path: String, requireWrite: Bool) -> String {

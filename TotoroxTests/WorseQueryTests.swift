@@ -266,6 +266,17 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertEqual(state.lastBadQueryError, 0)
     }
 
+    func testForceBadQueryBlockedFlipsMemoDirectly() {
+        var state = SandboxTierState()
+        XCTAssertFalse(state.badQueryBlocked)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+
+        state.forceBadQueryBlocked()
+        XCTAssertTrue(state.badQueryBlocked)
+        XCTAssertEqual(state.lastBadQueryError, 0)
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
+    }
+
     // MARK: - Variant retry policy
 
     func testRetryPolicyOnlyRetriesMissingTargets() {
