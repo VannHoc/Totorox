@@ -427,7 +427,7 @@ async def health():
 # Tăng MIN_REQUIRED_BUILD trên VPS (env TOTOROX_MIN_BUILD) là ép toàn bộ
 # client cũ bị khoá ngay — không cần deploy code mới.
 # ---------------------------------------------------------------------------
-MIN_REQUIRED_BUILD: int = int(os.environ.get("TOTOROX_MIN_BUILD", "2"))
+MIN_REQUIRED_BUILD: int = int(os.environ.get("TOTOROX_MIN_BUILD", "3"))
 DOWNLOAD_URL: str = os.environ.get(
     "TOTOROX_DOWNLOAD_URL",
     "https://t.me/+wurdGhvbcT0wZGJl",   # TODO: thay bằng link tải IPA thực tế
