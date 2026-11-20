@@ -367,8 +367,7 @@ struct FolderExplorerView: View {
         if let initial = initialURL {
             baseDir = initial
         } else {
-            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            baseDir = docs
+            baseDir = URL(fileURLWithPath: ContainerStore.appDataRoot)
         }
         _currentURL = State(initialValue: baseDir)
     }
@@ -489,7 +488,7 @@ struct FolderExplorerView: View {
                             .clipShape(Circle())
                     }
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 16)
                 .padding(.top, 4)
 
                 // Breadcrumb Navigation Bar
@@ -526,7 +525,7 @@ struct FolderExplorerView: View {
                                 }
                             }
                         }
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, 16)
                     }
                     .onChange(of: breadcrumbs) { newCrumbs in
                         if !newCrumbs.isEmpty {
@@ -597,7 +596,7 @@ struct FolderExplorerView: View {
                                 .padding(.vertical, 14)
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, clipboardItem != nil ? 80 : 20)
                 }
@@ -632,6 +631,10 @@ struct FolderExplorerView: View {
             }
         }
         .onAppear {
+            let appDataURL = URL(fileURLWithPath: ContainerStore.appDataRoot)
+            if AppNavigationCoordinator.shared.folderExplorerTargetURL == nil && currentURL.path != appDataURL.path {
+                currentURL = appDataURL
+            }
             rebuildBreadcrumbs()
             loadCurrentDirectory()
         }
@@ -646,6 +649,14 @@ struct FolderExplorerView: View {
             if let url = targetURL {
                 AppNavigationCoordinator.shared.folderExplorerTargetURL = nil
                 navigateTo(url)
+            }
+        }
+        .onReceive(AppNavigationCoordinator.shared.$selectedTab) { newTab in
+            if newTab == .folders && AppNavigationCoordinator.shared.folderExplorerTargetURL == nil {
+                let appDataURL = URL(fileURLWithPath: ContainerStore.appDataRoot)
+                if currentURL.path != appDataURL.path {
+                    navigateTo(appDataURL)
+                }
             }
         }
         .alert(language.text("folders.new_folder.title"), isPresented: $showNewFolderDialog) {
@@ -764,6 +775,7 @@ struct FolderExplorerView: View {
                         .font(.system(size: 18))
                         .foregroundStyle(iconForegroundColor(for: entry))
                 }
+                .fixedSize()
 
                 // Text Column: Full folder/app title + Bundle ID (no UDID or raw path clutter)
                 VStack(alignment: .leading, spacing: 2) {
@@ -851,6 +863,7 @@ struct FolderExplorerView: View {
                         .frame(width: 26, height: 30)
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
 
                 // Context Menu trigger
                 Menu {
@@ -861,6 +874,7 @@ struct FolderExplorerView: View {
                         .foregroundStyle(TotoroxTheme.textSecondary)
                         .frame(width: 26, height: 30)
                 }
+                .fixedSize()
             }
             .totoroxCard(cornerRadius: 14, padding: 12)
         }

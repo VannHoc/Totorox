@@ -2156,13 +2156,7 @@ struct OverwriteFileView: View {
     }
 }
 
-// MARK: - Sheet Kiểm tra Chi tiết & Khôi phục Lịch sử Ghi đè
-
-private enum OverwriteBackupFilter: Int, CaseIterable {
-    case all = 0
-    case overwritten = 1
-    case added = 2
-}
+// MARK: - Sheet Chi tiết Phiên Sao lưu & Khôi phục Lịch sử Ghi đè (Bảo mật - Không lộ danh sách file)
 
 private struct OverwriteBackupDetailSheet: View {
     @Environment(\.appLanguage) private var language
@@ -2170,8 +2164,6 @@ private struct OverwriteBackupDetailSheet: View {
     @ObservedObject var backupManager: OverwriteBackupManager
     let onDismiss: () -> Void
 
-    @State private var searchQuery: String = ""
-    @State private var filter: OverwriteBackupFilter = .all
     @State private var showRestoreConfirm: Bool = false
     @State private var showDeleteConfirm: Bool = false
     @State private var isRestoring: Bool = false
@@ -2184,213 +2176,178 @@ private struct OverwriteBackupDetailSheet: View {
         backupManager.sessions.first(where: { $0.id == session.id }) ?? session
     }
 
-    private var filteredEntries: [OverwriteBackupEntry] {
-        let base: [OverwriteBackupEntry]
-        switch filter {
-        case .all:
-            base = liveSession.entries
-        case .overwritten:
-            base = liveSession.entries.filter { !$0.wasNewFile }
-        case .added:
-            base = liveSession.entries.filter { $0.wasNewFile }
-        }
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return base }
-        return base.filter {
-            $0.fileName.lowercased().contains(q) || $0.relativePath.lowercased().contains(q)
-        }
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.locale = language.locale
+        formatter.dateFormat = "HH:mm • dd/MM/yyyy"
+        return formatter.string(from: liveSession.createdAt)
     }
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // Header tóm tắt
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill((liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.15))
-                                .frame(width: 44, height: 44)
-                            Image(systemName: liveSession.isRestored ? "checkmark.circle.fill" : "clock.arrow.circlepath")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent)
-                        }
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 16) {
+                    // MARK: - Card Thông tin Tóm tắt Phiên Sao lưu
+                    VStack(spacing: 16) {
+                        // Icon trạng thái lớn + Tên gói bản vá
+                        VStack(spacing: 10) {
+                            ZStack {
+                                Circle()
+                                    .fill((liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.14))
+                                    .frame(width: 64, height: 64)
+                                Image(systemName: liveSession.isRestored ? "checkmark.circle.fill" : "archivebox.fill")
+                                    .font(.system(size: 30, weight: .semibold))
+                                    .foregroundStyle(liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent)
+                            }
 
-                        VStack(alignment: .leading, spacing: 3) {
                             Text(liveSession.patchName)
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.system(size: 18, weight: .bold))
                                 .foregroundStyle(TotoroxTheme.textPrimary)
+                                .multilineTextAlignment(.center)
                                 .lineLimit(2)
 
-                            Text("\(liveSession.appName) (\(liveSession.bundleID))")
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundStyle(TotoroxTheme.mintAccent)
-                                .lineLimit(1)
+                            // Badge trạng thái
+                            Text(liveSession.isRestored ? language.text("overwrite.backup.badge_restored") : language.text("overwrite.backup.badge_ready"))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                                .background((liveSession.isRestored ? Color.blue : TotoroxTheme.mintAccent).opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
 
-                            let backupSize = ByteCountFormatter.string(fromByteCount: liveSession.totalBackupBytes, countStyle: .file)
-                            Text(language.text(
-                                "overwrite.backup.detail_summary",
-                                liveSession.targetSubfolder,
-                                liveSession.overwrittenCount,
-                                liveSession.addedCount,
-                                backupSize
-                            ))
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
+                        Divider()
+                            .overlay(TotoroxTheme.dividerColor)
+
+                        // Bảng thuộc tính chi tiết phiên
+                        VStack(spacing: 12) {
+                            detailRow(
+                                title: language.text("overwrite.target_app"),
+                                value: liveSession.appName,
+                                icon: "app.dashed"
+                            )
+                            detailRow(
+                                title: "Bundle ID",
+                                value: liveSession.bundleID,
+                                icon: "barcode"
+                            )
+                            detailRow(
+                                title: language.text("folders.folder_type"),
+                                value: liveSession.targetSubfolder,
+                                icon: "folder.fill"
+                            )
+                            detailRow(
+                                title: "Thời gian",
+                                value: formattedDate,
+                                icon: "clock.fill"
+                            )
+                            detailRow(
+                                title: language.text("overwrite.backup.filter_overwritten", liveSession.overwrittenCount),
+                                value: "\(liveSession.overwrittenCount) tệp",
+                                icon: "arrow.counterclockwise.circle.fill"
+                            )
+                            detailRow(
+                                title: language.text("overwrite.backup.filter_added", liveSession.addedCount),
+                                value: "\(liveSession.addedCount) tệp",
+                                icon: "plus.circle.fill"
+                            )
+                            detailRow(
+                                title: "Dung lượng sao lưu",
+                                value: ByteCountFormatter.string(fromByteCount: liveSession.totalBackupBytes, countStyle: .file),
+                                icon: "internaldrive.fill"
+                            )
+                        }
+                    }
+                    .padding(18)
+                    .background(TotoroxTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(TotoroxTheme.cardBorderColor, lineWidth: 0.8)
+                    )
+                    .shadow(color: TotoroxTheme.shadowColor, radius: 8, x: 0, y: 3)
+
+                    // MARK: - Card Hành động: Khôi phục & Xóa bản sao lưu
+                    VStack(spacing: 12) {
+                        if isRestoring {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.85)
+                                        .tint(TotoroxTheme.mintAccent)
+                                    Text(language.text("overwrite.backup.restoring_progress", restoreCompleted, max(restoreTotal, 1)))
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(TotoroxTheme.textPrimary)
+                                    Spacer()
+                                }
+                                if restoreTotal > 0 {
+                                    ProgressView(value: Double(restoreCompleted), total: Double(restoreTotal))
+                                        .tint(TotoroxTheme.mintAccent)
+                                }
+                                if !restoreCurrentName.isEmpty {
+                                    Text(restoreCurrentName)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                            .padding(12)
+                            .background(TotoroxTheme.searchBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
 
-                        Spacer()
-                    }
-
-                    // Search bar
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 13))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                        TextField(
-                            "",
-                            text: $searchQuery,
-                            prompt: Text(language.text("overwrite.backup.search_placeholder"))
-                                .foregroundColor(TotoroxTheme.textSecondary)
-                        )
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                        .tint(TotoroxTheme.mintAccent)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
-                        if !searchQuery.isEmpty {
-                            Button {
-                                searchQuery = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                        // Nút Khôi phục về trước khi đè
+                        Button {
+                            showRestoreConfirm = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.uturn.backward.circle.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text(language.text("overwrite.backup.restore_button"))
+                                    .font(.system(size: 15, weight: .bold))
                             }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 38)
-                    .background(TotoroxTheme.searchBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                    // Filter Pills
-                    HStack(spacing: 8) {
-                        filterPill(
-                            title: language.text("overwrite.backup.filter_all", liveSession.totalFilesCount),
-                            option: .all
-                        )
-                        filterPill(
-                            title: language.text("overwrite.backup.filter_overwritten", liveSession.overwrittenCount),
-                            option: .overwritten
-                        )
-                        filterPill(
-                            title: language.text("overwrite.backup.filter_added", liveSession.addedCount),
-                            option: .added
-                        )
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(TotoroxTheme.cardBackground)
-
-                Divider()
-
-                // Danh sách file đã ghi đè để người dùng kiểm tra tên
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 8) {
-                        if filteredEntries.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "doc.text.magnifyingglass")
-                                    .font(.system(size: 32))
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.45))
-                                Text(language.text("overwrite.backup.empty_match"))
-                                    .font(.system(size: 13.5))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                            }
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
-                            .padding(.top, 48)
-                        } else {
-                            ForEach(filteredEntries) { entry in
-                                fileEntryRow(entry)
-                            }
+                            .frame(height: 48)
+                            .background(isRestoring ? TotoroxTheme.disabledBackground : TotoroxTheme.mintAccent)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                }
-                .background(TotoroxTheme.pageBackground)
+                        .disabled(isRestoring)
 
-                Divider()
-
-                // Thanh hành động ghim đáy: Khôi phục / Xóa
-                VStack(spacing: 10) {
-                    if isRestoring {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                ProgressView()
-                                    .scaleEffect(0.85)
-                                    .tint(TotoroxTheme.mintAccent)
-                                Text(language.text("overwrite.backup.restoring_progress", restoreCompleted, max(restoreTotal, 1)))
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(TotoroxTheme.textPrimary)
-                                Spacer()
+                        // Nút Xóa bản sao lưu này
+                        Button {
+                            showDeleteConfirm = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(language.text("overwrite.backup.delete_session"))
+                                    .font(.system(size: 13.5, weight: .semibold))
                             }
-                            if restoreTotal > 0 {
-                                ProgressView(value: Double(restoreCompleted), total: Double(restoreTotal))
-                                    .tint(TotoroxTheme.mintAccent)
-                            }
-                            if !restoreCurrentName.isEmpty {
-                                Text(restoreCurrentName)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(TotoroxTheme.textSecondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
+                            .foregroundStyle(Color.red)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                            .background(Color.red.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .padding(10)
-                        .background(TotoroxTheme.searchBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .disabled(isRestoring)
                     }
-
-                    Button {
-                        showRestoreConfirm = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.uturn.backward.circle.fill")
-                                .font(.system(size: 15, weight: .bold))
-                            Text(language.text("overwrite.backup.restore_button"))
-                                .font(.system(size: 14.5, weight: .bold))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .background(isRestoring ? TotoroxTheme.disabledBackground : TotoroxTheme.mintAccent)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .disabled(isRestoring)
-
-                    Button {
-                        showDeleteConfirm = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text(language.text("overwrite.backup.delete_session"))
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        .foregroundStyle(Color.red)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 38)
-                        .background(Color.red.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .disabled(isRestoring)
+                    .padding(16)
+                    .background(TotoroxTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(TotoroxTheme.cardBorderColor, lineWidth: 0.8)
+                    )
+                    .shadow(color: TotoroxTheme.shadowColor, radius: 8, x: 0, y: 3)
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(TotoroxTheme.cardBackground)
+                .padding(.vertical, 16)
             }
+            .background(TotoroxTheme.pageBackground)
             .navigationTitle(language.text("overwrite.backup.detail_title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2398,6 +2355,7 @@ private struct OverwriteBackupDetailSheet: View {
                     Button(language.text("common.close")) {
                         onDismiss()
                     }
+                    .font(.system(size: 15, weight: .medium))
                     .disabled(isRestoring)
                 }
             }
@@ -2436,71 +2394,25 @@ private struct OverwriteBackupDetailSheet: View {
         }
     }
 
-    private func filterPill(title: String, option: OverwriteBackupFilter) -> some View {
-        let isSelected = (filter == option)
-        return Button {
-            filter = option
-        } label: {
+    private func detailRow(title: String, value: String, icon: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(TotoroxTheme.mintAccent)
+                .frame(width: 20)
+
             Text(title)
-                .font(.system(size: 11.5, weight: .bold))
-                .foregroundStyle(isSelected ? .white : TotoroxTheme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
-                .clipShape(Capsule())
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TotoroxTheme.textSecondary)
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
-        .buttonStyle(.plain)
-    }
-
-    private func fileEntryRow(_ entry: OverwriteBackupEntry) -> some View {
-        let isAdded = entry.wasNewFile
-        let badgeColor: Color = isAdded ? Color.orange : TotoroxTheme.mintAccent
-        let writtenText = ByteCountFormatter.string(fromByteCount: entry.writtenSize, countStyle: .file)
-        let sizeLine: String = {
-            if let orig = entry.originalSize, !isAdded {
-                let origText = ByteCountFormatter.string(fromByteCount: orig, countStyle: .file)
-                return "\(origText) → \(writtenText)"
-            }
-            return "+\(writtenText)"
-        }()
-
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isAdded ? "doc.badge.plus" : "doc.badge.arrow.up")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(badgeColor)
-                .frame(width: 24, height: 24)
-                .padding(.top, 2)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.fileName)
-                    .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Text(entry.relativePath)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-
-                HStack(spacing: 8) {
-                    Text(language.text(isAdded ? "overwrite.backup.entry_added" : "overwrite.backup.entry_overwritten"))
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(badgeColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(badgeColor.opacity(0.12))
-                        .clipShape(Capsule())
-
-                    Text(sizeLine)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .modifier(TotoroxCardModifier(cornerRadius: 12, padding: 10))
     }
 
     private func runRestore() {
