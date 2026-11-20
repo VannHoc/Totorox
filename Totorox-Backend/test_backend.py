@@ -37,6 +37,9 @@ class SignedTestClient(TestClient):
         parsed_path = urlparse(str(url)).path.rstrip("/")
         if parsed_path in backend_main._HMAC_PROTECTED_PATHS:
             headers = dict(kwargs.pop("headers", None) or {})
+            # Giữ tương thích với chốt chặn build: client test luôn gửi build hợp lệ.
+            if "X-App-Build" not in headers and "x-app-build" not in headers:
+                headers["X-App-Build"] = "999"
             if "X-Signature" not in headers and "x-signature" not in headers:
                 ts = str(int(time.time()))
                 nonce = uuid.uuid4().hex
@@ -1215,6 +1218,7 @@ class BackendTestCase(unittest.TestCase):
             "X-Timestamp": now_ts,
             "X-Nonce": ok_nonce,
             "X-Signature": ok_sig,
+            "X-App-Build": "999",
         }
         first_call = self.raw_client.get("/api/v1/auth/me", headers=valid_headers)
         self.assertEqual(first_call.status_code, 200, first_call.text)
@@ -1247,6 +1251,7 @@ class BackendTestCase(unittest.TestCase):
                 "X-Timestamp": slow_ts,
                 "X-Nonce": slow_nonce,
                 "X-Signature": slow_sig,
+                "X-App-Build": "999",
             },
             data={"config_json": json.dumps({"mods": []})},
             files={"file": ("config_bundle.zip", empty_zip.getvalue(), "application/zip")},

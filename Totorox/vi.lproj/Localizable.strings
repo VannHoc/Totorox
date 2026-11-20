@@ -750,3 +750,5 @@
 "overwrite.backup.restore_success" = "Khôi phục thành công! Đã trả lại %lld tệp gốc và xóa %lld tệp mới thêm vào.";
 "overwrite.backup.restore_partial" = "Đã khôi phục %lld tệp gốc, xóa %lld tệp mới thêm, nhưng có %lld tệp gặp lỗi khi ghi.";
 "overwrite.backup.missing_snapshot" = "Không tìm thấy bản sao lưu gốc của tệp này.";
+"overwrite.backup.container_activation_failed" = "Không kích hoạt được container của ứng dụng đích; đã hủy khôi phục để tránh ghi vào đường dẫn cũ.";
+"overwrite.backup.already_restored" = "Phiên sao lưu này đã được khôi phục trước đó.";

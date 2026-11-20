@@ -750,3 +750,5 @@
 "overwrite.backup.restore_success" = "恢复成功！已还原 %lld 个原文件，并删除 %lld 个新增文件。";
 "overwrite.backup.restore_partial" = "已还原 %lld 个原文件、删除 %lld 个新增文件，另有 %lld 个文件写入失败。";
 "overwrite.backup.missing_snapshot" = "找不到该文件的原始备份快照。";
+"overwrite.backup.container_activation_failed" = "无法激活目标应用容器；已中止恢复以避免写入过期路径。";
+"overwrite.backup.already_restored" = "此备份会话已经恢复过。";

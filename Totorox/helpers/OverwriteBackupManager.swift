@@ -400,6 +400,18 @@ public final class OverwriteBackupManager: ObservableObject {
         _ session: OverwriteBackupSession,
         progressHandler: (@Sendable (_ completed: Int, _ total: Int, _ fileName: String) -> Void)? = nil
     ) async -> OverwriteRestoreResult {
+        // Không cho khôi phục lại một phiên đã khôi phục: bản gốc đã được trả về,
+        // chạy lại sẽ đè dữ liệu hiện tại bằng bản cũ và xoá file người dùng tạo sau đó.
+        if session.restoredAt != nil {
+            return OverwriteRestoreResult(
+                restoredOriginalCount: 0,
+                deletedNewCount: 0,
+                failedItems: [FileIOFailureRecord(
+                    url: URL(fileURLWithPath: session.destinationRootPath),
+                    reason: AppLanguage.current.text("overwrite.backup.already_restored")
+                )]
+            )
+        }
         let rootDir = backupsRoot
         let sessionDir = rootDir.appendingPathComponent(session.id.uuidString, isDirectory: true)
         let fm = fileManager
@@ -413,6 +425,7 @@ public final class OverwriteBackupManager: ObservableObject {
                 let destUUID = (session.destinationRootPath as NSString).lastPathComponent
                 let activatedPath = (UUID(uuidString: destUUID) != nil ? MCMActivateContainerPath(2, destUUID, false, &actError) : nil)
                     ?? (!session.bundleID.isEmpty ? MCMActivateContainerPath(2, session.bundleID, false, &actError) : nil)
+                let isContainerBacked = !session.bundleID.isEmpty || UUID(uuidString: destUUID) != nil
                 if let liveRoot = activatedPath, !liveRoot.isEmpty {
                     _ = ContainerStore.ensureContainerAccess(for: liveRoot, requireWrite: true)
                     let baseURL = URL(fileURLWithPath: liveRoot).resolvingSymlinksInPath().standardizedFileURL
@@ -421,6 +434,18 @@ public final class OverwriteBackupManager: ObservableObject {
                         ? baseURL
                         : baseURL.appendingPathComponent(sub, isDirectory: true).standardizedFileURL
                     cacheInvalidationPath = liveRoot
+                } else if isContainerBacked {
+                    // Session thuộc container thật nhưng không kích hoạt được (app bị cài lại/
+                    // đổi UUID). Không fallback vào path cũ để tránh ghi vào path mồ côi
+                    // và báo thành công giả.
+                    return OverwriteRestoreResult(
+                        restoredOriginalCount: 0,
+                        deletedNewCount: 0,
+                        failedItems: [FileIOFailureRecord(
+                            url: URL(fileURLWithPath: session.destinationRootPath),
+                            reason: AppLanguage.current.text("overwrite.backup.container_activation_failed")
+                        )]
+                    )
                 } else {
                     resolvedDestRoot = URL(fileURLWithPath: session.destinationRootPath).standardizedFileURL
                     cacheInvalidationPath = session.destinationRootPath

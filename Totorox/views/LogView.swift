@@ -6,8 +6,12 @@ struct LogView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appLanguage) private var language
     @State private var copied = false
+    @State private var showShare = false
+    @State private var shareFileURL: URL?
 
-    private var shareText: String {
+    /// Builds the full log text. Computed only inside actions (not in `body`)
+    /// so a 100k-line log does not get re-joined on every SwiftUI render.
+    private func buildLogText() -> String {
         var lines: [String] = []
         lines.append("Totorox Log")
         lines.append("iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) — \(AppInfo.machineName)")
@@ -15,6 +19,28 @@ struct LogView: View {
         lines.append("")
         lines.append(contentsOf: appLog.entries)
         return lines.joined(separator: "\n")
+    }
+
+    /// Writes the log to a real `log.txt` in the temp dir and returns its URL.
+    /// Logs can contain container paths, so the temp copy is written with data
+    /// protection enabled and removed again when the share sheet closes.
+    private func prepareShareFile() -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("log.txt")
+        do {
+            let data = Data(buildLogText().utf8)
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// Deletes the temporary share copy; the log itself stays in memory.
+    private func discardShareFile() {
+        if let url = shareFileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        shareFileURL = nil
     }
 
     var body: some View {
@@ -78,6 +104,11 @@ struct LogView: View {
             .background(TotoroxTheme.pageBackground.ignoresSafeArea())
             .navigationTitle(language.text("logs.title"))
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showShare, onDismiss: discardShareFile) {
+                if let url = shareFileURL {
+                    ActivityViewControllerWrapper(activityItems: [url])
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(language.text("logs.clear"), role: .destructive) { appLog.entries.removeAll() }
@@ -85,7 +116,7 @@ struct LogView: View {
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button {
-                        UIPasteboard.general.string = shareText
+                        UIPasteboard.general.string = buildLogText()
                         copied = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                     } label: {
@@ -94,7 +125,12 @@ struct LogView: View {
                     .disabled(appLog.entries.isEmpty)
                     .accessibilityLabel(language.text("logs.copy"))
 
-                    ShareLink(item: shareText) {
+                    Button {
+                        if let url = prepareShareFile() {
+                            shareFileURL = url
+                            showShare = true
+                        }
+                    } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .disabled(appLog.entries.isEmpty)

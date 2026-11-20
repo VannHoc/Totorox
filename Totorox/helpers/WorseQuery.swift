@@ -52,6 +52,16 @@ enum WorseQuery {
         #endif
     }
 
+    /// True when this iOS build has patched `worse_query` (iOS 27.3 beta 2+),
+    /// so Tier 4 cannot grant anything and must stay disabled.
+    static var isPatchedBuild: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return worse_query_is_patched_build()
+        #endif
+    }
+
     /// Toggle value, defaulting to ON when the user never touched it.
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: enabledDefaultsKey) as? Bool ?? true
@@ -92,7 +102,7 @@ enum WorseQuery {
         }
         groupLock.unlock()
 
-        guard isEligibleOnThisDevice, isEnabled, isAPIAvailable else { return nil }
+        guard isEligibleOnThisDevice, isEnabled, isAPIAvailable, !isPatchedBuild else { return nil }
 
         groupLock.lock()
         defer { groupLock.unlock() }

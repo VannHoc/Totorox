@@ -267,6 +267,21 @@ async def verify_api_hmac(request: Request, call_next):
             )
         _REPLAY_NONCES[replay_key] = now + allowed_skew
 
+    # Force-update / kill-switch: bản IPA cũ thiếu hoặc build < MIN_REQUIRED_BUILD
+    # → 426 Upgrade Required, dẫn về link Telegram.
+    raw_build = (request.headers.get("X-App-Build") or "").strip()
+    try:
+        client_build = int(raw_build) if raw_build else 0
+    except ValueError:
+        client_build = 0
+    if client_build < MIN_REQUIRED_BUILD:
+        return JSONResponse(
+            status_code=426,
+            content={
+                "detail": f"Bản ứng dụng của bạn đã quá cũ. Vui lòng tải bản mới tại {DOWNLOAD_URL}.",
+            },
+        )
+
     return await call_next(request)
 
 

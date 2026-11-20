@@ -857,6 +857,9 @@ final class APIService {
         if !hwid.isEmpty {
             request.setValue(hwid, forHTTPHeaderField: "X-HWID")
         }
+        // Build number (CFBundleVersion) để server chặn bản IPA cũ (426).
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        request.setValue(build, forHTTPHeaderField: "X-App-Build")
         request.timeoutInterval = APIService.requestTimeout
         if #available(iOS 14.5, *) {
             request.assumesHTTP3Capable = false
@@ -928,6 +931,11 @@ final class APIService {
             hwid: hwid,
             authorization: auth
         )
+        // Đảm bảo mọi request ký HMAC đều gửi kèm build number (chặn bản IPA cũ).
+        if request.value(forHTTPHeaderField: "X-App-Build") == nil {
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+            request.setValue(build, forHTTPHeaderField: "X-App-Build")
+        }
         request.setValue(timestamp, forHTTPHeaderField: "X-Timestamp")
         request.setValue(nonce, forHTTPHeaderField: "X-Nonce")
         request.setValue(signature, forHTTPHeaderField: "X-Signature")
