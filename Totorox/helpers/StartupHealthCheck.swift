@@ -73,23 +73,32 @@ enum StartupHealthCheck {
         let osText = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
         let patchHint = WorseQuery.isPatchedBuild
         let group = WorseQuery.grantGroup
+        // WQFiles/worse_query chỉ áp dụng iOS 26+. Trên iOS 16–18 lấy danh sách
+        // bằng DarkSword kernel exploit / MHA-C2; thiếu App Group ở đây KHÔNG
+        // phải lỗi (và kernel exploit thực sự không hỗ trợ 18.7.2–18.7.10).
+        let tier4Expected = os.majorVersion >= 26
         var checks: [HealthCheck] = []
 
-        // 1. App Group — không có nhóm thì không hỏi được token nào.
-        checks.append(HealthCheck(
-            key: "App Group",
-            state: group == nil ? .failed : .ok,
-            detail: group ?? "thiếu: bản ký đã bỏ entitlement/provisioning group"))
+        // 1. App Group — chỉ đánh giá trên iOS 26+.
+        let groupState: HealthState = !tier4Expected ? .skipped
+            : group == nil ? .failed : .ok
+        let groupDetail: String = !tier4Expected
+            ? "Tier 4 (worse_query) chỉ dùng iOS 26+; iOS \(osText) dùng kernel exploit/MHA-C2"
+            : group ?? "thiếu: bản ký đã bỏ entitlement/provisioning group"
+        checks.append(HealthCheck(key: "App Group", state: groupState, detail: groupDetail))
 
         // 2. Folder của app khác — lấy từ CM class 1…14 (không cần token).
         let allPaths = Array(ContainerStore.containerManagerPairs().values)
         let home = (NSHomeDirectory() as NSString).resolvingSymlinksInPath
         let sample = Self.sample(allPaths, home: home, count: 8)
-        let foldersState: HealthState = group == nil ? .skipped
+        let foldersState: HealthState = !tier4Expected ? .skipped
+            : group == nil ? .skipped
             : allPaths.isEmpty ? .failed
             : sample.isEmpty ? .failed
             : .ok
-        let foldersDetail = group == nil ? "cần App Group"
+        let foldersDetail = !tier4Expected
+            ? "iOS \(osText): danh sách phụ thuộc kernel exploit (\(allPaths.count) container từ MCM)"
+            : group == nil ? "cần App Group"
             : allPaths.isEmpty ? "không tìm thấy container nào trên thiết bị"
             : "\(allPaths.count) container"
         checks.append(HealthCheck(key: "Other apps' folders",
@@ -118,11 +127,12 @@ enum StartupHealthCheck {
         let namesLoaded = store != nil
         let knownName = store?.displayNameByBundleID["com.apple.mobilesafari"] != nil
         let labeled = sample.filter { store?.bundleIDByContainerPath[$0] != nil }.count
-        let names: HealthState = access == .failed || group == nil
-            ? .skipped
+        let names: HealthState = !tier4Expected ? .skipped
+            : access == .failed || group == nil ? .skipped
             : Self.namesState(namesLoaded: namesLoaded, knownName: knownName,
                               labeled: labeled, sampled: sample.count)
-        let namesDetail = names == .skipped ? "cần sandbox access"
+        let namesDetail = names == .skipped
+            ? (!tier4Expected ? "csstore/WQFiles chỉ dùng iOS 26+" : "cần sandbox access")
             : names == .ok ? "\(labeled)/\(sample.count) folder mẫu có tên"
             : "csstore chưa tải hoặc layout chưa nhận diện (\(labeled)/\(sample.count))"
         checks.append(HealthCheck(key: "App names", state: names, detail: namesDetail))
@@ -131,7 +141,10 @@ enum StartupHealthCheck {
         let tested = (os.majorVersion == 26 || os.majorVersion == 27) && !patchHint
         let versionDetail = patchHint
             ? "iOS \(osText): Apple đã vá worse_query ở 27.3 beta 2"
-            : tested ? osText : "iOS \(osText) chưa được xác minh với bản này"
+            : tested ? osText
+            : os.majorVersion == 18 && os.minorVersion == 7 && os.patchVersion >= 2
+                ? "iOS \(osText): kernel exploit không hỗ trợ 18.7.2–18.7.10 (danh sách app bị giới hạn)"
+                : "iOS \(osText) chưa được xác minh với bản này"
         checks.append(HealthCheck(key: "iOS version",
                                   state: tested ? .ok : .warning,
                                   detail: versionDetail))
