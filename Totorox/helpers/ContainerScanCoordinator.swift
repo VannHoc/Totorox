@@ -38,18 +38,8 @@ enum ContainerScanCoordinator {
     private static let minimumUsefulPaths = 2
     private static let cacheFileName = "totorox-container-scan.plist"
 
-    /// slot 0 = app/extension containers (MCM + csstore), slot 1 = inode-only.
-    private static let slotCount = 2
-
-    private final class Slot {
-        var generation = 0
-        var paths: [String]?
-        var at: TimeInterval = 0
-        var inFlight = false
-    }
-    private static let slots = [Slot(), Slot()]
-    private static let gate = NSLock()
-    private static var globalGeneration = 0
+    // The shared scan slots were removed together with the brute-force inode
+    // fallback: WQFiles only keeps a verified checkpoint here.
 
     // MARK: - Pure decisions (unit-testable)
 
@@ -176,74 +166,10 @@ enum ContainerScanCoordinator {
         try? data.write(to: url, options: .atomic)
     }
 
-    // MARK: - Shared slots
-
-    /// Giành slot. Trả `nil` nếu caller hủy trong lúc chờ worker khác.
-    static func begin(slot: Int, cancelled: (() -> Bool)? = nil) -> Int? {
-        let index = max(0, min(slotCount - 1, slot))
-        while true {
-            if cancelled?() == true { return nil }
-            gate.lock()
-            let s = slots[index]
-            if !s.inFlight {
-                s.inFlight = true
-                let generation = s.generation
-                gate.unlock()
-                return generation
-            }
-            gate.unlock()
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-    }
-
-    /// Cache còn hạn trong slot; dùng để trả kết quả ngay cho caller tiếp theo.
-    static func cachedPaths(slot: Int) -> [String]? {
-        let index = max(0, min(slotCount - 1, slot))
-        gate.lock()
-        defer { gate.unlock() }
-        let s = slots[index]
-        guard let paths = s.paths, !paths.isEmpty,
-              slotIsFresh(at: s.at, now: Date().timeIntervalSinceReferenceDate) else {
-            return nil
-        }
-        return paths
-    }
-
-    static func finish(slot: Int, generation: Int, paths: [String]) {
-        let index = max(0, min(slotCount - 1, slot))
-        gate.lock()
-        let s = slots[index]
-        let current = globalGeneration
-        if s.generation == generation {
-            s.paths = paths
-            s.at = Date().timeIntervalSinceReferenceDate
-        }
-        s.inFlight = false
-        gate.unlock()
-        if generation == current, !paths.isEmpty {
-            record(paths: paths)
-        }
-    }
-
-    static func cancel(slot: Int) {
-        let index = max(0, min(slotCount - 1, slot))
-        gate.lock()
-        slots[index].inFlight = false
-        gate.unlock()
-    }
-
-    /// Refresh của người dùng: làm hết cache RAM + plist, worker cũ không được
-    /// ghi đè kết quả của worker mới (generation check trong `finish`).
+    /// Refresh của người dùng: xoá checkpoint plist. RAM cache đã nằm trong
+    /// ContainerMetadataCache và được invalidate ở luồng gọi khác.
     static func invalidate() {
-        gate.lock()
-        globalGeneration += 1
-        for s in slots {
-            s.generation = globalGeneration
-            s.paths = nil
-            s.at = 0
-        }
-        gate.unlock()
         if let url = cacheURL() { try? FileManager.default.removeItem(at: url) }
-        log("scan: checkpoint + shared slots invalidated")
+        log("scan: checkpoint invalidated")
     }
 }

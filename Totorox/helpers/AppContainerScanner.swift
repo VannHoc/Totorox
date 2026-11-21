@@ -379,21 +379,12 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         let mcmRecords = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
         log("browser: MCM app containers=\(mcmRecords.count) " +
             "classes=\(mcmDetail.map(String.init) ?? "none")")
-        // Enumeration fallback (Approach B): only on iOS builds where bad_query is
-        // genuinely broken (iOS 26.6.2+, iOS 27 release) and there is no kernel
-        // sandbox escape — on those, MCM reports <= 1 container. On iOS 26.0–26.6.1
-        // (incl. 26.6.1, see device log) bad_query still answers, so forcing Tier 4
-        // here only adds a failing worse_query round-trip per container and slows
-        // the scan without improving coverage. Tier 4 must actually be enabled.
-        // NOTE: Do NOT force bad_query blocked here based solely on a short MCM
-        // list. On devices where Tier 4 (worse_query) is non-functional (it returns
-        // WQ_ERR_NO_TOKEN for every path, see device logs), forcing the memo on
-        // makes Tier 4 the primary for every grant while it can never succeed,
-        // doubling the work per container and poisoning the negative cache. Tier 4
-        // must prove itself first (SandboxTierState.noteWorseQuerySuccess only
-        // flips the memo after a strict Tier 4 success), so leave the memo alone
-        // here. Removing this automatic force-block restores the original,
-        // safer ordering: bad_query first, worse_query only as a fallback.
+        // Do NOT force the bad_query-blocked memo from a short MCM list. On
+        // 26.6.2+/iOS 27 bad_query is disabled by OS policy anyway
+        // (SandboxGrantRouter.badQueryUsable == false), so the router already
+        // goes straight to worse_query; forcing the memo would only duplicate
+        // grants and poison the negative cache. On 26.0–26.6.1 bad_query still
+        // works and Tier 4 must prove itself first, so leave the memo alone.
         _ = mcmRecords
         var containerManagerPaths: [String] = []
         containerManagerPaths.reserveCapacity(mcmRecords.count)
@@ -617,10 +608,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 || canOpenRootDirectly
                 // Tier 4 grants traversal of the app-data root exactly like Tier 1
                 // does, so raw UUID containers stay reachable on iOS 26+ sideloads.
-                // Only counts while Tier 4 is actually functional: once it has
-                // been auto-disabled (repeated WQ_ERR_NO_TOKEN) it must not be
-                // treated as a traversal-capable tier.
-                || (WorseQuery.grantGroup != nil && !SandboxGrantRouter.isTier4Disabled)
+                || (WorseQuery.grantGroup != nil)
             self.cacheLock.lock()
             let containerManagerDirs = self.mcmContainerPaths
             self.cacheLock.unlock()

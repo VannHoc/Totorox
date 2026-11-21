@@ -411,11 +411,16 @@ struct SandboxTierState {
 
     /// Attempt order for the next grant.
     ///
+    /// - Tier 1 disabled by OS policy (26.6.2+ / iOS 27): `worse_query` only,
+    ///   or nothing at all when Tier 4 is also unusable. Never fall back to a
+    ///   `bad_query` that returns `-3` for every path.
     /// - memo off: `bad_query` first (the documented order).
     /// - memo on: `worse_query` first, `bad_query` last.
     /// - memo on but Tier 4 unusable: Tier 1 is the only option left, so it is
     ///   still attempted instead of failing the grant outright.
-    func attemptOrder(worseQueryUsable: Bool) -> [SandboxBackend] {
+    func attemptOrder(worseQueryUsable: Bool,
+                      badQueryUsable: Bool = true) -> [SandboxBackend] {
+        guard badQueryUsable else { return worseQueryUsable ? [.worseQuery] : [] }
         guard worseQueryUsable else { return [.badQuery] }
         return badQueryBlocked ? [.worseQuery, .badQuery] : [.badQuery, .worseQuery]
     }

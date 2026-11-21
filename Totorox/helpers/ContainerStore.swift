@@ -384,7 +384,7 @@ enum ContainerStore {
         // extension can make the raw UUID containers readable.
         if KernelExploit.requiresSandboxEscape,
            !KernelExploit.hasSandboxAccess(),
-           (WorseQuery.grantGroup == nil || SandboxGrantRouter.isTier4Disabled) {
+           (WorseQuery.grantGroup == nil) {
             log("patch: metadata scan skipped — sandbox access not active")
             return nil
         }
@@ -626,18 +626,27 @@ enum ContainerStore {
 
         var leasedCachePaths = Set<String>()
         var serviceLookupError: NSString?
-        if let servicePath = MCMActivateContainerPath(
-            10,
-            "com.apple.lsd",
-            false,
-            &serviceLookupError
-        ) {
+        // WQFiles gets this path with a metadata-only query (flags 0, no part):
+        // activation consumes a sandbox token and returns "MCM object contained
+        // no sandbox token" on iOS 27, which used to starve the csstore parser
+        // (total candidates=0). Activation stays as a fallback for older builds.
+        var servicePath = MCMContainerPathForIdentifier(10, "com.apple.lsd", false, &serviceLookupError)
+        var hasLease = false
+        if servicePath == nil {
+            servicePath = MCMActivateContainerPath(10, "com.apple.lsd", false, &serviceLookupError)
+            hasLease = servicePath != nil
+        }
+        if let servicePath = servicePath {
             let cachePath = (servicePath as NSString).appendingPathComponent("Library/Caches")
             addCachePath(cachePath)
-            leasedCachePaths.insert(ContainerDiscoveryMerger.canonicalPath(cachePath))
+            // A metadata-only path carries NO token, so the loop below must still
+            // grant it; only a real activation counts as a lease.
+            if hasLease {
+                leasedCachePaths.insert(ContainerDiscoveryMerger.canonicalPath(cachePath))
+            }
         } else if shouldUseBadQuery {
             let detail = serviceLookupError.map { String($0) } ?? "no path"
-            log("browser: MCM com.apple.lsd activation unavailable detail=\(detail)")
+            log("browser: MCM com.apple.lsd path unavailable detail=\(detail)")
         }
 
         if leasedCachePaths.isEmpty {
@@ -818,7 +827,7 @@ enum ContainerStore {
         return errno == ENOENT
     }
 
-    static func enumerateDirectories(path: String, maxInode: Int64 = 2_000_000) -> [String] {
+    static func enumerateDirectories(path: String) -> [String] {
         let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
         guard clean.hasPrefix("/") else { return [] }
 
@@ -874,13 +883,12 @@ enum ContainerStore {
             }
         }
 
-        // 4a. Checkpoint bền vững từ lần quét trước (port WQFiles scan cache).
-        //     Trên iOS 27 POSIX/MCM/csstore có thể cùng bị chặn; không vì thế mà
-        //     quét lại 2.000.000 inode nếu ta đã có danh sách đã verify.
-        // Port WQFiles (checkpoint + slot) chỉ bật iOS 26+; iOS 18 dùng đường
-        // inode fallback cũ để tránh stack overflow đã thấy trên 18.7.10.
+        // 4. Checkpoint bền vững từ lần quét trước (port WQFiles scan cache).
+        //    WQFiles lấy danh sách ban đầu từ MCM / csstore / traversal grant;
+        //    fsgetpath chỉ được dùng để VERIFY từng path đã lưu (fsid + inode) —
+        //    xem ContainerScanCoordinator.cachedPaths(). Không có bước quét
+        //    2.000.000 inode thô: đó là fallback cũ của Totorox, đã bỏ.
         let useWQScanBridge = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
-
         if useWQScanBridge, isAppDataRoot, let remembered = ContainerScanCoordinator.cachedPaths() {
             let underRoot = remembered.filter { $0.hasPrefix(clean + "/") }
             if !underRoot.isEmpty {
@@ -890,51 +898,8 @@ enum ContainerStore {
             }
         }
 
-        // 4b. inode fallback — chạy dưới slot dùng chung: caller cùng lúc chờ
-        //     worker đang quét thay vì mỗi người tự tốn CPU (TTL 600s/generation).
-        let slot = isAppDataRoot ? 0 : 1
-        let generation: Int? = useWQScanBridge ? ContainerScanCoordinator.begin(slot: slot) : nil
-        if useWQScanBridge && generation == nil {
-            log("enumerate: scan slot \(slot) busy/cancelled for \(clean)")
-            return []
-        }
-        defer { if useWQScanBridge { ContainerScanCoordinator.cancel(slot: slot) } }
-
-        if useWQScanBridge, let generation,
-           let shared = ContainerScanCoordinator.cachedPaths(slot: slot) {
-            let underRoot = shared.filter { $0.hasPrefix(clean + "/") }
-            if !underRoot.isEmpty {
-                if isAppDataRoot { ContainerMetadataCache.shared.cachedFilesystemDirs = underRoot }
-                ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: shared)
-                return underRoot
-            }
-        }
-
-        // Fallback to bad_query inode enumeration — only useful when a tier
-        // can actually grant (bad_query supported or Tier 4 usable).
-        if !shouldUseBadQuery && (WorseQuery.grantGroup == nil || SandboxGrantRouter.isTier4Disabled) {
-            log("enumerate: no usable tier for \(clean) — skipping inode scan")
-            return []
-        }
-        var pathC = clean.utf8CString.map { Int8($0) }
-        guard let result = bad_query_list(&pathC, maxInode) else {
-            log("enumerate: NULL for \(clean)")
-            return []
-        }
-        defer { free(result) }
-        let list = String(cString: result).components(separatedBy: "\n").filter { !$0.isEmpty }
-        if !list.isEmpty {
-            if isAppDataRoot {
-                ContainerMetadataCache.shared.cachedFilesystemDirs = list
-            }
-            log("enumerate: inode fallback for \(clean) -> \(list.count) entries")
-        } else {
-            log("enumerate: FileManager+inode unavailable for \(clean)")
-        }
-        if let generation {
-            ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: list)
-        }
-        return list
+        log("enumerate: no source for \(clean) — MCM/csstore/traversal all empty")
+        return []
     }
 
     static func enumerateDirectoriesWithTraversalGrant(path: String) -> [String] {
@@ -1360,14 +1325,15 @@ enum ContainerStore {
         guard handle >= 0 else { return }
         grantHandlesLock.lock()
         if let p = path {
-            let clean = ContainerMetadataCache.canonicalPath(p)
+            // Must match the key used in grantContainerAccess(): it inserts with
+            // ContainerDiscoveryMerger.canonicalPath (/var -> /private/var).
+            // ContainerMetadataCache.canonicalPath does the INVERSE (/private/var
+            // -> /var), so using it here left the handle tracked forever — which
+            // defeated the LRU eviction and caused "Scene was invalidated".
+            let clean = ContainerDiscoveryMerger.canonicalPath(p)
             activeGrantHandles.removeValue(forKey: clean)
-            activeGrantHandles.removeValue(forKey: "\(clean)#ro")
-            activeGrantHandles.removeValue(forKey: "\(clean)#rw")
             grantedAccessMask.removeValue(forKey: clean)
-            grantedAccessMask.removeValue(forKey: "\(clean)#ro")
-            grantedAccessMask.removeValue(forKey: "\(clean)#rw")
-            grantHandlesOrder.removeAll { $0 == clean || $0 == "\(clean)#ro" || $0 == "\(clean)#rw" }
+            grantHandlesOrder.removeAll { $0 == clean }
         } else {
             var keysToRemove: [String] = []
             for (k, v) in activeGrantHandles where v == handle {
@@ -1494,7 +1460,7 @@ enum ContainerStore {
         let dirs: [String]
         if grantedDirectories.isEmpty {
             dirs = enumerateDirectories(path: appDataRoot)
-            log("browser: filesystem root=\(appDataRoot) inode fallback enumerated \(dirs.count) containers")
+            log("browser: filesystem root=\(appDataRoot) no traversal grant, POSIX enumerated \(dirs.count) containers")
         } else {
             dirs = grantedDirectories
             log("browser: filesystem root=\(appDataRoot) traversal enumerated \(dirs.count) containers")
