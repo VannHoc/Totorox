@@ -224,6 +224,30 @@ enum WorseQuery {
         worse_query_release(handle)
     }
 
+    /// Port of `wq_reset_access_cache`: dời lock lạ sang quarantine rồi đưa
+    /// `Library/Caches` về thư mục thường (rename, không xoá dữ liệu).
+    /// Reference chỉ tự sửa tối đa một lần mỗi phút — giữ cùng nhịp ở đây.
+    private static let repairLock = NSLock()
+    private static var lastRepairAt: Date?
+
+    static func resetAccessCache(group: String) -> Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        repairLock.lock()
+        let now = Date()
+        if let last = lastRepairAt, now.timeIntervalSince(last) < 60 {
+            repairLock.unlock()
+            return false
+        }
+        lastRepairAt = now
+        repairLock.unlock()
+        let ok = group.withCString { worse_query_reset_access_cache($0) }
+        log("worse_query: access cache reset \(ok ? "ok" : "FAILED: " + lastError())")
+        return ok
+        #endif
+    }
+
     /// Mirrors the retry policy inside `worse_query_try_both` so the decision is
     /// unified across C and Swift callers and covered by unit tests in all build configurations.
     static func shouldRetryAnyPath(_ code: Int64) -> Bool {
