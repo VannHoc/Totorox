@@ -66,7 +66,8 @@ jobs:
             -archivePath build/Totorox.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym
 
       - name: Package Unsigned IPA
         run: |
@@ -82,6 +83,13 @@ jobs:
         with:
           name: Totorox-3.0-unsigned-ipa
           path: Totorox-3.0-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload dSYM (crash symbolication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Totorox-3.0-dSYM
+          path: build/Totorox.xcarchive/dSYMs/*.dSYM
           if-no-files-found: error
 
       - name: Upload Test Results
