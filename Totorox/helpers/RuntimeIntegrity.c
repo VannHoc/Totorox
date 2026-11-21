@@ -72,16 +72,11 @@ void totorox_harden_runtime(void) {
         return;
     }
 
-    static const uint8_t ptr_enc[6] = { 0x42, 0x50, 0xec, 0xa0, 0x68, 0x02 };
-    static const uint8_t ptr_msk[6] = { 0x32, 0x24, 0x9e, 0xc1, 0x0b, 0x67 };
-    char sym_name[7];
-    ttx_xor_decode(ptr_enc, ptr_msk, sizeof(ptr_enc), sym_name);
-
-    typedef int (*ttx_ptrace_fn)(int, pid_t, void *, int);
-    ttx_ptrace_fn pfn = (ttx_ptrace_fn)dlsym(RTLD_DEFAULT, sym_name);
-    if (pfn != NULL) {
-        pfn(31 /* PT_DENY_ATTACH */, 0, NULL, 0);
-    }
+    // NOTE: PT_DENY_ATTACH is intentionally NOT called here. On sideloaded /
+    // normal-signing builds (especially iOS 18.x) the kernel can terminate the
+    // process when ptrace(PT_DENY_ATTACH) is issued without the proper debugger
+    // entitlements, which surfaced as a launch crash on iOS 18.7.10. The
+    // remaining checks below are log-only and never exit the process.
 
     if (ttx_is_debugger_attached() || ttx_has_forbidden_dyld()) {
         /* Do not _exit(0) silently: a silent exit leaves no crash log and
