@@ -351,4 +351,49 @@ final class WorseQueryTests: XCTestCase {
             existingDir.standardizedFileURL.path
         )
     }
+
+    // MARK: - Startup health check (pure decisions)
+
+    func testHealthAccessState() {
+        XCTAssertEqual(StartupHealthCheck.accessState(opened: 0, sampled: 0), .skipped)
+        XCTAssertEqual(StartupHealthCheck.accessState(opened: 0, sampled: 8), .failed)
+        XCTAssertEqual(StartupHealthCheck.accessState(opened: 3, sampled: 8), .warning)
+        XCTAssertEqual(StartupHealthCheck.accessState(opened: 4, sampled: 8), .ok)
+    }
+
+    func testHealthNamesState() {
+        XCTAssertEqual(
+            StartupHealthCheck.namesState(namesLoaded: false, knownName: false, labeled: 0, sampled: 8),
+            .warning
+        )
+        XCTAssertEqual(
+            StartupHealthCheck.namesState(namesLoaded: true, knownName: false, labeled: 8, sampled: 8),
+            .warning
+        )
+        XCTAssertEqual(
+            StartupHealthCheck.namesState(namesLoaded: true, knownName: true, labeled: 3, sampled: 8),
+            .warning
+        )
+        XCTAssertEqual(
+            StartupHealthCheck.namesState(namesLoaded: true, knownName: true, labeled: 4, sampled: 8),
+            .ok
+        )
+    }
+
+    func testHealthWorstState() {
+        let checks = [
+            HealthCheck(key: "a", state: .ok, detail: ""),
+            HealthCheck(key: "b", state: .warning, detail: ""),
+            HealthCheck(key: "c", state: .failed, detail: "")
+        ]
+        XCTAssertEqual(StartupHealthCheck.worst(checks), .failed)
+        XCTAssertEqual(StartupHealthCheck.worst([]), .ok)
+    }
+
+    func testHealthSampleExcludesOwnHome() {
+        let paths = (0..<20).map { "/private/var/mobile/Containers/Data/Application/\($0)" }
+        let sampled = StartupHealthCheck.sample(paths, home: paths[3], count: 5)
+        XCTAssertEqual(sampled.count, 5)
+        XCTAssertFalse(sampled.contains(paths[3]))
+    }
 }

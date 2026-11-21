@@ -158,6 +158,10 @@ class AppState: ObservableObject {
             WorseQuery.recoverAllGroups()
             let hasAccess = KernelExploit.hasSandboxAccess()
             log("app: early sandbox access status: \(hasAccess ? "ACTIVE" : "MHA-C2")")
+            // Log-only health check (logic ported from WQHealth); no UI changes.
+            // Reports patched builds / missing App Group / dead sandbox access
+            // with a reason instead of leaving the user with an empty app list.
+            StartupHealthCheck.run()
             AppContainerScanner.shared.prewarmOnLaunch()
         }
     }
