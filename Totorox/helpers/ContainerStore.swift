@@ -324,8 +324,11 @@ enum ContainerStore {
         _uuidMap?[cleanUUID.lowercased()] = cleanBundleID
     }
 
+    /// bad_query chỉ có ý nghĩa trên iOS 26+ (nơi WQFiles/worse_query là tầng
+    /// chính). iOS 16–18 dùng DarkSword kernel exploit / MHA-C2 + truy cập trực
+    /// tiếp, không gọi bad_query ở bất kỳ đâu.
     private static var shouldUseBadQuery: Bool {
-        return true
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
     }
     private static let applicationBundleRoots: [(path: String, nested: Bool)] = [
         ("/var/containers/Bundle/Application", true),
