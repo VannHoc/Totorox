@@ -653,6 +653,13 @@ enum ContainerStore {
 
         var identifiers: [String] = []
         var seenIdentifiers = Set<String>()
+        // WQFiles csstore snapshot: map trực tiếp UUID→path, tên app và group id.
+        var lsPaths: [String: String] = [:]
+        var lsNames: [String: String] = [:]
+        var lsBundleNames: [String: String] = [:]
+        var lsBundlePaths: [String: String] = [:]
+        var lsGroups: [String: String] = [:]
+        var lsLayouts: [String] = []
         let maximumCandidateCount = 65_536
 
         for cachePath in cachePaths where identifiers.count < maximumCandidateCount {
@@ -680,19 +687,77 @@ enum ContainerStore {
                     continue
                 }
                 let remaining = maximumCandidateCount - identifiers.count
-                let extracted = LaunchServicesCandidateExtractor.identifiers(from: data, limit: remaining)
+                let snapshot = LaunchServicesStoreParser.parse(data)
+                let extracted = snapshot?.identifiers
+                    ?? LaunchServicesCandidateExtractor.identifiers(from: data, limit: remaining)
                 for identifier in extracted where seenIdentifiers.insert(identifier).inserted {
                     identifiers.append(identifier)
                 }
-                log("browser: LaunchServices store \(name) bytes=\(data.count) candidates=\(identifiers.count)")
+                if let snapshot {
+                    for (path, bundleID) in snapshot.bundleIDByContainerPath where lsPaths[path] == nil {
+                        lsPaths[path] = bundleID
+                    }
+                    for (bundleID, name) in snapshot.displayNameByBundleID where lsNames[bundleID] == nil {
+                        lsNames[bundleID] = name
+                    }
+                    for (bundleID, name) in snapshot.bundleNameByBundleID where lsBundleNames[bundleID] == nil {
+                        lsBundleNames[bundleID] = name
+                    }
+                    for (bundleID, path) in snapshot.bundlePathByBundleID where lsBundlePaths[bundleID] == nil {
+                        lsBundlePaths[bundleID] = path
+                    }
+                    for (path, groupID) in snapshot.groupIDByContainerPath where lsGroups[path] == nil {
+                        lsGroups[path] = groupID
+                    }
+                    lsLayouts.append("\(name):\(snapshot.layout)")
+                }
+                log("browser: LaunchServices store \(name) bytes=\(data.count) candidates=\(identifiers.count) " +
+                    "layout=\(snapshot?.layout ?? "unknown") mapped=\(snapshot?.bundleIDByContainerPath.count ?? 0)")
             }
         }
 
         if !identifiers.isEmpty {
             ContainerMetadataCache.shared.cachedLaunchServicesIDs = identifiers
         }
+        if !lsPaths.isEmpty || !lsNames.isEmpty || !lsGroups.isEmpty {
+            var pathByBundleID: [String: String] = [:]
+            for (path, bundleID) in lsPaths where pathByBundleID[bundleID] == nil {
+                pathByBundleID[bundleID] = path
+            }
+            let snapshot = LSStoreSnapshot(
+                identifiers: identifiers,
+                bundleIDByContainerPath: lsPaths,
+                pathByBundleID: pathByBundleID,
+                displayNameByBundleID: lsNames,
+                bundleNameByBundleID: lsBundleNames,
+                bundlePathByBundleID: lsBundlePaths,
+                groupIDByContainerPath: lsGroups,
+                layout: lsLayouts.joined(separator: ", "),
+                containerPathCount: lsPaths.count
+            )
+            ContainerMetadataCache.shared.cachedLSStore = snapshot
+        }
         log("browser: LaunchServices store total candidates=\(identifiers.count)")
         return identifiers
+    }
+
+    /// Đường dẫn data container lấy trực tiếp từ csstore (không cần MCM activate).
+    static func launchServicesContainerPath(for bundleID: String) -> String? {
+        guard !bundleID.isEmpty else { return nil }
+        return ContainerMetadataCache.shared.cachedLSStore?.pathByBundleID[bundleID]
+    }
+
+    /// Tên app từ csstore, dùng khi metadata của container bị sandbox chặn.
+    static func launchServicesDisplayName(for bundleID: String) -> String? {
+        guard !bundleID.isEmpty else { return nil }
+        guard let store = ContainerMetadataCache.shared.cachedLSStore else { return nil }
+        return store.displayNameByBundleID[bundleID] ?? store.bundleNameByBundleID[bundleID]
+    }
+
+    /// Group id của App Group container từ csstore.
+    static func launchServicesGroupID(forContainerPath path: String) -> String? {
+        let canonical = ContainerDiscoveryMerger.canonicalPath(path)
+        return ContainerMetadataCache.shared.cachedLSStore?.groupIDByContainerPath[canonical]
     }
 
     static func isApplicationContainerPath(_ path: String) -> Bool {

@@ -131,6 +131,16 @@ enum LaunchServicesCandidateExtractor {
     static func identifiers(from data: Data, limit: Int = 65_536) -> [String] {
         guard limit > 0, !data.isEmpty else { return [] }
 
+        // WQFiles 0.9.19 csstore parser: đọc đúng record/string của store.
+        // Giữ bộ lọc byte cũ làm fallback khi store dùng layout chưa biết.
+        if let snapshot = LaunchServicesStoreParser.parse(data) {
+            let parsed = snapshot.identifiers.filter {
+                ContainerBundleCandidateResolver.isValidBundleIdentifier($0) &&
+                !$0.hasPrefix("group.") && !$0.hasPrefix("systemgroup.")
+            }
+            if !parsed.isEmpty { return Array(parsed.prefix(limit)) }
+        }
+
         return data.withUnsafeBytes { rawBuffer in
             let bytes = rawBuffer.bindMemory(to: UInt8.self)
             var result: [String] = []

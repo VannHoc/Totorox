@@ -56,6 +56,9 @@ final class ContainerMetadataCache: @unchecked Sendable {
     private var directorySizes: [String: DirectorySizeResult] = [:]
     private var _cachedFilesystemDirs: [String]? = nil
     private var _cachedLaunchServicesIDs: [String]? = nil
+    /// Snapshot đầy đủ của LaunchServices csstore (tên app + UUID→path + group id).
+    /// Port từ WQFiles 0.9.19; chỉ là cache nền, không liên quan giao diện.
+    private var _cachedLSStore: LSStoreSnapshot? = nil
     private let iconCache = NSCache<NSString, UIImage>()
 
     private init() {
@@ -227,6 +230,19 @@ final class ContainerMetadataCache: @unchecked Sendable {
             lock.lock()
             defer { lock.unlock() }
             _cachedLaunchServicesIDs = newValue
+        }
+    }
+
+    var cachedLSStore: LSStoreSnapshot? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _cachedLSStore
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _cachedLSStore = newValue
         }
     }
 

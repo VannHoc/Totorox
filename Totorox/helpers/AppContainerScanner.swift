@@ -553,13 +553,27 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             )
 
             var newlyResolvedInStage2 = 0
+            var directPathCount = 0
             for candidateID in prioritizedCandidates {
                 guard ContainerStore.isValidAppBundleID(candidateID) else { continue }
                 if self.getCachedInfo(forBundleID: candidateID) != nil { continue }
 
-                var actError: NSString? = nil
-                if let path = MCMActivateContainerPath(2, candidateID, false, &actError),
-                   ContainerStore.isApplicationContainerPath(path) {
+                // WQFiles csstore map: UUID/identifier → path trực tiếp. Chỉ gọi
+                // MCM activate cho candidate mà csstore không trả đường dẫn.
+                var resolvedPath: String?
+                if let direct = ContainerStore.launchServicesContainerPath(for: candidateID),
+                   ContainerStore.isApplicationContainerPath(direct) {
+                    resolvedPath = direct
+                    directPathCount += 1
+                } else {
+                    var actError: NSString? = nil
+                    if let activated = MCMActivateContainerPath(2, candidateID, false, &actError),
+                       ContainerStore.isApplicationContainerPath(activated) {
+                        resolvedPath = activated
+                    }
+                }
+
+                if let path = resolvedPath {
                     ContainerMetadataCache.shared.markBundleActivated(candidateID)
                     let meta = ContainerStore.readContainerMetadata(containerPath: path)
                     let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
@@ -568,7 +582,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                     if self.registerResolvedApp(
                         bundleID: actualBundleID,
                         containerPath: path,
-                        preferredName: meta?.displayName
+                        preferredName: meta?.displayName ?? ContainerStore.launchServicesDisplayName(for: actualBundleID)
                     ) != nil {
                         newlyResolvedInStage2 += 1
                         if newlyResolvedInStage2 == 10 || newlyResolvedInStage2.isMultiple(of: 25) {
@@ -582,6 +596,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                     }
                 }
             }
+
+            log("browser: stage2 resolved=\(newlyResolvedInStage2) direct_csstore=\(directPathCount) " +
+                "candidates=\(prioritizedCandidates.count)")
 
             // STAGE 3: Filesystem Container Discovery (only when a tier can grant raw
             // UUID paths: kernel sandbox escape, iOS < 26, a directly readable root,
