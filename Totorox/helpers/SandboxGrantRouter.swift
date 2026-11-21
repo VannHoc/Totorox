@@ -416,9 +416,18 @@ enum SandboxGrantRouter {
                 log("grant: worse_query failed path=\(path) group=\(group) " +
                     "variant=\(variant.label) code=\(handle) \(WorseQuery.errorName(handle)) " +
                     "detail=\(WorseQuery.lastError())")
-                // Only a missing target is worth the other flags. -6/-5 are the
-                // same for both variants on iOS 27 (device logs), so retrying
-                // there only burns a second swap + daemon round-trip.
+
+                // Reference: khi cache không dùng được (-5 trong WQFiles) thì sửa
+                // rồi hỏi lại cùng variant một lần trước khi đổi flags.
+                if handle == Int64(WQ_ERR_CACHE_UNUSABLE), round == 0 {
+                    let repaired = WorseQuery.resetAccessCache(group: group)
+                    log("grant: access cache repaired automatically" +
+                        (repaired ? "" : " — FAILED: " + WorseQuery.lastError()))
+                    if repaired { continue }
+                }
+
+                // Chỉ thử flags kia khi lỗi có thể do flags gây ra. -6/-5 cho cả
+                // hai variant trên iOS 27 (log thiết bị) nên không tốn swap thứ 2.
                 if round == 0 && WorseQuery.shouldRetryAnyPath(handle) {
                     variant = variant.opposite
                     continue
@@ -448,7 +457,9 @@ enum SandboxGrantRouter {
                 "errno=\(-accessError)")
             // Consumed but denied: exactly the case the reference retries with
             // the other flags ("trying the other flags").
-            if round == 0 && (accessError == -Int64(EPERM) || accessError == -Int64(EACCES)) {
+            // Reference: chỉ EPERM là "token không giúp được"; EACCES là quyền
+            // POSIX thường (container root-owned) nên verify ở trên đã coi là OK.
+            if round == 0 && accessError == -Int64(EPERM) {
                 variant = variant.opposite
                 continue
             }
@@ -611,11 +622,11 @@ enum SandboxGrantRouter {
     private static func openProbeError(_ path: String, requireWrite: Bool = false) -> Int64 {
         var st = stat()
         let isDir = (lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR)
-        var flags = O_RDONLY | O_CLOEXEC
+        var flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW
         if isDir {
             flags |= O_DIRECTORY
         } else if requireWrite {
-            flags = O_RDWR | O_CLOEXEC
+            flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW
         }
         errno = 0
         let fd = open(path, flags)
@@ -624,6 +635,9 @@ enum SandboxGrantRouter {
             return 0
         }
         let code = errno
+        // wq_grant_opens: EACCES là quyền POSIX của file/folder root-owned,
+        // token không thay đổi được → không coi là lỗi sandbox (reference).
+        if code == EACCES { return 0 }
         return -Int64(code == 0 ? EPERM : code)
     }
 
