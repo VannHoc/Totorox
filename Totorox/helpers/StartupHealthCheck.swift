@@ -83,8 +83,7 @@ enum StartupHealthCheck {
 
         // 2. Folder của app khác — lấy từ CM class 1…14 (không cần token).
         let allPaths = Array(ContainerStore.containerManagerPairs().values)
-        let home = FileManager.default.homeDirectoryForCurrentUser
-            .resolvingSymlinksInPath().path
+        let home = (NSHomeDirectory() as NSString).resolvingSymlinksInPath
         let sample = Self.sample(allPaths, home: home, count: 8)
         let foldersState: HealthState = group == nil ? .skipped
             : allPaths.isEmpty ? .failed
@@ -115,7 +114,7 @@ enum StartupHealthCheck {
         checks.append(HealthCheck(key: "Sandbox access", state: access, detail: accessDetail))
 
         // 4. App names — dùng cache csstore có sẵn, không tải mới ở đây.
-        let store = ContainerStore.cachedLSStore
+        let store = ContainerMetadataCache.shared.cachedLSStore
         let namesLoaded = store != nil
         let knownName = store?.displayNameByBundleID["com.apple.mobilesafari"] != nil
         let labeled = sample.filter { store?.bundleIDByContainerPath[$0] != nil }.count
