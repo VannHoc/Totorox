@@ -197,6 +197,10 @@ enum ContainerStore {
     /// Bitmask of verified access capabilities per canonical path/container root: bit 0 = read, bit 1 = write.
     private static var grantedAccessMask: [String: UInt8] = [:]
     private static let grantHandlesLock = NSLock()
+    /// Ngăn vòng lặp đệ quy giữa readContainerMetadata (fallback nội dung) và
+    /// ensureContainerAccess khi metadata plist không đọc được.
+    private static let metadataFallbackLock = NSLock()
+    private static var metadataFallbackInProgress: Set<String> = []
     private static let cachedHomeCanonical: String = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
 
     /// `identifier -> container path` for every app-data container, taken from a
@@ -1125,12 +1129,25 @@ enum ContainerStore {
         if plistData == nil,
            UUID(uuidString: uuid) != nil,
            isApplicationContainerPath(cleanContainer) {
-            if let guessed = bundleIdentifierFromContainerContents(cleanContainer),
-               isValidAppBundleID(guessed, uuid: uuid) {
-                setCachedMapping(uuid: uuid, bundleID: guessed)
-                let displayName = applicationBundleMetadataCatalog()[guessed]?.displayName ?? ""
-                log("browser: content-identified \(uuid) -> \(guessed)")
-                return ContainerMetadata(bundleID: guessed, displayName: displayName)
+            // Guard chống re-enter: nếu path này đang được resolve ở tầng trên
+            // trong cùng luồng, bỏ qua fallback nội dung thay vì đi lại vòng
+            // metadata → grant → enumerate → metadata (đã gây stack overflow).
+            metadataFallbackLock.lock()
+            let started = metadataFallbackInProgress.insert(cleanContainer).inserted
+            metadataFallbackLock.unlock()
+            if started {
+                defer {
+                    metadataFallbackLock.lock()
+                    metadataFallbackInProgress.remove(cleanContainer)
+                    metadataFallbackLock.unlock()
+                }
+                if let guessed = bundleIdentifierFromContainerContents(cleanContainer),
+                   isValidAppBundleID(guessed, uuid: uuid) {
+                    setCachedMapping(uuid: uuid, bundleID: guessed)
+                    let displayName = applicationBundleMetadataCatalog()[guessed]?.displayName ?? ""
+                    log("browser: content-identified \(uuid) -> \(guessed)")
+                    return ContainerMetadata(bundleID: guessed, displayName: displayName)
+                }
             }
         }
 
@@ -1164,7 +1181,11 @@ enum ContainerStore {
         return ContainerMetadata(bundleID: cleanBundleID, displayName: displayName)
     }
 
-    static func enumerateDirectoryNames(path: String) -> [String] {
+    /// `allowTraversalGrant` phải là false khi hàm này được gọi từ luồng xác định
+    /// tên app bằng nội dung container: grant → ensureContainerAccess → đọc
+    /// metadata → lại gọi enumerateDirectoryNames, tạo vòng lặp vô hạn (crash
+    /// EXC_BAD_ACCESS/SIGBUS stack overflow trên iOS 18.7.10).
+    static func enumerateDirectoryNames(path: String, allowTraversalGrant: Bool = true) -> [String] {
         let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
         // Missing folder: nothing to list, and a grant would only return the
         // App-Group token (see SandboxGrantRouter.grant).
@@ -1186,9 +1207,11 @@ enum ContainerStore {
         if let items = try? FileManager.default.contentsOfDirectory(atPath: clean), !items.isEmpty {
             return items.filter { !$0.hasPrefix(".") }
         }
-        let dirs = enumerateDirectoriesWithTraversalGrant(path: clean)
-        if !dirs.isEmpty {
-            return dirs.map { ($0 as NSString).lastPathComponent }.filter { !$0.isEmpty && !$0.hasPrefix(".") }
+        if allowTraversalGrant {
+            let dirs = enumerateDirectoriesWithTraversalGrant(path: clean)
+            if !dirs.isEmpty {
+                return dirs.map { ($0 as NSString).lastPathComponent }.filter { !$0.isEmpty && !$0.hasPrefix(".") }
+            }
         }
         return []
     }
@@ -1216,7 +1239,7 @@ enum ContainerStore {
         var seen = Set<String>()
         for relative in relativeDirs {
             let dir = (containerPath as NSString).appendingPathComponent(relative)
-            for name in enumerateDirectoryNames(path: dir) {
+            for name in enumerateDirectoryNames(path: dir, allowTraversalGrant: false) {
                 var candidate = name
                 if candidate.hasSuffix(".plist") {
                     candidate = String(candidate.dropLast(".plist".count))
