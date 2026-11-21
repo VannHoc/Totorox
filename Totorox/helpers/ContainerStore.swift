@@ -826,6 +826,7 @@ enum ContainerStore {
         if let subdirs = posixSubdirectories(at: clean), !subdirs.isEmpty {
             if isAppDataRoot {
                 ContainerMetadataCache.shared.cachedFilesystemDirs = subdirs
+                ContainerScanCoordinator.record(paths: subdirs)
             }
             return subdirs
         }
@@ -835,6 +836,7 @@ enum ContainerStore {
             let list = names.map { (clean as NSString).appendingPathComponent($0) }
             if isAppDataRoot {
                 ContainerMetadataCache.shared.cachedFilesystemDirs = list
+                ContainerScanCoordinator.record(paths: list)
             }
             return list
         }
@@ -856,9 +858,38 @@ enum ContainerStore {
             }
         }
 
-        // 4. Fallback to bad_query inode enumeration — only useful when a tier
-        //    can actually grant (bad_query supported or Tier 4 usable). On a
-        //    device with no usable tier this loop just burns CPU (2M inodes).
+        // 4a. Checkpoint bền vững từ lần quét trước (port WQFiles scan cache).
+        //     Trên iOS 27 POSIX/MCM/csstore có thể cùng bị chặn; không vì thế mà
+        //     quét lại 2.000.000 inode nếu ta đã có danh sách đã verify.
+        if isAppDataRoot, let remembered = ContainerScanCoordinator.cachedPaths() {
+            let underRoot = remembered.filter { $0.hasPrefix(clean + "/") }
+            if !underRoot.isEmpty {
+                ContainerMetadataCache.shared.cachedFilesystemDirs = underRoot
+                log("enumerate: checkpoint for \(clean) -> \(underRoot.count) entries")
+                return underRoot
+            }
+        }
+
+        // 4b. inode fallback — chạy dưới slot dùng chung: caller cùng lúc chờ
+        //     worker đang quét thay vì mỗi người tự tốn CPU (TTL 600s/generation).
+        let slot = isAppDataRoot ? 0 : 1
+        guard let generation = ContainerScanCoordinator.begin(slot: slot) else {
+            log("enumerate: scan slot \(slot) busy/cancelled for \(clean)")
+            return []
+        }
+        defer { ContainerScanCoordinator.cancel(slot: slot) }
+
+        if let shared = ContainerScanCoordinator.cachedPaths(slot: slot) {
+            let underRoot = shared.filter { $0.hasPrefix(clean + "/") }
+            if !underRoot.isEmpty {
+                if isAppDataRoot { ContainerMetadataCache.shared.cachedFilesystemDirs = underRoot }
+                ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: shared)
+                return underRoot
+            }
+        }
+
+        // Fallback to bad_query inode enumeration — only useful when a tier
+        // can actually grant (bad_query supported or Tier 4 usable).
         if !shouldUseBadQuery && (WorseQuery.grantGroup == nil || SandboxGrantRouter.isTier4Disabled) {
             log("enumerate: no usable tier for \(clean) — skipping inode scan")
             return []
@@ -878,6 +909,7 @@ enum ContainerStore {
         } else {
             log("enumerate: FileManager+inode unavailable for \(clean)")
         }
+        ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: list)
         return list
     }
 

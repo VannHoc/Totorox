@@ -396,4 +396,22 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertEqual(sampled.count, 5)
         XCTAssertFalse(sampled.contains(paths[3]))
     }
+
+    // MARK: - Scan checkpoint / slot decisions (pure)
+
+    func testScanCheckpointFreshness() {
+        let now = Date().timeIntervalSince1970
+        XCTAssertTrue(ContainerScanCoordinator.isFresh(fullAt: now - 3_600, now: now))
+        XCTAssertFalse(ContainerScanCoordinator.isFresh(fullAt: now - 8 * 24 * 3_600, now: now))
+        XCTAssertFalse(ContainerScanCoordinator.isFresh(fullAt: now + 10, now: now))
+    }
+
+    func testScanProbeAndSlotTTL() {
+        XCTAssertFalse(ContainerScanCoordinator.probeIsUsable(0, current: 100))
+        XCTAssertFalse(ContainerScanCoordinator.probeIsUsable(200, current: 100))
+        XCTAssertTrue(ContainerScanCoordinator.probeIsUsable(50, current: 100))
+        let now = Date().timeIntervalSinceReferenceDate
+        XCTAssertTrue(ContainerScanCoordinator.slotIsFresh(at: now - 10, now: now))
+        XCTAssertFalse(ContainerScanCoordinator.slotIsFresh(at: now - 601, now: now))
+    }
 }
