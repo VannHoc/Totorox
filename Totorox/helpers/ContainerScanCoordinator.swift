@@ -136,7 +136,8 @@ enum ContainerScanCoordinator {
                 buf.withUnsafeMutableBufferPointer { bufPtr in
                     let n = wq_fsgetpath(bufPtr.baseAddress!, bufPtr.count,
                                          UnsafeMutableRawPointer(fsidPtr), UInt64(bitPattern: inode))
-                    guard n > 0 else { return nil }
+                    guard n > 0, n < bufPtr.count else { return nil }
+                    bufPtr.baseAddress![n] = 0  // fsgetpath không đảm bảo NUL khi lấp đầy buffer
                     return String(cString: bufPtr.baseAddress!)
                 }
             }

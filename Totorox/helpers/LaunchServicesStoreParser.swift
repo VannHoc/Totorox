@@ -303,10 +303,10 @@ enum LaunchServicesStoreParser {
     // MARK: - Pass 1: records
 
     private static func passOne(_ b: [UInt8], _ n: Int)
-        -> (records: [[Record]], plugins: [[(bid: UInt32, container: UInt32)]], need: [Bool]) {
+        -> (records: [[Record]], plugins: [[(bid: UInt32, container: UInt32)]], need: [UInt8]) {
         var records = [[Record]](repeating: [], count: layouts.count)
         var plugins = [[(bid: UInt32, container: UInt32)]](repeating: [], count: layouts.count)
-        var need = [Bool](repeating: false, count: Int(maxStringID / 8))
+        var need = [UInt8](repeating: 0, count: Int(maxStringID / 8))
         var tooMany = false
 
         var offset = 0
@@ -350,23 +350,36 @@ enum LaunchServicesStoreParser {
         return (records, plugins, need)
     }
 
-    private static func markNeed(_ ref: UInt32, _ need: inout [Bool]) {
+    /// Bitset 1 byte = 8 string id. `need.count` là SỐ BYTE, không phải số id:
+    /// index bằng id trực tiếp (tới 16,7 triệu) sẽ vượt mảng 2 triệu phần tử
+    /// và gây Swift trap ngay lúc khởi động — chính là lỗi crash 2026-11-21.
+    private static func markNeed(_ ref: UInt32, _ need: inout [UInt8]) {
         guard ref != 0, ref & 3 == 0 else { return }
         let id = Int(ref >> 2)
-        guard id < need.count else { return }
-        need[id] = true
+        guard id / 8 < need.count else { return }
+        need[id / 8] |= UInt8(1 << (id % 8))
+    }
+
+    private static func bitGet(_ bits: [UInt8], _ id: Int) -> Bool {
+        guard id >= 0, id / 8 < bits.count else { return false }
+        return bits[id / 8] & UInt8(1 << (id % 8)) != 0
+    }
+
+    private static func bitSet(_ bits: inout [UInt8], _ id: Int) {
+        guard id >= 0, id / 8 < bits.count else { return }
+        bits[id / 8] |= UInt8(1 << (id % 8))
     }
 
     // MARK: - Pass 2: strings
 
-    private static func passTwo(_ b: [UInt8], _ n: Int, _ need: [Bool], _ heap: Int)
+    private static func passTwo(_ b: [UInt8], _ n: Int, _ need: [UInt8], _ heap: Int)
         -> (strings: [NSNumber: String],
             pathStrings: [NSNumber: Any],
             appPathStrings: [NSNumber: Any]) {
         var strings: [NSNumber: String] = [:]
         var pathStrings: [NSNumber: Any] = [:]
         var appPathStrings: [NSNumber: Any] = [:]
-        var inHeap = [Bool](repeating: false, count: need.count)
+        var inHeap = [UInt8](repeating: 0, count: need.count)
         var decodedBytes = 0
         var tooMany = false
 
@@ -377,13 +390,13 @@ enum LaunchServicesStoreParser {
                 continue
             }
             let id = Int(sid)
-            guard need[id] else {
+            guard bitGet(need, id) else {
                 offset += 4
                 continue
             }
             let here = offset >= heap
             let had = strings[NSNumber(value: id)] != nil
-            let keepGeneral = !had || (here && !inHeap[id])
+            let keepGeneral = !had || (here && !bitGet(inHeap, id))
             let peek = u32(b, offset + 4) ?? 0
             let maybePath = peek >= 6 && peek < 0x400 && offset + 8 < n && b[offset + 8] == 0x2f
             if !keepGeneral && !maybePath {
@@ -417,7 +430,7 @@ enum LaunchServicesStoreParser {
                     decodedBytes += string.utf8.count
                 }
                 strings[key] = string
-                if here { inHeap[id] = true }
+                if here { bitSet(&inHeap, id) }
             }
             offset += 4
         }
@@ -543,7 +556,7 @@ enum LaunchServicesStoreParser {
         let collected = autoCollect(b, n, heap, refSet, types)
         guard collected.count == types.count else { return nil }
 
-        var needed = [Bool](repeating: false, count: Int(maxStringID / 8))
+        var needed = [UInt8](repeating: 0, count: Int(maxStringID / 8))
         for (offsets, type) in zip(collected, types) where !offsets.isEmpty {
             for body in offsets {
                 var k: UInt32 = 0
