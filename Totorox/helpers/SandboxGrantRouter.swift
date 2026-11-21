@@ -221,6 +221,12 @@ enum SandboxGrantRouter {
     static func grant(path: String, requireWrite: Bool = false) -> Int64 {
         guard path.count > 1, path.hasPrefix("/") else { return -1 }
 
+        // iOS 16–18: chỉ dùng DarkSword kernel exploit / MHA-C2 + truy cập
+        // trực tiếp. Không gọi bad_query lẫn WQFiles tier nào ở các bản này.
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 else {
+            return -1
+        }
+
         // The reference `_wq_grant` refuses a target that `lstat` cannot find.
         // iOS 26/27 still answer with the App-Group token for variant 1, which
         // looks like success (device logs: the same handle repeated for
