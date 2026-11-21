@@ -520,6 +520,8 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             // Retry the containers a previous pass could not name, so a
             // transient token failure does not hide an app for the session.
             ContainerMetadataCache.shared.retryUnresolvedContainers()
+            // Bỏ checkpoint + slot scan của lần trước (port WQFiles enumerate_invalidate).
+            ContainerScanCoordinator.invalidate()
         }
 
         let task = Task.detached(priority: .userInitiated) { [weak self] () -> [AppContainerInfo] in
