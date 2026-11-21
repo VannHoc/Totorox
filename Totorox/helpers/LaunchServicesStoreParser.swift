@@ -177,7 +177,25 @@ enum LaunchServicesStoreParser {
 
     // MARK: - Entry point
 
+    /// Chống re-enter: log/NSLog từ parser có thể bị log-capture gọi ngược vào
+    /// luồng scan; nếu parse được gọi lại chồng lên chính nó, stack sẽ vỡ.
+    private static let parseGate = NSLock()
+    private static var parsing = false
+
     static func parse(_ data: Data) -> LSStoreSnapshot? {
+        parseGate.lock()
+        if parsing {
+            parseGate.unlock()
+            return nil
+        }
+        parsing = true
+        parseGate.unlock()
+        defer {
+            parseGate.lock()
+            parsing = false
+            parseGate.unlock()
+        }
+
         guard data.count >= minStoreBytes, data.count <= maxStoreBytes else { return nil }
         let b = [UInt8](data)
         let n = b.count
