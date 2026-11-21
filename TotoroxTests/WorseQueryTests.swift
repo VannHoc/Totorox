@@ -241,6 +241,24 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertEqual(state.attemptOrder(worseQueryUsable: false), [.badQuery])
     }
 
+    func testWorseQueryOnlyBuildsNeverFallBackToBadQuery() {
+        var state = SandboxTierState()
+
+        // 26.6.2+ / iOS 27: Tier 1 is disabled by OS policy, so the only grant
+        // backend is worse_query — never a bad_query that answers -3 everywhere.
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true,
+                                          badQueryUsable: false), [.worseQuery])
+
+        // The internal memo must not resurrect Tier 1 on these builds either.
+        state.forceBadQueryBlocked()
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true,
+                                          badQueryUsable: false), [.worseQuery])
+
+        // Both tiers unusable: give up instead of burning daemon round-trips.
+        XCTAssertEqual(state.attemptOrder(worseQueryUsable: false,
+                                          badQueryUsable: false), [])
+    }
+
     func testTierOneSuccessClearsStaleFailureEvidence() {
         var state = SandboxTierState()
         state.noteBadQueryFailure(-5)

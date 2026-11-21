@@ -3,12 +3,18 @@ import Darwin
 
 /// Chooses which sandbox backend grants access to a container path.
 ///
-/// Chain (cheapest first, matching the project design):
-///   Tier 1 `bad_query`  →  Tier 4 `worse_query`  →  give up.
+/// Chain depends on the OS:
+///   - iOS 26.0–26.6.1: Tier 1 `bad_query` → Tier 4 `worse_query` → give up.
+///   - iOS 26.6.2+ and all of iOS 27: **Tier 4 only** — `bad_query` answers
+///     `-3 BQ_ERR_NO_RESULT` for every path on these builds (27.2.1 device log),
+///     so calling it only burns three daemon round-trips per file. See
+///     `badQueryUsable` below.
 ///
-/// `bad_query` is always attempted first, in both of its scopes:
-/// `systemgroup.com.apple.mobilegestaltcache` (class 13, what worked up to
-/// iOS 26) and our own App Group (class 7, the only scope iOS 27 still answers).
+/// `bad_query` is attempted first, in both of its scopes, only where it works:
+/// `systemgroup.com.apple.mobilegestaltcache` (class 13) and our own App Group
+/// (class 7). Container enumeration itself uses MCM / csstore / traversal
+/// grants; `fsgetpath` is only used to verify cached paths in
+/// `ContainerScanCoordinator` (the WQFiles 0.9.19 checkpoint mechanism).
 ///
 /// A returned handle is not trusted on its own: iOS 26/27 can hand back a token
 /// while ignoring the `../../..` traversal, which leaves the real target blocked.
@@ -37,6 +43,22 @@ enum SandboxGrantRouter {
     private static var state = SandboxTierState()
     private static var lastBackendValue: SandboxBackend?
 
+    /// Whether Tier 1 (`bad_query`) is used at all on this device.
+    ///
+    /// Project policy: bad_query belongs ONLY to iOS 26.0–26.6.1, where the
+    /// kernel-exploit fallback keeps it alive. Everything above that (26.6.2+
+    /// and all of iOS 27) is worse_query-only — the 27.2.1 device log shows
+    /// `-3 BQ_ERR_NO_RESULT` for every path, so calling Tier 1 only burns three
+    /// daemon round-trips per file.
+    ///
+    /// There is deliberately no session-wide Tier-4 kill switch: WQFiles only
+    /// retries/repairs, and blocks builds where Apple patched the exploit.
+    static var badQueryUsable: Bool {
+        let v = AppInfo.versionTuple
+        guard v.major == 26 else { return false }
+        return v.minor < 6 || (v.minor == 6 && v.patch <= 1)
+    }
+
     /// Recent failures per `canonical path|mode`. Re-attempting them costs two
     /// filesystem swaps plus two daemon round-trips each time, while the answer
     /// cannot change within a minute.
@@ -48,14 +70,6 @@ enum SandboxGrantRouter {
     /// Short enough that a new app install, a daemon restart or a fresh grant
     /// heals by itself.
     private static let negativeTTL: TimeInterval = 60
-
-    /// Tier 4 (worse_query) is considered non-functional when it keeps returning
-    /// WQ_ERR_NO_TOKEN for every path while Tier 1 (bad_query) still grants.
-    /// Once that is observed repeatedly we stop paying for the doomed Tier 4
-    /// round-trip and treat it as unusable for the rest of the session.
-    private static var tier4ConsecutiveNoTokenFailures: Int = 0
-    private static let tier4NoTokenThreshold: Int = 3
-    private static var tier4Disabled: Bool = false
 
     /// Ancestors that never carry a usable token (they are where the iOS 26/27
     /// logs show `-6 WQ_ERR_NO_TOKEN` for both variants).
@@ -95,8 +109,6 @@ enum SandboxGrantRouter {
         state.reset()
         lastBackendValue = nil
         negativeGrants.removeAll()
-        tier4ConsecutiveNoTokenFailures = 0
-        tier4Disabled = false
         stateLock.unlock()
         WorseQuery.invalidateGroupCache()
     }
@@ -111,6 +123,7 @@ enum SandboxGrantRouter {
     /// Tier 4 success, so `worse_query` is tried first for every following path.
     /// Only meaningful when `WorseQuery.grantGroup != nil`.
     static func forceBadQueryBlockedForEnumeration() {
+        guard badQueryUsable else { return } // WQ-only builds: Tier 1 is already out
         stateLock.lock()
         let wasBlocked = state.badQueryBlocked
         state.forceBadQueryBlocked()
@@ -120,28 +133,6 @@ enum SandboxGrantRouter {
             log("grant: bad_query marked BLOCKED for this session " +
                 "(enumeration returned <= 1 container; tier 4 preferred)")
         }
-    }
-
-    /// Whether Tier 4 (worse_query) has been auto-disabled for this session
-    /// because it kept returning `WQ_ERR_NO_TOKEN`. Read-only accessor for
-    /// callers outside this type (e.g. AppContainerScanner).
-    static var isTier4Disabled: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return tier4Disabled
-    }
-
-    /// Disable Tier 4 (worse_query) for the rest of the session.
-    ///
-    /// Called when Tier 4 keeps returning `WQ_ERR_NO_TOKEN` while Tier 1
-    /// (bad_query) still grants, i.e. Tier 4 is non-functional on this device.
-    /// Thread-safe: acquires `stateLock`.
-    static func disableTier4() {
-        stateLock.lock()
-        tier4Disabled = true
-        tier4ConsecutiveNoTokenFailures = 0
-        stateLock.unlock()
-        log("grant: Tier 4 (worse_query) disabled for this session (repeated WQ_ERR_NO_TOKEN)")
     }
 
     // MARK: - Negative cache
@@ -207,17 +198,21 @@ enum SandboxGrantRouter {
     ///
     /// The attempt order comes from `SandboxTierState.attemptOrder`:
     ///
-    /// | memo | Tier 4 usable | order                        |
-    /// |------|---------------|------------------------------|
-    /// | off  | yes           | bad_query (system, then group) → worse_query |
-    /// | off  | no            | bad_query                    |
-    /// | on   | yes           | worse_query → bad_query      |
-    /// | on   | no            | bad_query (last resort)      |
+    /// | Tier 1 usable | memo | Tier 4 usable | order                        |
+    /// |---------------|------|---------------|------------------------------|
+    /// | no            | any  | yes           | worse_query                  |
+    /// | no            | any  | no            | (none — return -1)           |
+    /// | yes           | off  | yes           | bad_query (system, group) → worse_query |
+    /// | yes           | off  | no            | bad_query                    |
+    /// | yes           | on   | yes           | worse_query → bad_query      |
+    /// | yes           | on   | no            | bad_query (last resort)      |
     ///
     /// The last two rows keep the router alive when the memo is on but Tier 4
-    /// stops working mid-session (patched build, wiped group container, user
-    /// toggled it off): without them the memo would make every following grant
-    /// fail instead of degrading to Tier 1.
+    /// has no App Group (wiped container, user toggled it off): without them the
+    /// memo would make every following grant fail instead of degrading to Tier 1.
+    /// On WQ-only builds the first two rows apply. There is no session-wide
+    /// "disable Tier 4" switch — WQFiles only retries/repairs and blocks builds
+    /// where Apple patched the exploit (`WorseQuery.isPatchedBuild`).
     static func grant(path: String, requireWrite: Bool = false) -> Int64 {
         guard path.count > 1, path.hasPrefix("/") else { return -1 }
 
@@ -262,24 +257,21 @@ enum SandboxGrantRouter {
         // the first grant pays for SecTask/containerURL once, not per path.
         let group = WorseQuery.grantGroup
 
+        let tier1Usable = badQueryUsable
         stateLock.lock()
-        let tier4Usable = (group != nil) && !tier4Disabled
-        let order = state.attemptOrder(worseQueryUsable: tier4Usable)
+        let tier4Usable = (group != nil)
+        let order = state.attemptOrder(worseQueryUsable: tier4Usable,
+                                       badQueryUsable: tier1Usable)
         stateLock.unlock()
+        if order.isEmpty { return -1 }
 
         var failure: Int64 = 0
-        var worseQueryFailedNoToken = false
 
         for backend in order {
             switch backend {
             case .badQuery:
                 switch attemptBadQuery(path: grantPath, requireWrite: requireWrite) {
                 case .granted(let handle):
-                    // Tier 1 succeeded after Tier 4 failed with NO_TOKEN: Tier 4
-                    // is non-functional on this device, stop using it.
-                    if worseQueryFailedNoToken {
-                        disableTier4()
-                    }
                     return handle
                 case .failed(let code):
                     failure = code
@@ -291,26 +283,9 @@ enum SandboxGrantRouter {
                                          requireWrite: requireWrite,
                                          targetExists: exists) {
                 case .granted(let handle):
-                    stateLock.lock()
-                    tier4ConsecutiveNoTokenFailures = 0
-                    stateLock.unlock()
                     return handle
                 case .failed(let code):
                     failure = code
-                    if code == Int64(WQ_ERR_NO_TOKEN) {
-                        worseQueryFailedNoToken = true
-                        stateLock.lock()
-                        tier4ConsecutiveNoTokenFailures += 1
-                        let hitThreshold = tier4ConsecutiveNoTokenFailures >= tier4NoTokenThreshold
-                        stateLock.unlock()
-                        if hitThreshold {
-                            disableTier4()
-                        }
-                    } else {
-                        stateLock.lock()
-                        tier4ConsecutiveNoTokenFailures = 0
-                        stateLock.unlock()
-                    }
                 }
             }
         }
