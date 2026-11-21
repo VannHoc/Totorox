@@ -687,7 +687,12 @@ enum ContainerStore {
                     continue
                 }
                 let remaining = maximumCandidateCount - identifiers.count
-                let snapshot = LaunchServicesStoreParser.parse(data)
+                // Port WQFiles csstore chỉ dùng trên iOS 26+ (xem ghi chú trong
+                // LaunchServicesCandidateExtractor.identifiers).
+                let snapshot: LSStoreSnapshot? =
+                    ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+                        ? LaunchServicesStoreParser.parse(data)
+                        : nil
                 let extracted = snapshot?.identifiers
                     ?? LaunchServicesCandidateExtractor.identifiers(from: data, limit: remaining)
                 for identifier in extracted where seenIdentifiers.insert(identifier).inserted {
@@ -826,7 +831,9 @@ enum ContainerStore {
         if let subdirs = posixSubdirectories(at: clean), !subdirs.isEmpty {
             if isAppDataRoot {
                 ContainerMetadataCache.shared.cachedFilesystemDirs = subdirs
-                ContainerScanCoordinator.record(paths: subdirs)
+                if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
+                    ContainerScanCoordinator.record(paths: subdirs)
+                }
             }
             return subdirs
         }
@@ -836,7 +843,9 @@ enum ContainerStore {
             let list = names.map { (clean as NSString).appendingPathComponent($0) }
             if isAppDataRoot {
                 ContainerMetadataCache.shared.cachedFilesystemDirs = list
-                ContainerScanCoordinator.record(paths: list)
+                if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
+                    ContainerScanCoordinator.record(paths: list)
+                }
             }
             return list
         }
@@ -861,7 +870,11 @@ enum ContainerStore {
         // 4a. Checkpoint bền vững từ lần quét trước (port WQFiles scan cache).
         //     Trên iOS 27 POSIX/MCM/csstore có thể cùng bị chặn; không vì thế mà
         //     quét lại 2.000.000 inode nếu ta đã có danh sách đã verify.
-        if isAppDataRoot, let remembered = ContainerScanCoordinator.cachedPaths() {
+        // Port WQFiles (checkpoint + slot) chỉ bật iOS 26+; iOS 18 dùng đường
+        // inode fallback cũ để tránh stack overflow đã thấy trên 18.7.10.
+        let useWQScanBridge = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+
+        if useWQScanBridge, isAppDataRoot, let remembered = ContainerScanCoordinator.cachedPaths() {
             let underRoot = remembered.filter { $0.hasPrefix(clean + "/") }
             if !underRoot.isEmpty {
                 ContainerMetadataCache.shared.cachedFilesystemDirs = underRoot
@@ -873,13 +886,15 @@ enum ContainerStore {
         // 4b. inode fallback — chạy dưới slot dùng chung: caller cùng lúc chờ
         //     worker đang quét thay vì mỗi người tự tốn CPU (TTL 600s/generation).
         let slot = isAppDataRoot ? 0 : 1
-        guard let generation = ContainerScanCoordinator.begin(slot: slot) else {
+        let generation: Int? = useWQScanBridge ? ContainerScanCoordinator.begin(slot: slot) : nil
+        if useWQScanBridge && generation == nil {
             log("enumerate: scan slot \(slot) busy/cancelled for \(clean)")
             return []
         }
-        defer { ContainerScanCoordinator.cancel(slot: slot) }
+        defer { if useWQScanBridge { ContainerScanCoordinator.cancel(slot: slot) } }
 
-        if let shared = ContainerScanCoordinator.cachedPaths(slot: slot) {
+        if useWQScanBridge, let generation,
+           let shared = ContainerScanCoordinator.cachedPaths(slot: slot) {
             let underRoot = shared.filter { $0.hasPrefix(clean + "/") }
             if !underRoot.isEmpty {
                 if isAppDataRoot { ContainerMetadataCache.shared.cachedFilesystemDirs = underRoot }
@@ -909,7 +924,9 @@ enum ContainerStore {
         } else {
             log("enumerate: FileManager+inode unavailable for \(clean)")
         }
-        ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: list)
+        if let generation {
+            ContainerScanCoordinator.finish(slot: slot, generation: generation, paths: list)
+        }
         return list
     }
 

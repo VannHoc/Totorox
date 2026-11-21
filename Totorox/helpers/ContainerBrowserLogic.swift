@@ -132,8 +132,11 @@ enum LaunchServicesCandidateExtractor {
         guard limit > 0, !data.isEmpty else { return [] }
 
         // WQFiles 0.9.19 csstore parser: đọc đúng record/string của store.
-        // Giữ bộ lọc byte cũ làm fallback khi store dùng layout chưa biết.
-        if let snapshot = LaunchServicesStoreParser.parse(data) {
+        // CHỈ bật trên iOS 26+: trên 18.7.10 bản port gây stack overflow trong
+        // luồng scan nền (EXC_BAD_ACCESS/SIGBUS, ___chkstk_darwin). iOS 18 dùng
+        // lại bộ lọc byte cũ đã chạy ổn trước khi port.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26,
+           let snapshot = LaunchServicesStoreParser.parse(data) {
             let parsed = snapshot.identifiers.filter {
                 ContainerBundleCandidateResolver.isValidBundleIdentifier($0) &&
                 !$0.hasPrefix("group.") && !$0.hasPrefix("systemgroup.")
