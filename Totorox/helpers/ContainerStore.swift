@@ -828,6 +828,13 @@ enum ContainerStore {
             )
             ContainerMetadataCache.shared.cachedLSStore = snapshot
         }
+        // Đối chiếu tên app với WQ Files: nếu csstore có tên mà browser vẫn hiện
+        // thô bundle ID thì lỗi nằm ở khâu resolve, không phải ở parser.
+        for bid in ["com.garena.game.kgvn", "com.aovesp.game.kgvn", "com.garena.game.kgvn1"] {
+            let display = lsNames[bid] ?? lsBundleNames[bid] ?? "-"
+            let path = lsPaths.first { $0.value == bid }?.key ?? "-"
+            log("browser: name probe \(bid) display=\(display) path=\(path)")
+        }
         log("browser: LaunchServices store total candidates=\(identifiers.count)")
         return identifiers
     }

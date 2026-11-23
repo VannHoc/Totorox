@@ -247,17 +247,16 @@ enum LaunchServicesStoreParser {
                 let appPath = record.bundlePath != 0 && record.bundlePath & 3 == 0
                     ? decoded.appPathStrings[NSNumber(value: record.bundlePath >> 2)] as? String
                     : nil
-                let cleanContainer = containerPath.map(cleanPath)
-                let isAppRecord = (cleanContainer.map { isDataContainerPath($0) && $0.contains("/Data/Application/") } ?? false)
-                    || (appPath.map { ($0 as NSString).pathExtension == "app" } ?? false)
-                if isAppRecord {
-                    if record.name & 3 == 0,
-                       let name = safeName(decoded.strings[NSNumber(value: record.name >> 2)]),
-                       bundleName[bid] == nil { bundleName[bid] = name }
-                    if record.display & 3 == 0,
-                       let displayName = safeName(decoded.strings[NSNumber(value: record.display >> 2)]),
-                       display[bid] == nil { display[bid] = displayName }
-                }
+                // WQ Files lấy tên từ MỌI record có bundle ID hợp lệ. Sideloaded
+                // apps (vd Liên Quân mod) thường không có container path / .app
+                // path trong csstore — lọc theo isAppRecord khiến tên của chúng
+                // bị bỏ và browser phải hiện thô bundle ID.
+                if record.name & 3 == 0,
+                   let name = safeName(decoded.strings[NSNumber(value: record.name >> 2)]),
+                   bundleName[bid] == nil { bundleName[bid] = name }
+                if record.display & 3 == 0,
+                   let displayName = safeName(decoded.strings[NSNumber(value: record.display >> 2)]),
+                   display[bid] == nil { display[bid] = displayName }
                 if let path = appPath, bundlePaths[bid] == nil {
                     bundlePaths[bid] = cleanPath(path)
                 }
