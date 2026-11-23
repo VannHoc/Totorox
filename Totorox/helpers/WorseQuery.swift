@@ -374,10 +374,53 @@ enum WorseQuery {
     /// One-line diagnostics at launch. This is the first thing to read when a
     /// device says "Tier 4 does nothing": it prints eligibility, API presence,
     /// the groups declared in the signature and which one is usable.
+    /// Log the app's own bundle ID and the entitlements from the embedded
+    /// provisioning profile. Needed when comparing a working signature with a
+    /// re-signed one on device (no macOS/codesign available there).
+    static func logSignatureDiagnostics() {
+        log("app: bundleID=\(Bundle.main.bundleIdentifier ?? "-")")
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url) else {
+            log("app: embedded.mobileprovision not found")
+            return
+        }
+        let text = String(data: data, encoding: .isoLatin1)
+            ?? String(data: data, encoding: .utf8) ?? ""
+        guard let start = text.range(of: "<?xml"),
+              let end = text.range(of: "</plist>", range: start.lowerBound..<text.endIndex) else {
+            log("app: embedded.mobileprovision has no XML plist")
+            return
+        }
+        let xml = String(text[start.lowerBound..<end.upperBound])
+        guard let plist = (try? PropertyListSerialization.propertyList(
+            from: Data(xml.utf8), options: [], format: nil
+        )) as? [String: Any] else {
+            log("app: embedded.mobileprovision plist parse failed")
+            return
+        }
+        guard let entitlements = plist["Entitlements"] as? [String: Any] else {
+            log("app: embedded.mobileprovision has no Entitlements dict")
+            return
+        }
+        for key in entitlements.keys.sorted() {
+            let raw = entitlements[key]
+            let value: String
+            if let array = raw as? [String] {
+                value = array.joined(separator: ",")
+            } else if let bool = raw as? Bool {
+                value = bool ? "true" : "false"
+            } else {
+                value = String(describing: raw ?? "")
+            }
+            log("app: entitlement \(key)=\(value)")
+        }
+    }
+
     static func logProbe() {
         #if targetEnvironment(simulator)
         return
         #else
+        logSignatureDiagnostics()
         let p = probe()
         log("worse_query: probe eligible=\(p.eligible) api=\(p.apiAvailable) " +
             "enabled=\(p.enabled) grantGroup=\(p.grantGroup ?? "-") " +
