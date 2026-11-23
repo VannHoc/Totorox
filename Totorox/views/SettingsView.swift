@@ -8,7 +8,6 @@ struct SettingsView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @Environment(\.appLanguage) private var language
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.systemDefault.rawValue
-    @AppStorage(WorseQuery.enabledDefaultsKey) private var useWorseQuery = true
     @State private var showLogs = false
     @State private var showClearCacheAlert = false
     @State private var cacheClearedMessage = false
@@ -162,8 +161,6 @@ struct SettingsView: View {
                             icon: themeManager.mode.iconName,
                             isAccent: true
                         )
-                        Divider()
-                        worseQueryRow
                     }
                     .totoroxCard()
 
@@ -520,38 +517,6 @@ struct SettingsView: View {
                 didCopyUDID = false
             }
         }
-    }
-
-    private var worseQueryRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 16))
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(language.text("settings.worse_query_label"))
-                    .font(.system(size: 14))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                Text(language.text(WorseQuery.statusLocalizationKey(enabled: useWorseQuery)))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-            }
-
-            Spacer()
-
-            Toggle("", isOn: $useWorseQuery)
-                .labelsHidden()
-                .tint(TotoroxTheme.mintAccent)
-                .onChange(of: useWorseQuery) { _ in
-                    // Re-evaluate Tier 4 immediately and forget the
-                    // "bad_query is blocked" memo, so turning the toggle off
-                    // restores the old behaviour without a relaunch.
-                    // (`resetBlockedState` also drops the cached group.)
-                    SandboxGrantRouter.resetBlockedState()
-                }
-        }
-        .padding(.vertical, 2)
     }
 
     private func settingsRow(label: String, value: String, icon: String, isAccent: Bool = false, isVertical: Bool = false) -> some View {

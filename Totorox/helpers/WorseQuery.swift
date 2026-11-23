@@ -62,10 +62,10 @@ enum WorseQuery {
         #endif
     }
 
-    /// Toggle value, defaulting to ON when the user never touched it.
-    static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: enabledDefaultsKey) as? Bool ?? true
-    }
+    /// Tier 4 is now always on. The Settings toggle was removed; ignore any
+    /// stale "off" value from an older build so grant resolution cannot be
+    /// silently disabled with no visible control to turn it back on.
+    static var isEnabled: Bool { true }
 
     /// Every group declared in the code signature (empty when the entitlement
     /// is missing — that is a signing problem, not a code problem).
