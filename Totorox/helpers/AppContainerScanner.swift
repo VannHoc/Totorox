@@ -79,85 +79,65 @@ struct AppContainerInfo: Identifiable, Hashable, Sendable {
 
 // MARK: - App Icon Avatar View (Used for App Selection Sheet)
 
+/// App picker avatar. Every scanned app uses the same flag icon, regardless of
+/// its own icon or bundle ID.
 struct AppIconAvatarView: View {
-    let icon: UIImage?
-    let title: String
-    let bundleID: String
-    var size: CGFloat
+    let size: CGFloat
 
     init(info: AppContainerInfo, size: CGFloat = 48) {
-        self.icon = info.appIcon
-        self.title = info.appName
-        self.bundleID = info.bundleID
         self.size = size
     }
 
     init(icon: UIImage?, title: String, bundleID: String = "", size: CGFloat = 48) {
-        self.icon = icon
-        self.title = title
-        self.bundleID = bundleID
+        _ = icon
+        _ = title
+        _ = bundleID
         self.size = size
     }
 
-    private var initialLetter: String {
-        let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let first = clean.first, first.isLetter {
-            return String(first).uppercased()
-        }
-        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let first = bid.first, first.isLetter {
-            return String(first).uppercased()
-        }
-        return "A"
-    }
-
-    private var gradientColors: [Color] {
-        let hash = abs(bundleID.hashValue ^ title.hashValue)
-        let palettes: [[Color]] = [
-            [Color(red: 0.58, green: 0.28, blue: 0.96), Color(red: 0.78, green: 0.35, blue: 0.95)],
-            [Color(red: 0.12, green: 0.58, blue: 0.95), Color(red: 0.25, green: 0.75, blue: 0.98)],
-            [Color(red: 0.95, green: 0.32, blue: 0.55), Color(red: 0.98, green: 0.52, blue: 0.68)],
-            [Color(red: 0.96, green: 0.52, blue: 0.22), Color(red: 0.98, green: 0.68, blue: 0.32)],
-            [Color(red: 0.18, green: 0.72, blue: 0.62), Color(red: 0.35, green: 0.85, blue: 0.75)],
-            [Color(red: 0.20, green: 0.45, blue: 0.95), Color(red: 0.42, green: 0.62, blue: 0.98)]
-        ]
-        return palettes[hash % palettes.count]
-    }
-
     var body: some View {
-        if let icon = icon {
-            Image(uiImage: icon)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
-                )
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: gradientColors,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: size, height: size)
-
-                Text(initialLetter)
-                    .font(.system(size: size * 0.48, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .shadow(color: Color.black.opacity(0.15), radius: 1, y: 1)
-            }
+        VietnamFlagIcon()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                    .stroke(Color.white.opacity(0.25), lineWidth: 0.8)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
             )
-            .shadow(color: Color.black.opacity(0.06), radius: 3, y: 1.5)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct VietnamFlagIcon: View {
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color(red: 0.86, green: 0.13, blue: 0.14)
+                FivePointStar()
+                    .fill(Color(red: 1.0, green: 0.85, blue: 0.12))
+                    .frame(width: geo.size.width * 0.54,
+                           height: geo.size.height * 0.54)
+            }
         }
+    }
+}
+
+private struct FivePointStar: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * 0.382
+        for i in 0..<10 {
+            let angle = -Double.pi / 2 + Double(i) * Double.pi / 5
+            let radius = i.isMultiple(of: 2) ? outer : inner
+            let point = CGPoint(
+                x: center.x + CGFloat(cos(angle)) * radius,
+                y: center.y + CGFloat(sin(angle)) * radius
+            )
+            if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        path.closeSubpath()
+        return path
     }
 }
 

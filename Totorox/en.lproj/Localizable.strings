@@ -194,27 +194,14 @@
 "update.dismiss" = "Later";
 
 /* --- Onboarding --- */
-"onboarding.step" = "Step %@ of %@";
 "onboarding.language_title" = "Choose Your Language";
-"onboarding.language_subtitle" = "Select the language used across the app.";
-"onboarding.language_hint" = "Interface language: %@";
-"onboarding.welcome_title" = "Welcome to Totorox";
-"onboarding.welcome_message" = "Manage app containers, files and patch packages from one place.";
-"onboarding.welcome_badge" = "All processing happens on this device";
-"onboarding.versions_title" = "Supported iOS Versions";
-"onboarding.versions_subtitle" = "Verified builds are listed below.";
-"onboarding.beta" = "BETA";
-"onboarding.developer_beta" = "Developer Beta %@";
-"onboarding.public_beta" = "Public Beta %@";
-"onboarding.versions_footer" = "Your device: iOS %@ (%@). Unlisted builds may work but are not verified.";
-"onboarding.device_supported" = "Supports file reading";
-"onboarding.device_unsupported" = "Does not support file reading";
-"onboarding.install_title" = "Note";
-"onboarding.install_message" = "Container access depends on how Totorox was installed.";
-"onboarding.install_ok" = "Installed with valid signing and no revoked certificate.";
-"onboarding.install_bad" = "Do not use revoked, shared or enterprise certificates.";
-"onboarding.install_jailbreak" = "Jailbreak tweaks or strict sandbox rules may block container access.";
-"onboarding.install_footer" = "If a feature is unavailable, verify your installation method and iOS build.";
+"onboarding.language_subtitle" = "Choose your language for Totorox.";
+"onboarding.versions_title" = "Supported iOS";
+"onboarding.versions_subtitle" = "Verified compatible versions.";
+"onboarding.full" = "Full";
+"onboarding.versions_footer" = "Requires a valid, non-revoked certificate for stable operation.";
+"onboarding.continue" = "Continue";
+"onboarding.get_started" = "Get Started";
 
 /* --- Exploit status --- */
 "status.not_attempted" = "Not attempted";

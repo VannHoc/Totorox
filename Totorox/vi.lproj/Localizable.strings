@@ -194,27 +194,14 @@
 "update.dismiss" = "Để sau";
 
 /* --- Onboarding --- */
-"onboarding.step" = "Bước %@ / %@";
 "onboarding.language_title" = "Chọn ngôn ngữ";
-"onboarding.language_subtitle" = "Chọn ngôn ngữ hiển thị cho toàn bộ ứng dụng.";
-"onboarding.language_hint" = "Ngôn ngữ giao diện: %@";
-"onboarding.welcome_title" = "Chào mừng đến với Totorox";
-"onboarding.welcome_message" = "Quản lý container ứng dụng, tệp tin và gói Patch trong cùng một nơi.";
-"onboarding.welcome_badge" = "Mọi xử lý diễn ra ngay trên thiết bị";
-"onboarding.versions_title" = "Phiên bản iOS được hỗ trợ";
-"onboarding.versions_subtitle" = "Các bản build đã được kiểm chứng được liệt kê bên dưới.";
-"onboarding.beta" = "BETA";
-"onboarding.developer_beta" = "Developer Beta %@";
-"onboarding.public_beta" = "Public Beta %@";
-"onboarding.versions_footer" = "Thiết bị của bạn: iOS %@ (%@). Các bản build không có trong danh sách có thể vẫn hoạt động nhưng chưa được kiểm chứng.";
-"onboarding.device_supported" = "Hỗ trợ đọc file";
-"onboarding.device_unsupported" = "Không hỗ trợ đọc file";
-"onboarding.install_title" = "Lưu ý";
-"onboarding.install_message" = "Khả năng truy cập container phụ thuộc vào cách Totorox được cài đặt.";
-"onboarding.install_ok" = "Cài bằng chứng chỉ hợp lệ và chưa bị thu hồi.";
-"onboarding.install_bad" = "Không dùng chứng chỉ đã bị thu hồi, chứng chỉ dùng chung hoặc enterprise.";
-"onboarding.install_jailbreak" = "Tweak jailbreak hoặc quy tắc sandbox nghiêm ngặt có thể chặn truy cập container.";
-"onboarding.install_footer" = "Nếu một tính năng không khả dụng, hãy kiểm tra lại cách cài đặt và bản build iOS.";
+"onboarding.language_subtitle" = "Thiết lập ngôn ngữ cho Totorox.";
+"onboarding.versions_title" = "Hỗ trợ iOS";
+"onboarding.versions_subtitle" = "Các phiên bản đã kiểm chứng tương thích.";
+"onboarding.full" = "Full";
+"onboarding.versions_footer" = "Yêu cầu chứng chỉ hợp lệ (chưa thu hồi) để hoạt động ổn định.";
+"onboarding.continue" = "Tiếp tục";
+"onboarding.get_started" = "Bắt đầu";
 
 /* --- Exploit status --- */
 "status.not_attempted" = "Chưa thử";

@@ -1,7 +1,8 @@
 import SwiftUI
 
 private enum OnboardingStep: Int, CaseIterable {
-    case language = 0, welcome, versions, install
+    case language = 0
+    case versions = 1
 
     var next: OnboardingStep? { Self(rawValue: rawValue + 1) }
     var prev: OnboardingStep? { Self(rawValue: rawValue - 1) }
@@ -40,31 +41,27 @@ struct OnboardingView: View {
         .tint(AppTheme.accent)
     }
 
-    private var header: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 6) {
-                ForEach(OnboardingStep.allCases, id: \.rawValue) { s in
-                    Capsule()
-                        .fill(s.rawValue <= step.rawValue ? AppTheme.accent : TotoroxTheme.textSecondary.opacity(0.22))
-                        .frame(height: 4)
-                        .frame(maxWidth: s == step ? 28 : 18)
-                        .animation(motionAnimation, value: step)
-                        .accessibilityHidden(true)
-                }
-            }
-            .frame(maxWidth: 560)
-            .padding(.horizontal, 20)
+    // MARK: - Progress (2 bars only)
 
-            Text(language.text("onboarding.step", "\(step.rawValue + 1)", "\(OnboardingStep.allCases.count)"))
-                .font(.caption.weight(.medium))
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    private var header: some View {
+        HStack(spacing: 8) {
+            ForEach(OnboardingStep.allCases, id: \.rawValue) { s in
+                Capsule()
+                    .fill(s.rawValue <= step.rawValue ? AppTheme.accent : TotoroxTheme.textSecondary.opacity(0.22))
+                    .frame(height: 4)
+                    .frame(maxWidth: s == step ? 36 : 22)
+                    .animation(motionAnimation, value: step)
+                    .accessibilityHidden(true)
+            }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 8)
+        .frame(maxWidth: 200)
+        .padding(.top, 18)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity)
         .background(AppTheme.pageBackground)
     }
+
+    // MARK: - Pages
 
     @ViewBuilder
     private var pageContent: some View {
@@ -76,7 +73,7 @@ struct OnboardingView: View {
                             .frame(maxWidth: 560)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal, 20)
-                            .padding(.top, 12)
+                            .padding(.top, 16)
                             .padding(.bottom, 28)
                     }
                     .transition(pageTransition)
@@ -102,14 +99,14 @@ struct OnboardingView: View {
     private func page(for s: OnboardingStep) -> some View {
         switch s {
         case .language: languagePage
-        case .welcome: welcomePage
         case .versions: versionsPage
-        case .install: installPage
         }
     }
 
+    // MARK: - Step 1: Language
+
     private var languagePage: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 26) {
             AppLogo(size: 72)
 
             VStack(spacing: 8) {
@@ -137,82 +134,38 @@ struct OnboardingView: View {
                                 .foregroundStyle(TotoroxTheme.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            if isSelected {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(AppTheme.accent)
-                                    .font(.title3)
-                                    .transition(.scale.combined(with: .opacity))
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.5))
-                            }
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(isSelected ? AppTheme.accent : TotoroxTheme.textSecondary.opacity(0.5))
                         }
                         .padding(.horizontal, 16)
                         .frame(minHeight: 56)
                         .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(TotoroxTheme.cardBackground)
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                                         .stroke(isSelected ? AppTheme.accent : TotoroxTheme.cardBorderColor, lineWidth: 1)
                                 )
                         )
-                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .animation(motionAnimation, value: languageCode)
                 }
             }
-
-            Text(language.text("onboarding.language_hint", language.displayName))
-                .font(.caption)
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .top)
     }
 
-    private var welcomePage: some View {
-        VStack(spacing: 20) {
-            featureIcon(systemName: "sparkles", color: AppTheme.accent)
-
-            VStack(spacing: 10) {
-                Text(language.text("onboarding.welcome_title"))
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(language.text("onboarding.welcome_message"))
-                    .font(.body)
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Label(language.text("onboarding.welcome_badge"), systemImage: "checkmark.seal.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(AppTheme.accent)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    TotoroxTheme.cardBackground,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
+    // MARK: - Step 2: Supported iOS
 
     private var versionsPage: some View {
         VStack(spacing: 20) {
-            featureIcon(systemName: "iphone.gen2", color: AppTheme.accent)
-
             VStack(spacing: 8) {
                 Text(language.text("onboarding.versions_title"))
-                    .font(.title3.weight(.bold))
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(TotoroxTheme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -223,188 +176,70 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                versionRow(icon: "checkmark.circle.fill", title: "iOS 16", value: ExploitSupportPolicy.verifiedIOS16Range, color: .green)
-                versionRow(icon: "checkmark.circle.fill", title: "iOS 17", value: ExploitSupportPolicy.verifiedIOS17Range, color: .green)
-                versionRow(icon: "checkmark.circle.fill", title: "iOS 18", value: ExploitSupportPolicy.verifiedIOS18Range, color: .green)
-                versionRow(icon: "checkmark.circle.fill", title: "iOS 26", value: ExploitSupportPolicy.verifiedIOS26Range, color: .green)
-                versionRow(icon: "checkmark.circle.fill", title: "iOS 26.0.2+", value: ExploitSupportPolicy.verifiedWorseQueryRange, color: .green)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        Text("iOS 27.0")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(TotoroxTheme.textPrimary)
-                        Spacer()
-                        Text(language.text("onboarding.beta"))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                    }
-                    ForEach(ExploitSupportPolicy.verifiedIOS27Builds, id: \.build) { v in
-                        let betaLabel = language.text("onboarding.developer_beta", "\(v.beta)")
-                            + (v.publicBeta.map {
-                                " · " + language.text("onboarding.public_beta", "\($0)")
-                            } ?? "")
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 12) {
-                                Text(betaLabel)
-                                Spacer()
-                                Text(v.build)
-                                    .font(.caption.monospaced().weight(.medium))
-                            }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(betaLabel)
-                                Text(v.build)
-                                    .font(.caption.monospaced().weight(.medium))
-                            }
-                        }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .padding(.leading, 24)
-                    }
-                }
-                .padding(12)
-                .background(
-                    TotoroxTheme.cardBackground,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
+            VStack(spacing: 0) {
+                versionRow(title: "iOS 16", value: "Full", badge: true)
+                Divider().overlay(TotoroxTheme.dividerColor)
+                versionRow(title: "iOS 17", value: "17.0 – 17.7")
+                Divider().overlay(TotoroxTheme.dividerColor)
+                versionRow(title: "iOS 18", value: "18.0 – 18.7.1")
+                Divider().overlay(TotoroxTheme.dividerColor)
+                versionRow(title: "iOS 26+", value: "26.0 – 27.3 Beta 1")
             }
-
-            // Simple device support notice (reading files)
-            let v = AppInfo.versionTuple
-            let supported = ExploitSupportPolicy.isSupported(major: v.major, minor: v.minor, patch: v.patch, build: AppInfo.osBuild)
-            HStack(spacing: 12) {
-                Image(systemName: supported ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundStyle(supported ? .green : .red)
-                    .font(.title3)
-                Text(supported ? language.text("onboarding.device_supported") : language.text("onboarding.device_unsupported"))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                Spacer()
-            }
-            .padding(12)
-            .background(TotoroxTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke((supported ? Color.green : Color.red).opacity(0.35), lineWidth: 1)
-            )
-
-            Text(language.text("onboarding.versions_footer", AppInfo.osVersion, AppInfo.osBuild))
-                .font(.caption)
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
-
-    private var installPage: some View {
-        VStack(spacing: 20) {
-            featureIcon(systemName: "exclamationmark.shield.fill", color: .orange)
-
-            VStack(spacing: 8) {
-                Text(language.text("onboarding.install_title"))
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(language.text("onboarding.install_message"))
-                    .font(.body)
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                installBullet(icon: "checkmark.seal.fill", text: language.text("onboarding.install_ok"), color: .green)
-                installBullet(icon: "xmark.octagon.fill", text: language.text("onboarding.install_bad"), color: .red)
-                installBullet(icon: "exclamationmark.triangle.fill", text: language.text("onboarding.install_jailbreak"), color: .orange)
-            }
-            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .stretch)
             .background(
-                TotoroxTheme.cardBackground,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(TotoroxTheme.cardBackground)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(TotoroxTheme.cardBorderColor, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.04), radius: 8, y: 3)
 
-            Text(language.text("onboarding.install_footer"))
-                .font(.caption)
-                .foregroundStyle(TotoroxTheme.textSecondary)
+            Text(language.text("onboarding.versions_footer"))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, alignment: .top)
     }
 
-    private func featureIcon(systemName: String, color: Color) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(TotoroxTheme.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(color.opacity(0.3), lineWidth: 1)
-                )
-            Image(systemName: systemName)
-                .font(.system(size: 28, weight: .medium))
-                .foregroundStyle(color)
-        }
-        .frame(width: 72, height: 72)
-        .accessibilityHidden(true)
-    }
-
-    private func versionRow(icon: String, title: String, value: String, color: Color) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                Image(systemName: icon).foregroundStyle(color)
-                Text(title)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(TotoroxTheme.textPrimary)
-                Spacer()
-                Text(value)
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Image(systemName: icon)
-                        .foregroundStyle(color)
-                    Text(title)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                }
-                Text(value)
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                    .padding(.leading, 26)
-            }
-        }
-        .font(.subheadline)
-        .padding(12)
-        .background(TotoroxTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func installBullet(icon: String, text: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(color)
+    private func versionRow(title: String, value: String, badge: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(AppTheme.accent)
                 .font(.body.weight(.semibold))
-                .frame(width: 20)
                 .accessibilityHidden(true)
-            Text(text)
-                .font(.subheadline)
+            Text(title)
+                .font(.body.weight(.semibold))
                 .foregroundStyle(TotoroxTheme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if badge {
+                Text(value == "Full" ? language.text("onboarding.full") : value)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accent.opacity(0.12), in: Capsule())
+            } else {
+                Text(value)
+                    .font(.subheadline.monospaced())
+                    .foregroundStyle(TotoroxTheme.textSecondary)
+            }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    // MARK: - Controls
 
     private var controls: some View {
         VStack(spacing: 12) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    controlButtons
-                }
-                VStack(spacing: 10) {
-                    controlButtons
-                }
+            HStack(spacing: 12) {
+                controlButtons
             }
             .frame(maxWidth: 560)
             .padding(.horizontal, 20)
@@ -425,7 +260,7 @@ struct OnboardingView: View {
                 guard let previousStep = step.prev else { return }
                 navigate(to: previousStep, direction: .backward)
             } label: {
-                Label(language.text("common.back"), systemImage: "chevron.left")
+                Text(language.text("common.back"))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -439,15 +274,8 @@ struct OnboardingView: View {
                 onComplete()
             }
         } label: {
-            HStack(spacing: 6) {
-                Text(language.text(step == .install ? "common.finish" : "common.next"))
-                if step != .install {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .accessibilityHidden(true)
-                }
-            }
-            .frame(maxWidth: .infinity)
+            Text(language.text(step == .versions ? "onboarding.get_started" : "onboarding.continue"))
+                .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -478,7 +306,7 @@ enum OnboardingStore {
            let date = attrs[.modificationDate] as? Date {
             return String(Int(date.timeIntervalSince1970))
         }
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath),
+        if let attrs = FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath),
            let date = (attrs[.creationDate] as? Date) ?? (attrs[.modificationDate] as? Date) {
             return String(Int(date.timeIntervalSince1970))
         }
