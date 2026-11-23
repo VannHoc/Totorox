@@ -214,6 +214,10 @@ enum SandboxGrantRouter {
     /// "disable Tier 4" switch — WQFiles only retries/repairs and blocks builds
     /// where Apple patched the exploit (`WorseQuery.isPatchedBuild`).
     static func grant(path: String, requireWrite: Bool = false) -> Int64 {
+        grantImpl(path: path, requireWrite: requireWrite, didRotateGroup: false)
+    }
+
+    private static func grantImpl(path: String, requireWrite: Bool, didRotateGroup: Bool) -> Int64 {
         guard path.count > 1, path.hasPrefix("/") else { return -1 }
 
         // iOS 16–18: chỉ dùng DarkSword kernel exploit / MHA-C2 + truy cập
@@ -291,6 +295,13 @@ enum SandboxGrantRouter {
         }
 
         let result = failure != 0 ? failure : -1
+        // WQ Files may be signed with the same App Group and own the Caches
+        // swap right now → every token comes back WQ_ERR_NO_TOKEN. The group
+        // name is irrelevant to worse_query, so retry once on another group.
+        if result == Int64(WQ_ERR_NO_TOKEN), !didRotateGroup,
+           WorseQuery.rotateGrantGroup() {
+            return grantImpl(path: path, requireWrite: requireWrite, didRotateGroup: true)
+        }
         rememberFailure(result, path: path, requireWrite: requireWrite)
         return result
     }

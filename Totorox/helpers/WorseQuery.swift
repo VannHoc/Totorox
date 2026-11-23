@@ -123,6 +123,31 @@ enum WorseQuery {
         #endif
     }
 
+    /// WQ Files and Totorox can be signed with the SAME App Group. Both briefly
+    /// swap `<group>/Library/Caches` to obtain tokens; when the other app owns
+    /// the swap, every grant fails with WQ_ERR_NO_TOKEN (see WQ Files README,
+    /// "another app signed with the same App Group is changing it"). The group
+    /// name is irrelevant to worse_query, so move to the next declared group.
+    static func rotateGrantGroup() -> Bool {
+        groupLock.lock()
+        let current = cachedGrantGroup
+        groupLock.unlock()
+        let usable = usableGroups()
+        guard usable.count > 1, let current,
+              let index = usable.firstIndex(of: current) else { return false }
+        let next = usable[(index + 1) % usable.count]
+        guard next != current else { return false }
+        groupLock.lock()
+        cachedGrantGroup = next
+        groupLock.unlock()
+        #if !targetEnvironment(simulator)
+        worse_query_clear_cache()
+        #endif
+        log("worse_query: grant group rotated \(current) -> \(next) " +
+            "(NO_TOKEN — shared App Group swap conflict?)")
+        return true
+    }
+
     /// Groups that are declared *and* whose container actually exists.
     static func usableGroups() -> [String] {
         declaredGroups.filter(hasContainer)
