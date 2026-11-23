@@ -201,7 +201,10 @@ enum ContainerStore {
     /// ensureContainerAccess khi metadata plist không đọc được.
     private static let metadataFallbackLock = NSLock()
     private static var metadataFallbackInProgress: Set<String> = []
-    private static let cachedHomeCanonical: String = ContainerMetadataCache.canonicalPath(NSHomeDirectory())
+    // Real-path form (/private/var/...) — sandbox extensions are issued for this
+    // spelling. ContainerMetadataCache.canonicalPath() strips /private and must
+    // not be used for anything sent to the daemon.
+    private static let cachedHomeCanonical: String = ContainerDiscoveryMerger.canonicalPath(NSHomeDirectory())
 
     /// `identifier -> container path` for every app-data container, taken from a
     /// single container-manager metadata query.
@@ -827,6 +830,26 @@ enum ContainerStore {
         return errno == ENOENT
     }
 
+    /// Dùng trước khi đăng ký một container lấy từ csstore. Chỉ ENOENT mới là
+    /// "stale"; EPERM/EACCES là sandbox từ chối trên container CÒN TỒN TẠI,
+    /// không được xoá entry (WQ Files cũng chỉ bỏ các path không còn tồn tại).
+    enum ContainerExistence {
+        case exists
+        case missing
+        case denied
+    }
+
+    static func containerExistence(at path: String) -> ContainerExistence {
+        var st = stat()
+        errno = 0
+        if stat(path, &st) == 0 { return .exists }
+        switch errno {
+        case ENOENT: return .missing
+        case EPERM, EACCES: return .denied
+        default: return .exists // lỗi không rõ → không xoá, để các bước sau tự xử lý
+        }
+    }
+
     static func enumerateDirectories(path: String) -> [String] {
         let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
         guard clean.hasPrefix("/") else { return [] }
@@ -1289,7 +1312,9 @@ enum ContainerStore {
         grantHandlesLock.unlock()
 
         // Tier 1 bad_query -> Tier 4 worse_query fallback (badQueryBlocked memo).
-        let handle = SandboxGrantRouter.grant(path: clean, requireWrite: requireWrite)
+        // `key` is the real path (/private/var/...); pass it to the daemon instead
+        // of `clean`, which callers may supply in the /var/... symlink spelling.
+        let handle = SandboxGrantRouter.grant(path: key, requireWrite: requireWrite)
         if handle >= 0 {
             grantHandlesLock.lock()
             // Refresh MRU: a key already tracked must move to the end instead of
@@ -1360,7 +1385,10 @@ enum ContainerStore {
         #if targetEnvironment(simulator)
         return path
         #else
-        let targetPath = ContainerMetadataCache.canonicalPath(path)
+        // Grant and verify against the REAL path. ContainerMetadataCache.canonicalPath()
+        // removes /private, which makes the daemon issue a token for /var/... that does
+        // not cover the actual /private/var/... node WQ Files grants.
+        let targetPath = ContainerDiscoveryMerger.canonicalPath(path)
 
         if ContainerMetadataCache.isApplicationContainersRoot(targetPath) {
             return targetPath
@@ -1858,28 +1886,87 @@ enum ContainerStore {
         return entries
     }
 
-    /// Strictly reads directory contents directly from disk (POSIX opendir/readdir or FileManager)
-    /// based on the exact absolute path. Never triggers AppContainerScanner or replaces an empty
-    /// directory with the installed apps list.
+    /// Kết quả đọc thư mục: `[]` thật khác với `[]` do sandbox denial.
+    /// Chỉ `.entries` được phép cache; `.denied` buộc phải đọc lại ở lần sau.
+    enum DirectoryReadOutcome {
+        case entries([FileEntry])
+        case denied(Int32) // errno
+    }
+
+    /// Wrapper giữ nguyên chữ ký cũ cho mọi caller hiện tại.
     static func readDirectoryEntriesFromDisk(at path: String) -> [FileEntry] {
+        switch readDirectoryOutcome(at: path) {
+        case .entries(let list): return list
+        case .denied(_): return []
+        }
+    }
+
+    /// Nhận diện thư mục "rỗng một cách đáng ngờ": token chỉ phủ node thư mục,
+    /// `opendir` thành công nhưng `readdir` trả 0 entry. Dùng st_nlink (>2 nghĩa là
+    /// bên trong bắt buộc có ít nhất một thư mục con) làm heuristic chính, rồi
+    /// fallback kiểm tra quyền trên vài child known-name. Ưu tiên không sót denial.
+    private static func isSuspiciouslyEmptyDirectory(at path: String) -> Bool {
+        var st = stat()
+        errno = 0
+        if lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, st.st_nlink > 2 {
+            log("readDirectoryEntriesFromDisk: SUSPICIOUS EMPTY \(path) nlink=\(st.st_nlink)")
+            return true
+        }
+
+        for child in ["Documents", "Library"] {
+            let childPath = (path as NSString).appendingPathComponent(child)
+            switch containerExistence(at: childPath) {
+            case .missing:
+                continue
+            case .denied:
+                log("readDirectoryEntriesFromDisk: SUSPICIOUS EMPTY \(path) child=\(child) stat denied")
+                return true
+            case .exists:
+                if SandboxGrantRouter.verifyAccess(path: childPath) != 0 {
+                    log("readDirectoryEntriesFromDisk: SUSPICIOUS EMPTY \(path) child=\(child) access denied")
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    static func readDirectoryOutcome(at path: String) -> DirectoryReadOutcome {
         // A path that does not exist has no entries. Returning here also keeps
         // `ensureContainerAccess` from paying for a doomed grant (the reference
         // `_wq_grant` refuses missing targets for the same reason).
         if isDefinitelyMissing(path) {
-            return []
+            return .entries([])
         }
 
         let accessPath = ensureContainerAccess(for: path)
+
+        // Nếu chính grant/verify nói path vẫn không đọc được → denial, không cache.
+        // App-data root được liệt kê từ cache csstore ở listFiles(), không phải từ
+        // grant — bỏ qua để khỏi gắn cờ denial nhầm cho danh sách app.
+        if !ContainerMetadataCache.isApplicationContainersRoot(accessPath) {
+            let accessError = SandboxGrantRouter.verifyAccess(path: accessPath)
+            if accessError != 0 {
+                log("readDirectoryEntriesFromDisk: DENIED for \(path) errno=\(-accessError) stage=verify")
+                return .denied(Int32(-accessError))
+            }
+        }
 
         var candidates: [String] = []
         for candidate in [accessPath, path] where !candidate.isEmpty && !candidates.contains(candidate) {
             candidates.append(candidate)
         }
 
-        // 1. Try POSIX opendir/readdir first (returns [] immediately if directory is genuinely empty)
+        // 1. POSIX opendir/readdir. Một kết quả [] tại đây có thể là rỗng thật
+        //    hoặc token chỉ phủ node — phân biệt ở dưới bằng isSuspiciouslyEmptyDirectory.
+        var sawEmptyListing = false
         for p in candidates {
             if let posixEntries = posixListDirectory(at: p) {
-                return sortedEntries(posixEntries)
+                if posixEntries.isEmpty {
+                    sawEmptyListing = true
+                    continue
+                }
+                return .entries(sortedEntries(posixEntries))
             }
         }
 
@@ -1887,20 +1974,36 @@ enum ContainerStore {
         let resolved = URL(fileURLWithPath: accessPath).resolvingSymlinksInPath().path
         if !resolved.isEmpty && !candidates.contains(resolved) {
             if let posixEntries = posixListDirectory(at: resolved) {
-                return sortedEntries(posixEntries)
+                if posixEntries.isEmpty {
+                    sawEmptyListing = true
+                } else {
+                    return .entries(sortedEntries(posixEntries))
+                }
             }
             candidates.insert(resolved, at: 0)
         }
 
-        // 2. Fallback to FileManager (returns [] immediately if directory is genuinely empty)
+        // 2. Fallback to FileManager
         for p in candidates {
             if let fallback = fileManagerListFiles(at: p) {
-                return sortedEntries(fallback)
+                if fallback.isEmpty {
+                    sawEmptyListing = true
+                    continue
+                }
+                return .entries(sortedEntries(fallback))
             }
         }
 
-        log("readDirectoryEntriesFromDisk: FAILED for \(path) errno=\(errno)")
-        return []
+        if sawEmptyListing {
+            if isSuspiciouslyEmptyDirectory(at: path) {
+                return .denied(EPERM)
+            }
+            return .entries([]) // rỗng thật — được phép cache
+        }
+
+        let failureErrno = errno
+        log("readDirectoryEntriesFromDisk: DENIED for \(path) errno=\(failureErrno) stage=all-reads-failed")
+        return .denied(failureErrno)
     }
 
     static func listFiles(at path: String) -> [FileEntry] {

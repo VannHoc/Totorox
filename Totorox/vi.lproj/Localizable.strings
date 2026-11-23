@@ -553,7 +553,8 @@
 "folders.quick.containers" = "Thư mục Containers (AppData)";
 "folders.quick.tmp" = "Thư mục Tạm (Tmp)";
 "folders.search_in_folder" = "Tìm kiếm trong thư mục này...";
-"folders.empty_or_unreadable" = "Thư mục trống hoặc không có quyền đọc";
+"folders.empty_or_unreadable" = "Thư mục trống";
+"folders.permission_denied" = "Không thể đọc thư mục này (bị từ chối quyền). Kéo xuống để thử lại.";
 "folders.new_folder.title" = "Tạo thư mục mới";
 "folders.new_folder.placeholder" = "Tên thư mục";
 "folders.new_folder.create_btn" = "Tạo";

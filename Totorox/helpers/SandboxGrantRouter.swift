@@ -375,6 +375,20 @@ enum SandboxGrantRouter {
     private static func badQueryScopes(group: String?) -> [BadQueryScope] {
         var scopes = [BadQueryScope(group: nil, flags: badQueryFlagPrimary, label: "system")]
         guard let group = group, !group.isEmpty else { return scopes }
+
+        // A real no-path probe (WQ Files style) decides which flag this build
+        // actually answers. When only one works, do not waste a daemon round-trip
+        // on the other; when both or neither work, keep the historical order.
+        if let probe = WorseQuery.probeTokenFlags(group: group) {
+            if probe.primary && !probe.anyPath {
+                scopes.append(BadQueryScope(group: group, flags: badQueryFlagPrimary, label: "group"))
+                return scopes
+            }
+            if probe.anyPath && !probe.primary {
+                scopes.append(BadQueryScope(group: group, flags: badQueryFlagAnyPath, label: "group-any"))
+                return scopes
+            }
+        }
         scopes.append(BadQueryScope(group: group, flags: badQueryFlagPrimary, label: "group"))
         scopes.append(BadQueryScope(group: group, flags: badQueryFlagAnyPath, label: "group-any"))
         return scopes
@@ -386,8 +400,14 @@ enum SandboxGrantRouter {
                                          targetExists: Bool) -> Attempt {
         // iOS < 27 prefers 1<<35, iOS >= 27 prefers 1<<39; a variant that once
         // produced a verified handle stays pinned (reference `_wq_grant` keeps
-        // the same per-process memo).
+        // the same per-process memo). A real no-path probe overrides the
+        // OS-version heuristic only when exactly one flag actually works;
+        // otherwise the historical order stays as the fallback.
         var variant = WorseQuery.preferredVariant
+        if let probe = WorseQuery.tokenProbe {
+            if probe.primary && !probe.anyPath { variant = .primary }
+            if probe.anyPath && !probe.primary { variant = .anyPath }
+        }
         var lastCode = Int64(WQ_ERR_NO_TOKEN)
 
         for round in 0..<2 {
@@ -547,13 +567,16 @@ enum SandboxGrantRouter {
         return 0
         #else
         let mode: Int32 = requireWrite ? (R_OK | W_OK) : R_OK
-        var resolvedPath = path
+        // Always verify the real path spelling; /var/... is a symlink and a token
+        // issued for it may never cover the /private/var/... node itself.
+        let checkedPath = ContainerDiscoveryMerger.canonicalPath(path)
+        var resolvedPath = checkedPath
 
         errno = 0
-        if access(path, mode) != 0 {
+        if access(checkedPath, mode) != 0 {
             let initialErrno = errno
             if initialErrno == ENOENT {
-                let ancestor = nearestExistingAncestor(of: path)
+                let ancestor = nearestExistingAncestor(of: checkedPath)
                 guard ancestor != "/", ancestor != "/private",
                       ancestor != "/var", ancestor != "/private/var" else {
                     return badQueryAccessError(forErrno: initialErrno)
@@ -568,11 +591,11 @@ enum SandboxGrantRouter {
                 // FileIOEngine atomically stages a new file in the parent directory and renames it.
                 // Only parent directory W_OK is required; don't misclassify POSIX 0444 as a sandbox block.
                 var st = stat()
-                let parent = (path as NSString).deletingLastPathComponent
-                guard lstat(path, &st) == 0,
+                let parent = (checkedPath as NSString).deletingLastPathComponent
+                guard lstat(checkedPath, &st) == 0,
                       (st.st_mode & S_IFMT) == S_IFREG,
                       (st.st_mode & 0o222) == 0,
-                      access(path, R_OK) == 0,
+                      access(checkedPath, R_OK) == 0,
                       !parent.isEmpty, parent != "/", parent != "/private",
                       parent != "/var", parent != "/private/var" else {
                     return badQueryAccessError(forErrno: initialErrno)

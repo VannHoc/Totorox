@@ -30,6 +30,8 @@ enum FolderSortOption: String, CaseIterable, Identifiable {
 final class DirectoryViewModel: ObservableObject {
     @Published private(set) var entries: [FileEntry] = []
     @Published var isLoading: Bool = false
+    /// True khi lần đọc cuối bị sandbox denial. Khác với "thư mục rỗng thật".
+    @Published private(set) var readDenied: Bool = false
     private(set) var activeCanonicalPath: String = ""
     private var loadTask: Task<Void, Never>? = nil
 
@@ -57,21 +59,33 @@ final class DirectoryViewModel: ObservableObject {
         if !forceRefresh, let cached = ContainerMetadataCache.shared.cachedList(for: canonPath) {
             entries.removeAll()
             entries = cached
+            readDenied = false
             isLoading = false
 
             // Background read-only verification
             loadTask = Task.detached(priority: .utility) {
                 guard !Task.isCancelled else { return }
-                let loaded = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
-                    ContainerStore.readDirectoryEntriesFromDisk(at: path)
+                let outcome = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
+                    ContainerStore.readDirectoryOutcome(at: path)
                 }
                 guard !Task.isCancelled else { return }
-                ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
-                if loaded != cached {
+                switch outcome {
+                case .entries(let loaded):
+                    ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
+                    if loaded != cached {
+                        await MainActor.run {
+                            guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
+                            self.entries.removeAll()
+                            self.entries = loaded
+                            self.readDenied = false
+                        }
+                    }
+                case .denied(_):
+                    // Không cache danh sách rỗng sinh ra bởi lỗi grant.
+                    ContainerMetadataCache.shared.removeList(for: canonPath)
                     await MainActor.run {
                         guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
-                        self.entries.removeAll()
-                        self.entries = loaded
+                        self.readDenied = true
                     }
                 }
             }
@@ -79,21 +93,33 @@ final class DirectoryViewModel: ObservableObject {
         }
 
         entries.removeAll()
+        readDenied = false
         isLoading = true
 
         loadTask = Task.detached(priority: .userInitiated) {
             guard !Task.isCancelled else { return }
-            let loaded = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
-                ContainerStore.readDirectoryEntriesFromDisk(at: path)
+            let outcome = SecurityScopedFolderManager.shared.withScopedAccess(for: url) {
+                ContainerStore.readDirectoryOutcome(at: path)
             }
             guard !Task.isCancelled else { return }
-            ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
-
-            await MainActor.run {
-                guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
-                self.entries.removeAll()
-                self.entries = loaded
-                self.isLoading = false
+            switch outcome {
+            case .entries(let loaded):
+                ContainerMetadataCache.shared.storeList(loaded, for: canonPath)
+                await MainActor.run {
+                    guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
+                    self.entries.removeAll()
+                    self.entries = loaded
+                    self.readDenied = false
+                    self.isLoading = false
+                }
+            case .denied(_):
+                ContainerMetadataCache.shared.removeList(for: canonPath)
+                await MainActor.run {
+                    guard !Task.isCancelled, self.activeCanonicalPath == canonPath else { return }
+                    self.entries.removeAll()
+                    self.readDenied = true
+                    self.isLoading = false
+                }
             }
         }
     }
@@ -588,6 +614,13 @@ struct FolderExplorerView: View {
                                         .scaleEffect(1.2)
                                         .padding(.bottom, 4)
                                     Text(language.text("folders.loading_content"))
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(TotoroxTheme.textSecondary)
+                                } else if !isAtAppContainersRoot && directoryVM.readDenied && searchText.isEmpty {
+                                    Image(systemName: "lock")
+                                        .font(.system(size: 44))
+                                        .foregroundStyle(TotoroxTheme.textSecondary.opacity(0.4))
+                                    Text(language.text("folders.permission_denied"))
                                         .font(.system(size: 14))
                                         .foregroundStyle(TotoroxTheme.textSecondary)
                                 } else {

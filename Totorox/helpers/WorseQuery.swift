@@ -171,6 +171,66 @@ enum WorseQuery {
         var label: String { self == .primary ? "primary" : "any_path" }
     }
 
+    /// Result of the no-path daemon probe (WQ Files style). Unlike the OS-version
+    /// heuristic this is an actual answer from the daemon for this build/session.
+    struct TokenProbe {
+        var primary: Bool
+        var anyPath: Bool
+        var covered: String
+        var mask: Int32
+    }
+
+    private static let tokenProbeLock = NSLock()
+    private static var tokenProbeCache: TokenProbe?
+
+    /// Query the daemon for a token with NO target path and read the covered
+    /// folder from the token itself. The token is never consumed, so this is safe
+    /// to call at launch. Result is cached for the session.
+    static func probeTokenFlags(group providedGroup: String? = nil) -> TokenProbe? {
+        guard let group = (providedGroup ?? grantGroup), !group.isEmpty else { return nil }
+        tokenProbeLock.lock()
+        if let cached = tokenProbeCache {
+            tokenProbeLock.unlock()
+            return cached
+        }
+        tokenProbeLock.unlock()
+
+        #if targetEnvironment(simulator)
+        return nil
+        #else
+        var covered = [CChar](repeating: 0, count: 1024)
+        let mask = group.withCString { wq_probe_token_flags($0, &covered, covered.count) }
+        guard mask >= 0 else {
+            log("worse_query: token probe FAILED code=\(mask) \(errorName(Int64(mask)))")
+            return nil
+        }
+        let coveredText = covered.withUnsafeBufferPointer { ptr in
+            String(cString: ptr.baseAddress!)
+        }
+        let probe = TokenProbe(
+            primary: (mask & Int32(WQ_PROBE_FLAG_PRIMARY)) != 0,
+            anyPath: (mask & Int32(WQ_PROBE_FLAG_ANY_PATH)) != 0,
+            covered: coveredText,
+            mask: mask
+        )
+        tokenProbeLock.lock()
+        tokenProbeCache = probe
+        tokenProbeLock.unlock()
+        log("worse_query: token probe flags=0x\(String(mask, radix: 16)) " +
+            "primary=\(probe.primary) any_path=\(probe.anyPath) covered=\(probe.covered)")
+        return probe
+        #endif
+    }
+
+    /// Lazily resolved probe used by the grant router. Nil when Tier 4 is not
+    /// eligible or the daemon refused both flags — callers keep their old fallback.
+    static var tokenProbe: TokenProbe? {
+        tokenProbeLock.lock()
+        let cached = tokenProbeCache
+        tokenProbeLock.unlock()
+        return cached ?? probeTokenFlags()
+    }
+
     /// Variant to try first, mirroring the reference `_wq_grant`:
     /// iOS < 27 → `.anyPath`, iOS >= 27 → `.primary`. Once a variant produced a
     /// verified handle it is pinned for the session by `noteVariant(_:)`.

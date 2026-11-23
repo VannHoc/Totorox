@@ -553,7 +553,8 @@
 "folders.quick.containers" = "应用数据容器 (AppData)";
 "folders.quick.tmp" = "临时目录 (Tmp)";
 "folders.search_in_folder" = "在当前目录搜索...";
-"folders.empty_or_unreadable" = "目录为空或无读取权限";
+"folders.empty_or_unreadable" = "目录为空";
+"folders.permission_denied" = "无法读取此目录（权限被拒绝）。下拉刷新重试。";
 "folders.new_folder.title" = "新建文件夹";
 "folders.new_folder.placeholder" = "文件夹名称";
 "folders.new_folder.create_btn" = "创建";

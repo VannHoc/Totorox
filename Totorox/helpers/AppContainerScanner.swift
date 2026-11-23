@@ -233,6 +233,18 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             return nil
         }
 
+        // WQ Files bỏ các entry LaunchServices trỏ tới container đã bị xoá.
+        // Chỉ xoá khi stat chắc chắn ENOENT — EPERM/EACCES là denial, không phải stale.
+        switch ContainerStore.containerExistence(at: finalPath) {
+        case .missing:
+            log("browser: stale csstore container skipped bundleID=\(cleanBundleID) " +
+                "uuid=\(udid) path=\(finalPath)")
+            ContainerMetadataCache.shared.removeLaunchServicesPath(forBundleID: cleanBundleID)
+            return nil
+        case .exists, .denied:
+            break
+        }
+
         let proxyInfo = appInfoForBundleID(cleanBundleID) as? [String: Any] ?? [:]
         let proxyName = proxyInfo["name"] as? String
         let catalogMeta = bundleCatalog[cleanBundleID]
@@ -554,10 +566,11 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 // WQFiles csstore map: UUID/identifier → path trực tiếp. Chỉ gọi
                 // MCM activate cho candidate mà csstore không trả đường dẫn.
                 var resolvedPath: String?
+                var cameFromCsstore = false
                 if let direct = ContainerStore.launchServicesContainerPath(for: candidateID),
                    ContainerStore.isApplicationContainerPath(direct) {
                     resolvedPath = direct
-                    directPathCount += 1
+                    cameFromCsstore = true
                 } else {
                     var actError: NSString? = nil
                     if let activated = MCMActivateContainerPath(2, candidateID, false, &actError),
@@ -578,6 +591,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                         preferredName: meta?.displayName ?? ContainerStore.launchServicesDisplayName(for: actualBundleID)
                     ) != nil {
                         newlyResolvedInStage2 += 1
+                        if cameFromCsstore { directPathCount += 1 }
                         if newlyResolvedInStage2 == 10 || newlyResolvedInStage2.isMultiple(of: 25) {
                             let partial = self.buildSortedSnapshotFromCache()
                             await MainActor.run {

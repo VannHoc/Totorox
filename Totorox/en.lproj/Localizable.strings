@@ -553,7 +553,8 @@
 "folders.quick.containers" = "Containers (AppData)";
 "folders.quick.tmp" = "Temporary Folder (Tmp)";
 "folders.search_in_folder" = "Search in this folder...";
-"folders.empty_or_unreadable" = "Folder is empty or unreadable";
+"folders.empty_or_unreadable" = "Folder is empty";
+"folders.permission_denied" = "Cannot read this folder (permission denied). Pull to refresh to try again.";
 "folders.new_folder.title" = "New Folder";
 "folders.new_folder.placeholder" = "Folder name";
 "folders.new_folder.create_btn" = "Create";

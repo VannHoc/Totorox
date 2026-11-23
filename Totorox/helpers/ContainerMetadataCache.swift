@@ -246,6 +246,51 @@ final class ContainerMetadataCache: @unchecked Sendable {
         }
     }
 
+    /// WQ Files style: drop a LaunchServices entry whose data container no longer
+    /// exists. The snapshot uses `let` fields, so rebuild it with the entry removed.
+    func removeLaunchServicesPath(forBundleID bundleID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let store = _cachedLSStore,
+              let removedPath = store.pathByBundleID[bundleID] else { return }
+
+        var paths = store.pathByBundleID
+        paths.removeValue(forKey: bundleID)
+
+        var byContainer = store.bundleIDByContainerPath
+        byContainer.removeValue(forKey: removedPath)
+        byContainer.removeValue(forKey: ContainerDiscoveryMerger.canonicalPath(removedPath))
+        byContainer = byContainer.filter {
+            $0.value.caseInsensitiveCompare(bundleID) != .orderedSame
+        }
+
+        var identifiers = store.identifiers
+        identifiers.removeAll { $0.caseInsensitiveCompare(bundleID) == .orderedSame }
+        var cachedIDs = _cachedLaunchServicesIDs
+        cachedIDs?.removeAll { $0.caseInsensitiveCompare(bundleID) == .orderedSame }
+
+        _cachedLSStore = LSStoreSnapshot(
+            identifiers: identifiers,
+            bundleIDByContainerPath: byContainer,
+            pathByBundleID: paths,
+            displayNameByBundleID: store.displayNameByBundleID,
+            bundleNameByBundleID: store.bundleNameByBundleID,
+            bundlePathByBundleID: store.bundlePathByBundleID,
+            groupIDByContainerPath: store.groupIDByContainerPath,
+            layout: store.layout,
+            containerPathCount: byContainer.count
+        )
+        _cachedLaunchServicesIDs = cachedIDs
+    }
+
+    /// Drop a cached directory listing. Used when a read failed because of a
+    /// sandbox denial — an empty list from a denial must never become a cache hit.
+    func removeList(for path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        directoryListCache.removeValue(forKey: Self.canonicalPath(path))
+    }
+
     func cachedIcon(for bundleID: String) -> UIImage? {
         lock.lock()
         defer { lock.unlock() }
