@@ -185,7 +185,7 @@ struct OnboardingView: View {
                 Divider().overlay(TotoroxTheme.dividerColor)
                 versionRow(title: "iOS 26+", value: "26.0 – 27.3 Beta 1")
             }
-            .frame(maxWidth: .infinity, alignment: .stretch)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(TotoroxTheme.cardBackground)
@@ -306,7 +306,7 @@ enum OnboardingStore {
            let date = attrs[.modificationDate] as? Date {
             return String(Int(date.timeIntervalSince1970))
         }
-        if let attrs = FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath),
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath),
            let date = (attrs[.creationDate] as? Date) ?? (attrs[.modificationDate] as? Date) {
             return String(Int(date.timeIntervalSince1970))
         }
