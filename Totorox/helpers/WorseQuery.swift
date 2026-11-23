@@ -199,7 +199,7 @@ enum WorseQuery {
         return nil
         #else
         var covered = [CChar](repeating: 0, count: 1024)
-        let mask = group.withCString { wq_probe_token_flags($0, &covered, covered.count) }
+        let mask = group.withCString { wq_probe_token_flags($0, &covered, UInt64(covered.count)) }
         guard mask >= 0 else {
             log("worse_query: token probe FAILED code=\(mask) \(errorName(Int64(mask)))")
             return nil
