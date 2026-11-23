@@ -367,30 +367,44 @@ enum SandboxGrantRouter {
 
     private static let badQueryFlagPrimary: UInt64 = 0x0000_0080_0000_0000 // 1 << 39
     private static let badQueryFlagAnyPath: UInt64 = 0x0000_0008_0000_0000 // 1 << 35
+    /// WQ Files' "standard flags": flags = 0. On iOS 26.6.1 this is what turns
+    /// the App Group token into a token covering a real container (lsd /
+    /// InternalDaemon), so the csstore path can be found without an MCM class-10
+    /// lookup tied to the app's bundle ID.
+    private static let badQueryFlagStandard: UInt64 = 0
 
-    /// Class-13 first (the documented order, still the only working one below
-    /// iOS 26), then our own App Group with both flag variants — iOS 27 answers
-    /// only the class-7 shape and prefers `1 << 39`, while `1 << 35` is what the
-    /// older builds honoured.
+    /// Class-13 first, then our App Group with the flag variants the probe says
+    /// work, and finally `flags = 0` for both scopes (the WQ bridge).
     private static func badQueryScopes(group: String?) -> [BadQueryScope] {
         var scopes = [BadQueryScope(group: nil, flags: badQueryFlagPrimary, label: "system")]
-        guard let group = group, !group.isEmpty else { return scopes }
 
-        // A real no-path probe (WQ Files style) decides which flag this build
-        // actually answers. When only one works, do not waste a daemon round-trip
-        // on the other; when both or neither work, keep the historical order.
+        func appendStandardScopes(_ group: String?) {
+            scopes.append(BadQueryScope(group: nil, flags: badQueryFlagStandard, label: "system-standard"))
+            if let group {
+                scopes.append(BadQueryScope(group: group, flags: badQueryFlagStandard, label: "group-standard"))
+            }
+        }
+
+        guard let group = group, !group.isEmpty else {
+            appendStandardScopes(nil)
+            return scopes
+        }
+
         if let probe = WorseQuery.probeTokenFlags(group: group) {
             if probe.primary && !probe.anyPath {
                 scopes.append(BadQueryScope(group: group, flags: badQueryFlagPrimary, label: "group"))
+                appendStandardScopes(group)
                 return scopes
             }
             if probe.anyPath && !probe.primary {
                 scopes.append(BadQueryScope(group: group, flags: badQueryFlagAnyPath, label: "group-any"))
+                appendStandardScopes(group)
                 return scopes
             }
         }
         scopes.append(BadQueryScope(group: group, flags: badQueryFlagPrimary, label: "group"))
         scopes.append(BadQueryScope(group: group, flags: badQueryFlagAnyPath, label: "group-any"))
+        appendStandardScopes(group)
         return scopes
     }
 
@@ -410,7 +424,11 @@ enum SandboxGrantRouter {
         }
         var lastCode = Int64(WQ_ERR_NO_TOKEN)
 
-        for round in 0..<2 {
+        // Vòng cuối thử flags = 0 — chế độ "standard flags" của WQ Files, tạo
+        // token container từ token app-group mà không cần MCM class 10 (vốn bị
+        // từ chối khi app được ký với bundle ID khác).
+        for round in 0..<3 {
+            if round == 2, variant != .standard { variant = .standard }
             let handle = WorseQuery.grantVariant(path: path, group: group, variant: variant)
             guard handle >= 0 else {
                 lastCode = handle
@@ -429,8 +447,18 @@ enum SandboxGrantRouter {
 
                 // Chỉ thử flags kia khi lỗi có thể do flags gây ra. -6/-5 cho cả
                 // hai variant trên iOS 27 (log thiết bị) nên không tốn swap thứ 2.
-                if round == 0 && WorseQuery.shouldRetryAnyPath(handle) {
-                    variant = variant.opposite
+                // Dù không retryable vẫn thử flags = 0 — đây là đường WQ Files dùng
+                // khi bundle ID không còn quyền MCM class 10.
+                if round == 0 {
+                    if WorseQuery.shouldRetryAnyPath(handle) {
+                        variant = variant.opposite
+                    } else {
+                        variant = .standard
+                    }
+                    continue
+                }
+                if round == 1, variant != .standard {
+                    variant = .standard
                     continue
                 }
                 return .failed(handle)
@@ -462,6 +490,10 @@ enum SandboxGrantRouter {
             // POSIX thường (container root-owned) nên verify ở trên đã coi là OK.
             if round == 0 && accessError == -Int64(EPERM) {
                 variant = variant.opposite
+                continue
+            }
+            if round == 1, variant != .standard {
+                variant = .standard
                 continue
             }
             return .failed(accessError)

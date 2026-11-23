@@ -704,6 +704,18 @@ enum ContainerStore {
         }
 
         if leasedCachePaths.isEmpty {
+            // WQ Files lấy token phủ `Data/InternalDaemon/<uuid>/Library/Caches`
+            // bằng standard flags. Thử trực tiếp root này trước — không cần MCM
+            // class 10 và không phụ thuộc bundle ID của app.
+            let daemonRoot = "/var/mobile/Containers/Data/InternalDaemon"
+            let daemonDirectories = enumerateDirectoriesWithTraversalGrant(path: daemonRoot)
+            for directory in daemonDirectories {
+                guard readContainerMetadata(containerPath: directory)?.bundleID == "com.apple.lsd" else {
+                    continue
+                }
+                addCachePath((directory as NSString).appendingPathComponent("Library/Caches"))
+            }
+
             let traversedSystemDirectories = enumerateDirectoriesWithTraversalGrant(path: systemDataRoot)
             let systemDirectories = traversedSystemDirectories.isEmpty
                 ? enumerateDirectories(path: systemDataRoot)

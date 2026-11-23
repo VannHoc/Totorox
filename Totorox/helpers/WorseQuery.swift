@@ -165,10 +165,25 @@ enum WorseQuery {
         case primary = 0
         /// Flags `1 << 35` — "create if missing" set. iOS < 27 prefers it.
         case anyPath = 1
+        /// Flags `0` — WQ Files' "standard flags", the app-group → container
+        /// token bridge on iOS 26.6.1.
+        case standard = 2
 
-        var opposite: Variant { self == .primary ? .anyPath : .primary }
+        var opposite: Variant {
+            switch self {
+            case .primary: return .anyPath
+            case .anyPath: return .primary
+            case .standard: return .primary
+            }
+        }
 
-        var label: String { self == .primary ? "primary" : "any_path" }
+        var label: String {
+            switch self {
+            case .primary: return "primary"
+            case .anyPath: return "any_path"
+            case .standard: return "standard"
+            }
+        }
     }
 
     /// Result of the no-path daemon probe (WQ Files style). Unlike the OS-version
@@ -176,6 +191,9 @@ enum WorseQuery {
     struct TokenProbe {
         var primary: Bool
         var anyPath: Bool
+        /// WQ Files' "standard flags" (flags = 0) — the app-group → container
+        /// token bridge. Works on iOS 26.6.1 even when other flags are denied.
+        var standard: Bool
         var covered: String
         var mask: Int32
     }
@@ -210,6 +228,7 @@ enum WorseQuery {
         let probe = TokenProbe(
             primary: (mask & Int32(WQ_PROBE_FLAG_PRIMARY)) != 0,
             anyPath: (mask & Int32(WQ_PROBE_FLAG_ANY_PATH)) != 0,
+            standard: (mask & Int32(WQ_PROBE_FLAG_STANDARD)) != 0,
             covered: coveredText,
             mask: mask
         )
@@ -217,7 +236,8 @@ enum WorseQuery {
         tokenProbeCache = probe
         tokenProbeLock.unlock()
         log("worse_query: token probe flags=0x\(String(mask, radix: 16)) " +
-            "primary=\(probe.primary) any_path=\(probe.anyPath) covered=\(probe.covered)")
+            "primary=\(probe.primary) any_path=\(probe.anyPath) " +
+            "standard=\(probe.standard) covered=\(probe.covered)")
         return probe
         #endif
     }
