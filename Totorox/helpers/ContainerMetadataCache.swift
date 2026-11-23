@@ -251,15 +251,22 @@ final class ContainerMetadataCache: @unchecked Sendable {
     func removeLaunchServicesPath(forBundleID bundleID: String) {
         lock.lock()
         defer { lock.unlock() }
-        guard let store = _cachedLSStore,
-              let removedPath = store.pathByBundleID[bundleID] else { return }
+        guard let store = _cachedLSStore else { return }
+
+        let removedPaths = store.bundleIDByContainerPath
+            .filter { $0.value.caseInsensitiveCompare(bundleID) == .orderedSame }
+            .map { $0.key }
+        guard !removedPaths.isEmpty || store.pathByBundleID[bundleID] != nil else { return }
 
         var paths = store.pathByBundleID
         paths.removeValue(forKey: bundleID)
 
+        // Bỏ MỌI path lịch sử của bundle này, không chỉ path đầu tiên.
         var byContainer = store.bundleIDByContainerPath
-        byContainer.removeValue(forKey: removedPath)
-        byContainer.removeValue(forKey: ContainerDiscoveryMerger.canonicalPath(removedPath))
+        for path in removedPaths {
+            byContainer.removeValue(forKey: path)
+            byContainer.removeValue(forKey: ContainerDiscoveryMerger.canonicalPath(path))
+        }
         byContainer = byContainer.filter {
             $0.value.caseInsensitiveCompare(bundleID) != .orderedSame
         }

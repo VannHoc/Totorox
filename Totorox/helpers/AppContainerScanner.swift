@@ -233,18 +233,6 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             return nil
         }
 
-        // WQ Files bỏ các entry LaunchServices trỏ tới container đã bị xoá.
-        // Chỉ xoá khi stat chắc chắn ENOENT — EPERM/EACCES là denial, không phải stale.
-        switch ContainerStore.containerExistence(at: finalPath) {
-        case .missing:
-            log("browser: stale csstore container skipped bundleID=\(cleanBundleID) " +
-                "uuid=\(udid) path=\(finalPath)")
-            ContainerMetadataCache.shared.removeLaunchServicesPath(forBundleID: cleanBundleID)
-            return nil
-        case .exists, .denied:
-            break
-        }
-
         let proxyInfo = appInfoForBundleID(cleanBundleID) as? [String: Any] ?? [:]
         let proxyName = proxyInfo["name"] as? String
         let catalogMeta = bundleCatalog[cleanBundleID]
@@ -567,7 +555,8 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 // MCM activate cho candidate mà csstore không trả đường dẫn.
                 var resolvedPath: String?
                 var cameFromCsstore = false
-                if let direct = ContainerStore.launchServicesContainerPath(for: candidateID),
+                let csstorePaths = ContainerStore.launchServicesContainerPaths(for: candidateID)
+                if let direct = ContainerStore.launchServicesExistingContainerPath(for: candidateID),
                    ContainerStore.isApplicationContainerPath(direct) {
                     resolvedPath = direct
                     cameFromCsstore = true
@@ -576,6 +565,14 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                     if let activated = MCMActivateContainerPath(2, candidateID, false, &actError),
                        ContainerStore.isApplicationContainerPath(activated) {
                         resolvedPath = activated
+                    }
+                    // Chỉ bỏ entry csstore khi MỌI path của bundle này đã biến mất
+                    // và MCM activate cũng không cứu được — tránh mất app vì trúng
+                    // một UUID cũ trong số nhiều path lịch sử.
+                    if resolvedPath == nil && !csstorePaths.isEmpty {
+                        log("browser: stale csstore container skipped bundleID=\(candidateID) " +
+                            "paths=\(csstorePaths.count)")
+                        ContainerMetadataCache.shared.removeLaunchServicesPath(forBundleID: candidateID)
                     }
                 }
 

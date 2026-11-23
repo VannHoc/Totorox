@@ -771,6 +771,52 @@ enum ContainerStore {
         return ContainerMetadataCache.shared.cachedLSStore?.pathByBundleID[bundleID]
     }
 
+    /// Mọi path container mà csstore gán cho một bundle ID. Store có thể giữ lại
+    /// nhiều UUID của các lần cài cũ; pathByBundleID chỉ lấy ĐẦU TIÊN (thứ tự dict
+    /// ngẫu nhiên), nên một lần quét có thể rơi trúng path đã xoá và tưởng app mất.
+    static func launchServicesContainerPaths(for bundleID: String) -> [String] {
+        guard !bundleID.isEmpty,
+              let store = ContainerMetadataCache.shared.cachedLSStore else { return [] }
+        var result: [String] = []
+        var seen = Set<String>()
+        for (path, bid) in store.bundleIDByContainerPath
+        where bid.caseInsensitiveCompare(bundleID) == .orderedSame {
+            let real = ContainerDiscoveryMerger.canonicalPath(path)
+            if seen.insert(real).inserted { result.append(real) }
+        }
+        if let single = store.pathByBundleID[bundleID] {
+            let real = ContainerDiscoveryMerger.canonicalPath(single)
+            if seen.insert(real).inserted { result.append(real) }
+        }
+        return result
+    }
+
+    /// Chọn path csstore đầu tiên còn dùng được. Chỉ trả nil khi MỌI path đều
+    /// chắc chắn biến mất (ENOENT) — EPERM/EACCES vẫn giữ lại để không mất app.
+    static func launchServicesExistingContainerPath(for bundleID: String) -> String? {
+        let paths = launchServicesContainerPaths(for: bundleID)
+        var deniedFallback: String?
+        for path in paths {
+            switch containerExistence(at: path) {
+            case .exists:
+                if paths.count > 1 {
+                    log("browser: csstore path chosen bundleID=\(bundleID) " +
+                        "uuid=\((path as NSString).lastPathComponent) candidates=\(paths.count)")
+                }
+                return path
+            case .denied:
+                if deniedFallback == nil { deniedFallback = path }
+            case .missing:
+                continue
+            }
+        }
+        if let deniedFallback, paths.count > 1 {
+            log("browser: csstore path chosen (stat denied) bundleID=\(bundleID) " +
+                "uuid=\((deniedFallback as NSString).lastPathComponent) candidates=\(paths.count)")
+        }
+        return deniedFallback
+    }
+
     /// Tên app từ csstore, dùng khi metadata của container bị sandbox chặn.
     static func launchServicesDisplayName(for bundleID: String) -> String? {
         guard !bundleID.isEmpty else { return nil }
