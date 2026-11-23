@@ -239,7 +239,11 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
         let resolvedName = AppDisplayNamePolicy.resolve(
             bundleID: cleanBundleID,
-            candidates: [preferredName, catalogMeta?.displayName, proxyName]
+            // Metadata plist thường trả displayName = "" (rỗng, không phải nil):
+            // `??` ở các call site không fallback sang tên csstore. Đưa tên
+            // csstore vào đây để mọi luồng đăng ký đều có ứng viên cuối cùng.
+            candidates: [preferredName, catalogMeta?.displayName, proxyName,
+                         ContainerStore.launchServicesDisplayName(for: cleanBundleID)]
         )
         let bPath = preferredBundlePath ?? (proxyInfo["bundlePath"] as? String)
         let icon = preferredIcon
