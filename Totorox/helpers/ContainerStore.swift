@@ -613,6 +613,52 @@ enum ContainerStore {
         }
     }
 
+    /// WQ Files nhớ vị trí store LaunchServices và dùng lại ở các lần sau. Totorox
+    /// trước đây chỉ hỏi MCM class 10 (`com.apple.lsd`) mỗi lần chạy; khi app được
+    /// ký lại với bundle ID khác, query class 10 bị `lookup denied` → csstore=0 →
+    /// mất toàn bộ danh sách app dù worse_query vẫn cấp token bình thường.
+    /// Lưu vào App Group container (sống qua đổi bundle ID), UserDefaults chỉ là
+    /// bản sao dự phòng.
+    private static let lsStorePathsDefaultsKey = "TotoroxLaunchServicesStorePaths"
+
+    private static var lsStorePathsFileURL: URL? {
+        guard let group = WorseQuery.grantGroup,
+              let root = FileManager.default.containerURL(
+                  forSecurityApplicationGroupIdentifier: group
+              ) else { return nil }
+        return root.appendingPathComponent("Library/Application Support/TotoroxLaunchServicesStorePaths.plist")
+    }
+
+    private static func rememberedLSStorePaths() -> [String] {
+        var result: [String] = []
+        if let url = lsStorePathsFileURL,
+           let array = NSArray(contentsOf: url) as? [String] {
+            result.append(contentsOf: array)
+        }
+        if let defaults = UserDefaults.standard.stringArray(forKey: lsStorePathsDefaultsKey) {
+            result.append(contentsOf: defaults)
+        }
+        var seen = Set<String>()
+        return result.filter { seen.insert($0).inserted }
+    }
+
+    private static func rememberLSStorePath(_ path: String) {
+        let canonical = ContainerDiscoveryMerger.canonicalPath(path)
+        guard !canonical.isEmpty else { return }
+        var paths = rememberedLSStorePaths().filter { $0 != canonical }
+        paths.insert(canonical, at: 0)
+        if paths.count > 4 { paths = Array(paths.prefix(4)) }
+
+        if let url = lsStorePathsFileURL {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            (paths as NSArray).write(to: url, atomically: true)
+        }
+        UserDefaults.standard.set(paths, forKey: lsStorePathsDefaultsKey)
+    }
+
     static func launchServicesStoreIdentifiers() -> [String] {
         if let cached = ContainerMetadataCache.shared.cachedLaunchServicesIDs, !cached.isEmpty {
             return cached
@@ -625,6 +671,11 @@ enum ContainerStore {
             let path = ContainerDiscoveryMerger.canonicalPath(rawPath)
             guard !path.isEmpty, seenCachePaths.insert(path).inserted else { return }
             cachePaths.append(path)
+        }
+
+        // Đường đã dùng ở lần trước trước tiên — ngay cả khi MCM class 10 bị denied.
+        for path in rememberedLSStorePaths() {
+            addCachePath(path)
         }
 
         var leasedCachePaths = Set<String>()
@@ -704,6 +755,10 @@ enum ContainerStore {
                       size.uint64Value <= 64 * 1_024 * 1_024,
                       let data = try? Data(contentsOf: URL(fileURLWithPath: storePath), options: .mappedIfSafe) else {
                     continue
+                }
+                if !data.isEmpty {
+                    rememberLSStorePath(cachePath)
+                    log("browser: LaunchServices store path remembered \(ContainerDiscoveryMerger.canonicalPath(cachePath))")
                 }
                 let remaining = maximumCandidateCount - identifiers.count
                 // Port WQFiles csstore chỉ dùng trên iOS 26+ (xem ghi chú trong
