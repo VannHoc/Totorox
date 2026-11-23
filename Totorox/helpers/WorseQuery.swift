@@ -140,11 +140,14 @@ enum WorseQuery {
         groupLock.lock()
         cachedGrantGroup = next
         groupLock.unlock()
+        // Nhớ lựa chọn này sang các lần mở app sau — không phải đợi WQ Files
+        // mở trước rồi mới tự sửa trong từng phiên.
+        UserDefaults.standard.set(next, forKey: groupOverrideDefaultsKey)
         #if !targetEnvironment(simulator)
         worse_query_clear_cache()
         #endif
         log("worse_query: grant group rotated \(current) -> \(next) " +
-            "(NO_TOKEN — shared App Group swap conflict?)")
+            "(NO_TOKEN — shared App Group swap conflict? saved for next launch)")
         return true
     }
 
@@ -166,8 +169,15 @@ enum WorseQuery {
             return override
         }
         let usable = usableGroups()
-        if let first = usable.first {
-            return first
+        // Các app khác (vd WQ Files) thường lấy group ĐẦU TIÊN trong profile.
+        // Chọn group CUỐI để tránh đụng chung chỗ swap Library/Caches ngay từ
+        // lần chạy đầu — không phụ thuộc vào app nào được mở trước.
+        if let chosen = usable.last {
+            if usable.count > 1, chosen != usable.first {
+                log("worse_query: using App Group \(chosen) " +
+                    "(declared=\(usable) — avoiding the first group used by other sideloaded apps)")
+            }
+            return chosen
         }
         let declared = declaredGroups
         if declared.isEmpty {
