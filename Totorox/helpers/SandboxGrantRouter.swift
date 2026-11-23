@@ -214,10 +214,13 @@ enum SandboxGrantRouter {
     /// "disable Tier 4" switch — WQFiles only retries/repairs and blocks builds
     /// where Apple patched the exploit (`WorseQuery.isPatchedBuild`).
     static func grant(path: String, requireWrite: Bool = false) -> Int64 {
-        grantImpl(path: path, requireWrite: requireWrite, didRotateGroup: false)
+        grantImpl(path: path, requireWrite: requireWrite, didRotateGroup: false, didRepairCache: false)
     }
 
-    private static func grantImpl(path: String, requireWrite: Bool, didRotateGroup: Bool) -> Int64 {
+    private static func grantImpl(path: String,
+                                  requireWrite: Bool,
+                                  didRotateGroup: Bool,
+                                  didRepairCache: Bool) -> Int64 {
         guard path.count > 1, path.hasPrefix("/") else { return -1 }
 
         // iOS 16–18: chỉ dùng DarkSword kernel exploit / MHA-C2 + truy cập
@@ -295,12 +298,25 @@ enum SandboxGrantRouter {
         }
 
         let result = failure != 0 ? failure : -1
-        // WQ Files may be signed with the same App Group and own the Caches
-        // swap right now → every token comes back WQ_ERR_NO_TOKEN. The group
-        // name is irrelevant to worse_query, so retry once on another group.
+        // WQ Files README: when EVERY folder is refused, the App Group Caches
+        // swap is likely broken (interrupted swap or another app sharing the
+        // group). WQ repairs it automatically — do the same before giving up.
+        if result == Int64(WQ_ERR_NO_TOKEN), !didRepairCache,
+           let currentGroup = WorseQuery.grantGroup,
+           WorseQuery.resetAccessCache(group: currentGroup) {
+            return grantImpl(path: path,
+                             requireWrite: requireWrite,
+                             didRotateGroup: didRotateGroup,
+                             didRepairCache: true)
+        }
+        // Nếu repair không giúp, thử group khác (tên group không quan trọng
+        // với worse_query — chỉ cần group có entitlement).
         if result == Int64(WQ_ERR_NO_TOKEN), !didRotateGroup,
            WorseQuery.rotateGrantGroup() {
-            return grantImpl(path: path, requireWrite: requireWrite, didRotateGroup: true)
+            return grantImpl(path: path,
+                             requireWrite: requireWrite,
+                             didRotateGroup: true,
+                             didRepairCache: didRepairCache)
         }
         rememberFailure(result, path: path, requireWrite: requireWrite)
         return result
