@@ -74,15 +74,15 @@ jobs:
           mkdir -p build/ipa/Payload
           cp -r build/Totorox.xcarchive/Products/Applications/Totorox.app build/ipa/Payload/
           cd build/ipa
-          zip -r -9 ../../Totorox-3.0-unsigned.ipa Payload
+          zip -r -9 ../../Totorox-3.0.ipa Payload
           cd ../..
-          ls -lh Totorox-3.0-unsigned.ipa
+          ls -lh Totorox-3.0.ipa
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Totorox-3.0-unsigned-ipa
-          path: Totorox-3.0-unsigned.ipa
+          name: Totorox-3.0
+          path: Totorox-3.0.ipa
           if-no-files-found: error
 
       - name: Upload dSYM (crash symbolication)
