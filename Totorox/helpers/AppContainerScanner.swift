@@ -154,6 +154,17 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     }
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var statusMessage: String = ""
+    /// Tiến độ quét container, dùng cho thanh progress ở tab 1 và tab 2.
+    @Published private(set) var isScanning: Bool = false
+    @Published private(set) var scanCompleted: Int = 0
+    @Published private(set) var scanTotal: Int = 0
+
+    private func publishScanProgress(completed: Int, total: Int) {
+        Task { @MainActor in
+            self.scanCompleted = completed
+            self.scanTotal = total
+        }
+    }
 
     private let cacheLock = NSRecursiveLock()
     private var cacheByBundleID: [String: AppContainerInfo] = [:]
@@ -504,19 +515,15 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             await MainActor.run {
                 self.isLoading = true
+                self.isScanning = true
+                self.scanCompleted = 0
+                self.scanTotal = 0
                 self.statusMessage = AppLanguage.current.text("scanner.scanning")
             }
 
-            // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX
+            // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX.
+            // Không publish snapshot ở đây: chỉ hiện danh sách app khi quét full xong.
             self.performFastPassSync()
-            let stage1Snapshot = self.buildSortedSnapshotFromCache()
-            if !stage1Snapshot.isEmpty {
-                await MainActor.run {
-                    self.apps = stage1Snapshot
-                    self.isLoading = false
-                    NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
-                }
-            }
 
             // STAGE 2: Progressive MHA-C2 Discovery via LaunchServices Store (.csstore)
             #if !targetEnvironment(simulator)
@@ -531,7 +538,12 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             var newlyResolvedInStage2 = 0
             var directPathCount = 0
-            for candidateID in prioritizedCandidates {
+            await MainActor.run { self.scanTotal = prioritizedCandidates.count }
+            for (candidateIndex, candidateID) in prioritizedCandidates.enumerated() {
+                if candidateIndex.isMultiple(of: 25) || candidateIndex == prioritizedCandidates.count - 1 {
+                    self.publishScanProgress(completed: candidateIndex + 1,
+                                             total: prioritizedCandidates.count)
+                }
                 guard ContainerStore.isValidAppBundleID(candidateID) else { continue }
                 if self.getCachedInfo(forBundleID: candidateID) != nil { continue }
 
@@ -573,14 +585,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                     ) != nil {
                         newlyResolvedInStage2 += 1
                         if cameFromCsstore { directPathCount += 1 }
-                        if newlyResolvedInStage2 == 10 || newlyResolvedInStage2.isMultiple(of: 25) {
-                            let partial = self.buildSortedSnapshotFromCache()
-                            await MainActor.run {
-                                self.apps = partial
-                                self.isLoading = false
-                                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
-                            }
-                        }
+                        // Không publish snapshot tạm — chỉ cập nhật tiến độ.
                     }
                 }
             }
@@ -670,28 +675,22 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 }
                 let lsSet = Set(lsStoreCandidates)
                 let stage3Started = Date()
+                let stage2Total = prioritizedCandidates.count
+                await MainActor.run { self.scanTotal = stage2Total + dirs.count }
                 var stage3Inspected = 0
                 for dirPath in dirs {
                     let udid = (dirPath as NSString).lastPathComponent
                     guard UUID(uuidString: udid) != nil else { continue }
 
                     // Each container costs one Tier-4 grant (symlink swap + daemon
-                    // round-trip), so the iOS 27 pass over ~211 UUIDs takes a while.
-                    // Publish what has been resolved so far instead of leaving the
-                    // browser empty until the last container is done.
+                    // round-trip). Update progress only — the app list is published
+                    // once, after the whole scan finishes.
                     stage3Inspected += 1
-                    if stage3Inspected.isMultiple(of: 25) {
-                        let partial = self.buildSortedSnapshotFromCache()
+                    if stage3Inspected.isMultiple(of: 25) || stage3Inspected == dirs.count {
                         let elapsed = String(format: "%.1f", Date().timeIntervalSince(stage3Started))
-                        log("browser: inventory progress \(stage3Inspected)/\(dirs.count) " +
-                            "elapsed=\(elapsed)s resolved=\(partial.count)")
-                        if !partial.isEmpty {
-                            await MainActor.run {
-                                self.apps = partial
-                                self.isLoading = false
-                                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
-                            }
-                        }
+                        log("browser: inventory progress \(stage3Inspected)/\(dirs.count) elapsed=\(elapsed)s")
+                        self.publishScanProgress(completed: stage2Total + stage3Inspected,
+                                                 total: stage2Total + dirs.count)
                     }
                     if self.getCachedInfo(forUDID: udid) != nil { continue }
                     if ContainerMetadataCache.shared.isUnresolved(uuid: udid) { continue }
@@ -763,6 +762,8 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
 
             await MainActor.run {
                 self.apps = finalSorted
+                self.scanCompleted = self.scanTotal
+                self.isScanning = false
                 self.isLoading = false
                 self.statusMessage = AppLanguage.current.text("scanner.found_apps", finalSorted.count)
                 NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)

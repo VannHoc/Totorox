@@ -931,7 +931,9 @@ struct OverwriteFileView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                
+
+                ContainerScanProgressBanner(language: language)
+
                 Divider()
                 
                 // Apps List
@@ -1515,6 +1517,8 @@ struct OverwriteFileView: View {
     // MARK: - Helpers & Actions
     
     private var filteredInstalledApps: [AppContainerInfo] {
+        // Chỉ hiện app khi bản quét full đã chốt — tránh danh sách nhảy từng phần.
+        guard AppContainerScanner.shared.hasCompletedFullScan else { return [] }
         if appSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return scanner.apps
         }

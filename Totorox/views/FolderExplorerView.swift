@@ -261,6 +261,67 @@ private struct FolderTaskProgressBanner: View {
     }
 }
 
+/// Progress bar for the full container scan. Shown on both the folder tab and
+/// the installed-app picker; hidden as soon as the scan finishes or when the
+/// result came from the in-memory cache.
+struct ContainerScanProgressBanner: View {
+    @ObservedObject private var scanner = AppContainerScanner.shared
+    let language: AppLanguage
+
+    private var fraction: Double? {
+        guard scanner.scanTotal > 0 else { return nil }
+        return min(max(Double(scanner.scanCompleted) / Double(scanner.scanTotal), 0.02), 1.0)
+    }
+
+    var body: some View {
+        if scanner.isScanning {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.85)
+                        .tint(TotoroxTheme.mintAccent)
+                    Text(language.text("scanner.scanning"))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(TotoroxTheme.textPrimary)
+                        .lineLimit(1)
+                    Spacer()
+                    if let fraction {
+                        Text("\(Int(fraction * 100))%")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(TotoroxTheme.mintAccent)
+                    }
+                }
+
+                if let fraction {
+                    ProgressView(value: fraction, total: 1.0)
+                        .tint(TotoroxTheme.mintAccent)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(TotoroxTheme.mintAccent)
+                }
+
+                if scanner.scanTotal > 0 {
+                    Text("\(scanner.scanCompleted) / \(scanner.scanTotal)")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(TotoroxTheme.mintAccent.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(TotoroxTheme.mintAccent.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+}
+
 // MARK: - AppListViewModel (Dedicated App Container List ViewModel for /var/mobile/Containers/Data/Application)
 
 @MainActor
@@ -300,36 +361,37 @@ final class AppListViewModel: ObservableObject {
             return
         }
 
-        // 2. Otherwise show whatever is currently cached (e.g. from Fast Pass or prior scan)
+        // 2. Full scan đã xong trước đó trong cùng phiên: dùng cache, không quét lại.
         if !forceRefresh,
+           AppContainerScanner.shared.hasCompletedFullScan,
            let cached = ContainerMetadataCache.shared.cachedList(for: canonRoot),
            !cached.isEmpty {
             self.entries = cached
-        } else if !AppContainerScanner.shared.apps.isEmpty {
-            self.entries = Self.fileEntries(from: AppContainerScanner.shared.apps)
+            self.isLoading = false
+            return
         }
 
-        // 3. If scan is still pending or forced, keep loading indicator and await full scan
-        if forceRefresh || !AppContainerScanner.shared.hasCompletedFullScan {
-            self.isLoading = true
-            Task.detached(priority: .userInitiated) {
-                let apps = await AppContainerScanner.shared.scanAllContainers(forceRefresh: forceRefresh)
-                let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
-                await MainActor.run {
-                    if !finalEntries.isEmpty {
-                        self.entries = finalEntries
-                    } else if !apps.isEmpty {
-                        self.entries = Self.fileEntries(from: apps)
-                    }
-                    self.isLoading = false
+        // 3. Chưa quét full (hoặc force): giữ danh sách rỗng, hiện progress,
+        //    chỉ gán entries sau khi scanAllContainers trả về kết quả cuối.
+        self.entries = []
+        self.isLoading = true
+        Task.detached(priority: .userInitiated) {
+            let apps = await AppContainerScanner.shared.scanAllContainers(forceRefresh: forceRefresh)
+            let finalEntries = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
+            await MainActor.run {
+                if !finalEntries.isEmpty {
+                    self.entries = finalEntries
+                } else if !apps.isEmpty {
+                    self.entries = Self.fileEntries(from: apps)
                 }
+                self.isLoading = false
             }
-        } else {
-            self.isLoading = false
         }
     }
 
     func applyUpdatedCacheIfNeeded() {
+        // Không đổ snapshot tạm vào UI — chỉ áp dụng sau khi quét full xong.
+        guard AppContainerScanner.shared.hasCompletedFullScan else { return }
         let canonRoot = "/var/mobile/Containers/Data/Application"
         let updated = ContainerMetadataCache.shared.rebuildApplicationDirectoryListCache()
         if !updated.isEmpty {
@@ -594,6 +656,9 @@ struct FolderExplorerView: View {
                         ? language.text("overwrite.search_apps_placeholder")
                         : language.text("folders.search_in_folder")
                 )
+
+                // Thanh tiến trình quét container (chỉ hiện khi quét full chưa xong)
+                ContainerScanProgressBanner(language: language)
 
                 // Thanh hiển thị tiến trình tác vụ tệp (Copy/Paste, Giải nén, Nhập, Xóa...)
                 FolderTaskProgressBanner(progress: taskProgress, language: language)
