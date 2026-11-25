@@ -154,6 +154,26 @@ struct CachedAppEntry: Codable {
 struct AppScanSnapshot: Codable {
     let apps: [CachedAppEntry]
     let finishedAt: Date
+    /// Bundle IDs recorded from csstore when the snapshot was saved. Compared
+    /// on next launch in the background; if the set changed (new app installed),
+    /// drop the cache and rescan automatically.
+    let bundleIDs: [String]
+
+    enum CodingKeys: String, CodingKey { case apps, finishedAt, bundleIDs }
+
+    init(apps: [CachedAppEntry], finishedAt: Date, bundleIDs: [String]) {
+        self.apps = apps
+        self.finishedAt = finishedAt
+        self.bundleIDs = bundleIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        apps = try c.decode([CachedAppEntry].self, forKey: .apps)
+        finishedAt = try c.decode(Date.self, forKey: .finishedAt)
+        // 旧快照没有这个字段 → 空集合，validation 会跳过，不会误作废。
+        bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    }
 }
 
 /// WQ Files stores AppScanSnapshot + finishedAt and reuses it within its TTL,
@@ -182,7 +202,7 @@ enum AppScanCache {
         return snapshot
     }
 
-    static func store(_ apps: [AppContainerInfo]) {
+    static func store(_ apps: [AppContainerInfo], bundleIDs: [String]) {
         guard let url = fileURL, apps.count > 2 else { return }
         let entries = apps.map {
             CachedAppEntry(appName: $0.appName,
@@ -191,7 +211,9 @@ enum AppScanCache {
                            dataPath: $0.dataPath,
                            bundlePath: $0.bundlePath)
         }
-        let snapshot = AppScanSnapshot(apps: entries, finishedAt: Date())
+        let snapshot = AppScanSnapshot(apps: entries,
+                                       finishedAt: Date(),
+                                       bundleIDs: Array(Set(bundleIDs)).sorted())
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: url, options: .atomic)
     }
@@ -219,6 +241,41 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     @Published private(set) var isScanning: Bool = false
     @Published private(set) var scanCompleted: Int = 0
     @Published private(set) var scanTotal: Int = 0
+
+    /// iOS 16–18: UI có thể gọi scan/validation ngay cả khi early-init đã hoãn
+    /// prewarm. Chờ kernel exploit hoàn tất trước khi đọc root/csstore.
+    private func waitForPrivilegesIfNeeded() async {
+        let v = AppInfo.versionTuple
+        guard v.major < 26,
+              KernelExploit.isApplicable(major: v.major, minor: v.minor,
+                                         patch: v.patch, build: AppInfo.osBuild) else { return }
+        let deadline = Date().addingTimeInterval(45)
+        while !AppState.kernelExploitFinished, Date() < deadline {
+            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        log("browser: waited for kernel exploit before scanning finished=\(AppState.kernelExploitFinished)")
+    }
+
+    /// So sánh danh sách bundle ID hiện tại snapshot; nếu có app mới/cài lại thì
+    /// tự invalidate cache và quét full. Chạy nền sau khi đã trả snapshot cũ để
+    /// danh sách vẫn hiện ngay.
+    private func validateSnapshotAndRescanIfNeeded(_ snapshot: AppScanSnapshot) {
+        guard !snapshot.bundleIDs.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            await self.waitForPrivilegesIfNeeded()
+            let current = ContainerStore.launchServicesStoreIdentifiers()
+            // Không thể đọc csstore → không kết luận gì, giữ snapshot.
+            guard !current.isEmpty else { return }
+            let savedSet = Set(snapshot.bundleIDs)
+            let currentSet = Set(current)
+            guard savedSet != currentSet else { return }
+            log("browser: installed app set changed \(savedSet.count) -> \(currentSet.count), rescanning")
+            AppScanCache.invalidate()
+            _ = await self.scanAllContainers(forceRefresh: true)
+        }
+    }
 
     private func publishScanProgress(completed: Int, total: Int) {
         Task { @MainActor in
@@ -591,6 +648,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 self.statusMessage = AppLanguage.current.text("scanner.found_apps", restored.count)
                 NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
             }
+            validateSnapshotAndRescanIfNeeded(snapshot)
             return restored
         }
         if forceRefresh {
@@ -613,20 +671,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 self.statusMessage = AppLanguage.current.text("scanner.scanning")
             }
 
-            // iOS 16–18: UI có thể gọi scan ngay cả khi early-init đã hoãn
-            // prewarm. Chờ kernel exploit hoàn tất trước khi đọc root, nếu không
-            // opendir bị từ chối và scan kết thúc với apps=2 (chỉ app tự + required).
-            let v = AppInfo.versionTuple
-            if v.major < 26,
-               KernelExploit.isApplicable(major: v.major, minor: v.minor,
-                                          patch: v.patch, build: AppInfo.osBuild) {
-                let deadline = Date().addingTimeInterval(45)
-                while !AppState.kernelExploitFinished, Date() < deadline {
-                    if Task.isCancelled { break }
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                }
-                log("browser: waited for kernel exploit before scanning finished=\(AppState.kernelExploitFinished)")
-            }
+            await self.waitForPrivilegesIfNeeded()
 
             // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX.
             // Không publish snapshot ở đây: chỉ hiện danh sách app khi quét full xong.
@@ -866,7 +911,10 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             self.hasCompletedFullScan = true
             self.activeScanTask = nil
             self.cacheLock.unlock()
-            AppScanCache.store(finalSorted)
+            // Lưu kèm danh sách bundle ID lấy từ csstore để lần sau so sánh,
+            // tự phát hiện app mới cài mà không cần đợi hết TTL.
+            AppScanCache.store(finalSorted,
+                               bundleIDs: ContainerMetadataCache.shared.cachedLaunchServicesIDs ?? [])
 
             await MainActor.run {
                 self.apps = finalSorted
