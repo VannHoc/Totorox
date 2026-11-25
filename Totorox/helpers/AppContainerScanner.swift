@@ -521,6 +521,21 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 self.statusMessage = AppLanguage.current.text("scanner.scanning")
             }
 
+            // iOS 16–18: UI có thể gọi scan ngay cả khi early-init đã hoãn
+            // prewarm. Chờ kernel exploit hoàn tất trước khi đọc root, nếu không
+            // opendir bị từ chối và scan kết thúc với apps=2 (chỉ app tự + required).
+            let v = AppInfo.versionTuple
+            if v.major < 26,
+               KernelExploit.isApplicable(major: v.major, minor: v.minor,
+                                          patch: v.patch, build: AppInfo.osBuild) {
+                let deadline = Date().addingTimeInterval(45)
+                while !AppState.kernelExploitFinished, Date() < deadline {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                log("browser: waited for kernel exploit before scanning finished=\(AppState.kernelExploitFinished)")
+            }
+
             // STAGE 1: Fast Pass (<100ms) — MCM + LaunchServices + Direct POSIX.
             // Không publish snapshot ở đây: chỉ hiện danh sách app khi quét full xong.
             self.performFastPassSync()
