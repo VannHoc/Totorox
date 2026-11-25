@@ -143,7 +143,7 @@ private struct FivePointStar: Shape {
 
 // MARK: - Persistent scan snapshot (WQ Files AppScanCache equivalent)
 
-private struct CachedAppEntry: Codable {
+struct CachedAppEntry: Codable {
     let appName: String
     let bundleID: String
     let udid: String
