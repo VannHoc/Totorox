@@ -137,6 +137,19 @@ class AppState: ObservableObject {
     private static var didRunEarlyInit = false
     private static let earlyInitLock = NSLock()
 
+    private static let exploitFinishLock = NSLock()
+    private static var kernelExploitDidFinish = false
+    static var kernelExploitFinished: Bool {
+        exploitFinishLock.lock()
+        defer { exploitFinishLock.unlock() }
+        return kernelExploitDidFinish
+    }
+    private static func markKernelExploitFinished() {
+        exploitFinishLock.lock()
+        kernelExploitDidFinish = true
+        exploitFinishLock.unlock()
+    }
+
     static func runEarlyPrivilegeInit() {
         earlyInitLock.lock()
         guard !didRunEarlyInit else {
@@ -162,7 +175,19 @@ class AppState: ObservableObject {
             // Reports patched builds / missing App Group / dead sandbox access
             // with a reason instead of leaving the user with an empty app list.
             StartupHealthCheck.run()
-            AppContainerScanner.shared.prewarmOnLaunch()
+
+            // iOS 16–18 cần kernel exploit trước khi đọc được container khác.
+            // Nếu exploit còn đang chạy, hoãn quét — completion của exploit sẽ
+            // gọi prewarm. iOS 26+ dùng Tier 4 nên quét ngay như cũ.
+            let v = AppInfo.versionTuple
+            let exploitApplicable = KernelExploit.isApplicable(
+                major: v.major, minor: v.minor, patch: v.patch, build: AppInfo.osBuild
+            )
+            if !exploitApplicable || AppState.kernelExploitFinished {
+                AppContainerScanner.shared.prewarmOnLaunch()
+            } else {
+                log("app: postpone container scan until kernel exploit finishes")
+            }
         }
     }
 
@@ -255,6 +280,7 @@ class AppState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             let ok = KernelExploit.run()
             DispatchQueue.main.async {
+                AppState.markKernelExploitFinished()
                 self.kernelExploitRunning = false
                 if ok {
                     self.exploitStatus = .success(method: "kexploit")
@@ -267,6 +293,8 @@ class AppState: ObservableObject {
                     self.exploitStatus = .failed(method: "kexploit", code: -1)
                     log("app: kernel exploit failed — relaunch the app before retrying")
                 }
+                // Giờ kernel R/W đã sẵn sàng — mới quét container (đã hoãn ở early init).
+                AppContainerScanner.shared.prewarmOnLaunch()
             }
         }
     }
