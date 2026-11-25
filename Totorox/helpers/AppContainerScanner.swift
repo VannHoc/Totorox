@@ -141,6 +141,67 @@ private struct FivePointStar: Shape {
     }
 }
 
+// MARK: - Persistent scan snapshot (WQ Files AppScanCache equivalent)
+
+private struct CachedAppEntry: Codable {
+    let appName: String
+    let bundleID: String
+    let udid: String
+    let dataPath: String
+    let bundlePath: String?
+}
+
+struct AppScanSnapshot: Codable {
+    let apps: [CachedAppEntry]
+    let finishedAt: Date
+}
+
+/// WQ Files stores AppScanSnapshot + finishedAt and reuses it within its TTL,
+/// which is why its app list appears immediately on later launches. Totorox
+/// used to re-scan every launch, which on iOS 16–18 also means waiting for the
+/// kernel exploit again.
+enum AppScanCache {
+    static let ttl: TimeInterval = 600
+
+    private static var fileURL: URL? {
+        guard let base = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        return base.appendingPathComponent("TotoroxAppScanCache.json")
+    }
+
+    static func load() -> AppScanSnapshot? {
+        guard let url = fileURL,
+              let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(AppScanSnapshot.self, from: data),
+              !snapshot.apps.isEmpty,
+              Date().timeIntervalSince(snapshot.finishedAt) < ttl else { return nil }
+        return snapshot
+    }
+
+    static func store(_ apps: [AppContainerInfo]) {
+        guard let url = fileURL, apps.count > 2 else { return }
+        let entries = apps.map {
+            CachedAppEntry(appName: $0.appName,
+                           bundleID: $0.bundleID,
+                           udid: $0.udid,
+                           dataPath: $0.dataPath,
+                           bundlePath: $0.bundlePath)
+        }
+        let snapshot = AppScanSnapshot(apps: entries, finishedAt: Date())
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func invalidate() {
+        guard let url = fileURL else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
 // MARK: - App Container Scanner Engine
 
 final class AppContainerScanner: ObservableObject, @unchecked Sendable {
@@ -502,12 +563,43 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             }
             return existing
         }
+        // Snapshot từ lần chạy trước (WQ Files AppScanCache): dùng lại trong TTL
+        // để danh sách app hiện ngay, không đợi exploit/quét lại 300 container.
+        if !forceRefresh, let snapshot = AppScanCache.load() {
+            cacheLock.unlock()
+            for entry in snapshot.apps {
+                let info = AppContainerInfo(
+                    appName: entry.appName,
+                    bundleID: entry.bundleID,
+                    udid: entry.udid,
+                    dataPath: entry.dataPath,
+                    bundlePath: entry.bundlePath
+                )
+                storeInCache(info)
+            }
+            let restored = buildSortedSnapshotFromCache()
+            cacheLock.lock()
+            hasCompletedFullScan = true
+            activeScanTask = nil
+            cacheLock.unlock()
+            log("browser: restored \(restored.count) apps from persistent scan snapshot")
+            await MainActor.run {
+                self.apps = restored
+                self.scanCompleted = self.scanTotal
+                self.isScanning = false
+                self.isLoading = false
+                self.statusMessage = AppLanguage.current.text("scanner.found_apps", restored.count)
+                NotificationCenter.default.post(name: .totoroxContainersDidUpdate, object: nil)
+            }
+            return restored
+        }
         if forceRefresh {
             // Retry the containers a previous pass could not name, so a
             // transient token failure does not hide an app for the session.
             ContainerMetadataCache.shared.retryUnresolvedContainers()
             // Bỏ checkpoint + slot scan của lần trước (port WQFiles enumerate_invalidate).
             ContainerScanCoordinator.invalidate()
+            AppScanCache.invalidate()
         }
 
         let task = Task.detached(priority: .userInitiated) { [weak self] () -> [AppContainerInfo] in
@@ -774,6 +866,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             self.hasCompletedFullScan = true
             self.activeScanTask = nil
             self.cacheLock.unlock()
+            AppScanCache.store(finalSorted)
 
             await MainActor.run {
                 self.apps = finalSorted
