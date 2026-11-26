@@ -6,9 +6,10 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
     case patch = 2
     case merge = 3
     case mods = 4
+    case catalog = 5
 
-    /// Các tab hiển thị trên thanh điều hướng IPA 3.0 (Tab `.mods` Kho Mod đang giữ ở bản nháp, chưa mở trên UI).
-    static let visibleTabs: [TotoroxTab] = [.overwrite, .folders, .patch, .merge]
+    /// Các tab hiển thị trên thanh điều hướng IPA 3.0 (Gộp file nằm gọn bên trong Danh mục -> Liên Quân Mobile).
+    static let visibleTabs: [TotoroxTab] = [.overwrite, .folders, .patch, .catalog]
 
     var id: Int { rawValue }
 
@@ -19,6 +20,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .patch: return language.text("tab.patch")
         case .merge: return language.text("tab.merge")
         case .mods: return language.text("tab.mods")
+        case .catalog: return language.text("tab.catalog")
         }
     }
 
@@ -33,6 +35,7 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
         case .patch: return "arrow.triangle.2.circlepath"
         case .merge: return "square.stack.3d.up.fill"
         case .mods: return "shippingbox.fill"
+        case .catalog: return "square.grid.2x2.fill"
         }
     }
 }
@@ -48,11 +51,15 @@ struct TotoroxTabBar: View {
 
             HStack(spacing: 0) {
                 ForEach(TotoroxTab.visibleTabs) { tab in
-                    let isSelected = (selectedTab == tab)
+                    let isSelected = (selectedTab == tab) || (tab == .catalog && selectedTab == .merge)
 
                     Button {
                         if tab == .folders {
                             AppNavigationCoordinator.shared.folderExplorerTargetURL = URL(fileURLWithPath: ContainerStore.appDataRoot)
+                        } else if tab == .catalog && (selectedTab == .catalog || selectedTab == .merge) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                AppNavigationCoordinator.shared.catalogRoute = .root
+                            }
                         }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedTab = tab

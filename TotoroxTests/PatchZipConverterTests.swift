@@ -1133,4 +1133,53 @@ final class PatchZipConverterTests: XCTestCase {
             )
         )
     }
+
+    func testAovModMerger_RecognizesRPackRedirectConfigPaths() {
+        let rpackPath = "Vanhoc_Milo/VANHOC_MILO_0559C3BDBA16C94F"
+        XCTAssertEqual(
+            AovModMergerEngine.normalizeAovPath(rpackPath, fallbackVersion: "1.64.1"),
+            "Resources/1.64.1/Vanhoc_Milo/VANHOC_MILO_0559C3BDBA16C94F"
+        )
+        XCTAssertTrue(AovModMergerEngine.isRPackRedirectPath("Resources/1.64.1/Vanhoc_Milo/VANHOC_MILO_0559C3BDBA16C94F"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Vanhoc_Milo/VANHOC_MILO_0559C3BDBA16C94F"))
+        XCTAssertTrue(AovModMergerEngine.isServerConfigPath("Resources/1.64.1/Totorox_Mod/TOTOROX_MOD_1122334455667788"))
+    }
+
+    @MainActor
+    func testCatalogTabAndDeepLinkRouting() {
+        XCTAssertEqual(TotoroxTab.visibleTabs, [.overwrite, .folders, .patch, .catalog])
+        XCTAssertEqual(TotoroxTab.catalog.iconName, "square.grid.2x2.fill")
+        XCTAssertEqual(CatalogGameID.allCases, [.aov, .pubg, .freeFire])
+        XCTAssertEqual(CatalogGameID.fromQueryValue("aov"), .aov)
+        XCTAssertEqual(CatalogGameID.fromQueryValue("pubg"), .pubg)
+        XCTAssertEqual(CatalogGameID.fromQueryValue("ff"), .freeFire)
+
+        let nav = AppNavigationCoordinator.shared
+        let prevTab = nav.selectedTab
+        let prevRoute = nav.catalogRoute
+        defer {
+            nav.selectedTab = prevTab
+            nav.catalogRoute = prevRoute
+            nav.pendingMergeModURLs = []
+            nav.pendingOverwriteBundleCandidates = []
+        }
+
+        let sampleURL = URL(fileURLWithPath: "/tmp/mod_a.zip")
+        nav.navigateToMerge(modURLs: [sampleURL])
+        XCTAssertEqual(nav.selectedTab, .catalog)
+        XCTAssertEqual(nav.catalogRoute, .aovMerge)
+        XCTAssertEqual(nav.pendingMergeModURLs, [sampleURL])
+
+        nav.handleIncomingURL(URL(string: "totorox://catalog?game=pubg")!)
+        XCTAssertEqual(nav.selectedTab, .catalog)
+        XCTAssertEqual(nav.catalogRoute, .game(.pubg))
+
+        nav.handleIncomingURL(URL(string: "totorox://merge")!)
+        XCTAssertEqual(nav.selectedTab, .catalog)
+        XCTAssertEqual(nav.catalogRoute, .aovMerge)
+
+        nav.navigateToGameOverwrite(bundleCandidates: CatalogGameID.freeFire.bundleCandidates)
+        XCTAssertEqual(nav.selectedTab, .overwrite)
+        XCTAssertEqual(nav.pendingOverwriteBundleCandidates, ["com.dts.freefireth", "com.dts.freefiremax"])
+    }
 }

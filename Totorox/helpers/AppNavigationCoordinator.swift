@@ -5,9 +5,11 @@ final class AppNavigationCoordinator: ObservableObject {
     static let shared = AppNavigationCoordinator()
 
     @Published var selectedTab: TotoroxTab = .overwrite
+    @Published var catalogRoute: CatalogRoute = .root
     @Published var folderExplorerTargetURL: URL? = nil
     @Published var pendingOverwritePatchURL: URL? = nil
     @Published var pendingOverwriteBundleID: String? = nil
+    @Published var pendingOverwriteBundleCandidates: [String] = []
     @Published var pendingMergeModURLs: [URL] = []
 
     init() {}
@@ -23,9 +25,20 @@ final class AppNavigationCoordinator: ObservableObject {
         self.selectedTab = .overwrite
     }
 
+    func navigateToGameOverwrite(bundleCandidates: [String]) {
+        self.pendingOverwriteBundleCandidates = bundleCandidates
+        self.selectedTab = .overwrite
+    }
+
+    func navigateToCatalog(route: CatalogRoute = .root) {
+        self.catalogRoute = route
+        self.selectedTab = .catalog
+    }
+
     func navigateToMerge(modURLs: [URL]) {
         self.pendingMergeModURLs = modURLs
-        self.selectedTab = .merge
+        self.catalogRoute = .aovMerge
+        self.selectedTab = .catalog
     }
 
     /// Xử lý mở file hoặc URL Scheme từ ứng dụng khác (AirDrop, Tệp, Safari, Chia sẻ...)
@@ -67,7 +80,16 @@ final class AppNavigationCoordinator: ObservableObject {
                 self.selectedTab = .overwrite
             }
         case "merge":
-            self.selectedTab = .merge
+            self.catalogRoute = .aovMerge
+            self.selectedTab = .catalog
+        case "catalog", "games":
+            let gameParam = components?.queryItems?.first(where: { $0.name == "game" })?.value
+            if let matchedGame = CatalogGameID.fromQueryValue(gameParam) {
+                self.catalogRoute = .game(matchedGame)
+            } else {
+                self.catalogRoute = .root
+            }
+            self.selectedTab = .catalog
         case "mods", "store":
             // Tab Kho Mod đang ở trạng thái nháp trên IPA 3.0
             self.selectedTab = .overwrite

@@ -334,17 +334,21 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         let targetVersion = Self.resolveTargetVersion(summaries)
 
-        // Xác định các gói mod có thư mục Thanos (HeroSkin_1..4) để luôn đồng bộ IFix và MD5 .pkg.bytes
+        // Xác định các gói mod có thư mục Thanos (HeroSkin_1..4) hoặc bundle RPack Redirect (Vanhoc_Milo/*)
         var hasThanosFile = false
+        var hasRPackRedirectFile = false
         for modMeta in modMetas {
             for origPath in modMeta.headers.keys {
                 let lower = origPath.replacingOccurrences(of: "\\", with: "/").lowercased()
                 if lower.contains("/thanos/") || lower.hasPrefix("thanos/") || lower.hasSuffix("heroskin_1.bytes") {
                     hasThanosFile = true
-                    break
                 }
+                if Self.isRPackRedirectPath(lower) {
+                    hasRPackRedirectFile = true
+                }
+                if hasThanosFile && hasRPackRedirectFile { break }
             }
-            if hasThanosFile { break }
+            if hasThanosFile && hasRPackRedirectFile { break }
         }
 
         // BƯỚC 2: Nhóm toàn bộ entry theo đường dẫn chuẩn hóa (Resources/<targetVersion>/...)
@@ -415,11 +419,16 @@ public final class AovModMergerEngine: @unchecked Sendable {
             let isSingleSmallDatabin = normalizedKey.contains("/databin/")
                 && normalizedKey.hasSuffix(".bytes")
                 && refs.allSatisfy { $0.header.uncompressedSize <= 512 * 1024 }
+            let isRPackRedirectBundle = Self.isRPackRedirectPath(normalizedKey)
+                && refs.allSatisfy { $0.header.uncompressedSize <= 4 * 1024 * 1024 }
+            let isDatabinWithRPack = hasRPackRedirectFile
+                && normalizedKey.contains("/databin/")
+                && normalizedKey.hasSuffix(".bytes")
 
-            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos || isSingleSmallDatabin {
+            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos || isSingleSmallDatabin || isRPackRedirectBundle || isDatabinWithRPack {
                 if distinctMods.count >= 2 && uniqueVariants.count >= 2 {
                     detectedConflicts += 1
-                } else if isThanosConfig || isCorePkg {
+                } else if isThanosConfig || isCorePkg || isRPackRedirectBundle {
                     detectedConflicts += 1
                 }
                 collidingRefs.append(contentsOf: refs)
@@ -582,6 +591,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
             }
         }
         let serverMergedKeys = Set(serverMergedEntries.keys.map { $0.lowercased() })
+        let sentToServerKeys = Set(collidingRefs.map { $0.remappedPath.lowercased() })
 
         // Xây dựng bảng build version cho từng mod theo dữ liệu server (nếu có) hoặc version.txt/summary local
         let buildVersions = plan.mergePlan?.bundleVersions ?? []
@@ -660,8 +670,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
             for normalizedKey in pathGroups.keys.sorted() {
                 guard !serverMergedKeys.contains(normalizedKey) else { continue }
-                if !serverMergedKeys.isEmpty && normalizedKey.hasSuffix("heroinfolua.pkg.bytes") {
-                    // Server đã chủ động loại HeroInfoLua.pkg.bytes phiên bản cũ — không chép đè bản cục bộ vào gói.
+                if !serverMergedKeys.isEmpty && (normalizedKey.hasSuffix("heroinfolua.pkg.bytes") || sentToServerKeys.contains(normalizedKey)) {
+                    // Server đã xử lý tệp này và chủ động loại bỏ (vd: HeroInfoLua cũ, HeroSkin_1 khi gộp RPack, Databin đã gộp vào Vanhoc_Milo/*, hoặc bundle RPack cấm).
                     continue
                 }
                 if normalizedKey.contains("/sound/android/") {
@@ -781,7 +791,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
     /// cho asset mới). Mọi file khác do client giữ nguyên và ghép local.
     private static let aovKnownRootDirectories: Set<String> = [
         "ages", "assetrefs", "databin", "assetbundle", "sound",
-        "thanos", "prefab_characters", "behaviac", "lua_signed", "languages", "camera"
+        "thanos", "prefab_characters", "behaviac", "lua_signed", "languages", "camera",
+        "vanhoc_milo", "totorox_mod", "vannhoc_mod"
     ]
 
     private static let aovKnownRootFiles: Set<String> = [
@@ -1057,11 +1068,22 @@ public final class AovModMergerEngine: @unchecked Sendable {
         }
     }
 
+    public static func isRPackRedirectPath(_ lowerPath: String) -> Bool {
+        let unified = lowerPath.replacingOccurrences(of: "\\", with: "/").lowercased()
+        return unified.contains("/vanhoc_milo/vanhoc_milo_")
+            || unified.hasPrefix("vanhoc_milo/vanhoc_milo_")
+            || unified.contains("/totorox_mod/totorox_mod_")
+            || unified.hasPrefix("totorox_mod/totorox_mod_")
+            || unified.contains("/vannhoc_mod/vannhoc_mod_")
+            || unified.hasPrefix("vannhoc_mod/vannhoc_mod_")
+    }
+
     public static func isServerConfigPath(_ relativePath: String) -> Bool {
         let lower = relativePath.replacingOccurrences(of: "\\", with: "/").lowercased()
         return lower.contains("commonactions")
             || lower.contains("databin")
             || lower.contains("thanos")
+            || Self.isRPackRedirectPath(lower)
             || lower.contains("/assetrefs/")
             || lower.hasSuffix("_assetref.bytes")
             || lower.hasSuffix(".xml")

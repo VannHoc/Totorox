@@ -288,6 +288,9 @@ struct OverwriteFileView: View {
         .onChange(of: navCoordinator.pendingOverwritePatchURL) { _ in
             consumePendingNavigationIfNeeded()
         }
+        .onChange(of: navCoordinator.pendingOverwriteBundleCandidates) { _ in
+            consumePendingNavigationIfNeeded()
+        }
     }
     
     // MARK: - Card 1: Chọn ứng dụng mục tiêu
@@ -1537,6 +1540,27 @@ struct OverwriteFileView: View {
     }
 
     private func consumePendingNavigationIfNeeded() {
+        let candidates = navCoordinator.pendingOverwriteBundleCandidates
+        if !candidates.isEmpty {
+            navCoordinator.pendingOverwriteBundleCandidates = []
+            selectedTargetFolder = "Documents"
+            if let existing = scanner.apps.first(where: { candidates.contains($0.bundleID) }) {
+                selectApp(existing)
+            } else if let primary = candidates.first {
+                targetBundleIDInput = primary
+                Task {
+                    for candidate in candidates {
+                        if let resolved = await scanner.resolveContainer(bundleID: candidate) {
+                            await MainActor.run {
+                                self.selectApp(resolved)
+                            }
+                            return
+                        }
+                    }
+                }
+            }
+        }
+
         guard let pendingURL = navCoordinator.pendingOverwritePatchURL else { return }
         let targetBundle = navCoordinator.pendingOverwriteBundleID
         navCoordinator.pendingOverwritePatchURL = nil

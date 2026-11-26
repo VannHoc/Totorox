@@ -57,8 +57,8 @@ struct ContentView: View {
                     FolderExplorerView()
                 case .patch:
                     PatchConverterView()
-                case .merge:
-                    MergeFileView()
+                case .catalog, .merge:
+                    CatalogView()
                 case .mods:
                     // Kho Mod đang để ở trạng thái nháp trên bản 3.0, fallback về Đè file.
                     OverwriteFileView()

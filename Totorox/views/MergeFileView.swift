@@ -30,6 +30,7 @@ private enum ActiveMergeSheet: Identifiable {
 }
 
 struct MergeFileView: View {
+    var isEmbedded: Bool = false
     @Environment(\.appLanguage) private var language
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var themeManager = ThemeManager.shared
@@ -73,7 +74,7 @@ struct MergeFileView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .padding(.top, isEmbedded ? 6 : 12)
                 .padding(.bottom, 32)
                 .frame(width: proxy.size.width > 0 ? proxy.size.width : nil)
             }

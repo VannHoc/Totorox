@@ -30,6 +30,7 @@
 "tab.folders" = "Folders";
 "tab.patch" = "Patch";
 "tab.merge" = "Merge Files";
+"tab.catalog" = "Catalog";
 
 /* --- Tab 1: Overwrite File (Đè file) --- */
 "overwrite.target_app" = "Target Application";
@@ -742,3 +743,16 @@
 "overwrite.backup.missing_snapshot" = "Original backup snapshot for this file is missing.";
 "overwrite.backup.container_activation_failed" = "Could not activate the target app container; restore aborted to avoid writing to a stale path.";
 "overwrite.backup.already_restored" = "This backup session has already been restored.";
+
+/* --- Tab 4: Catalog --- */
+"catalog.genre.all" = "All";
+"catalog.genre.moba" = "MOBA";
+"catalog.genre.br" = "Battle Royale";
+"catalog.game.aov" = "Arena of Valor";
+"catalog.game.pubg" = "PUBG Mobile";
+"catalog.game.freefire" = "Free Fire";
+"catalog.badge.merge" = "Merge";
+"catalog.badge.soon" = "Soon";
+"catalog.tool.merge_sub" = "Combine .zip mods";
+"catalog.tool.overwrite_sub" = "Preselect game";
+"catalog.tool.upcoming" = "More tools soon";
