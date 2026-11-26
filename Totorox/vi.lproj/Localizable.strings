@@ -756,3 +756,7 @@
 "catalog.tool.merge_sub" = "Gộp gói .zip";
 "catalog.tool.overwrite_sub" = "Chọn sẵn game";
 "catalog.tool.upcoming" = "Sắp cập nhật thêm";
+
+"wallpaper.edit_a11y" = "Tùy chỉnh hình nền";
+"wallpaper.change" = "Đổi hình nền";
+"wallpaper.reset_default" = "Xóa hình nền (Về mặc định)";

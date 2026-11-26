@@ -756,3 +756,7 @@
 "catalog.tool.merge_sub" = "合并 .zip 包";
 "catalog.tool.overwrite_sub" = "自动选定游戏";
 "catalog.tool.upcoming" = "更多功能即将推出";
+
+"wallpaper.edit_a11y" = "自定义壁纸";
+"wallpaper.change" = "更换壁纸";
+"wallpaper.reset_default" = "移除壁纸（恢复默认）";

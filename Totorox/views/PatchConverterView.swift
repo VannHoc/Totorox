@@ -56,6 +56,10 @@ struct PatchConverterView: View {
 
     // Processing state
     @State private var isConverting: Bool = false
+    @State private var isCancellingConversion: Bool = false
+    @State private var conversionProgressText: String = ""
+    @State private var conversionProgressFraction: Double = 0.0
+    @State private var conversionTask: Task<Void, Never>? = nil
     @State private var conversionError: String? = nil
     @State private var convertedFileURL: URL? = nil
     @State private var convertedFileSizeText: String = ""
@@ -437,6 +441,55 @@ struct PatchConverterView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
 
+                    // Live Conversion Progress & Cancel Banner
+                    if isConverting {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.85)
+                                    .tint(TotoroxTheme.mintAccent)
+
+                                Text(language.text("converter.button.start"))
+                                    .font(.system(size: 13.5, weight: .bold))
+                                    .foregroundStyle(TotoroxTheme.textPrimary)
+                                    .lineLimit(1)
+
+                                Spacer()
+
+                                Text("\(Int(min(max(conversionProgressFraction, 0.02), 1.0) * 100))%")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.mintAccent)
+
+                                Button {
+                                    isCancellingConversion = true
+                                    conversionTask?.cancel()
+                                } label: {
+                                    Text(isCancellingConversion ? language.text("folders.task.cancelling") : language.text("common.cancel"))
+                                        .font(.system(size: 11.5, weight: .bold))
+                                        .foregroundStyle(Color.red)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4)
+                                        .background(Color.red.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isCancellingConversion)
+                            }
+
+                            ProgressView(value: min(max(conversionProgressFraction, 0.02), 1.0), total: 1.0)
+                                .tint(TotoroxTheme.mintAccent)
+
+                            if !conversionProgressText.isEmpty {
+                                Text(conversionProgressText)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(TotoroxTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        .totoroxCard()
+                    }
+
                     // Convert Button
                     TotoroxPrimaryButton(
                         title: language.text("converter.button.start"),
@@ -547,7 +600,7 @@ struct PatchConverterView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(TotoroxTheme.pageBackground)
+        .background(TotoroxTheme.tabCanvasBackground)
         .onAppear {
             loadPersistedHistory()
         }
@@ -728,13 +781,16 @@ struct PatchConverterView: View {
         let outputStem = Self.sanitizedOutputStem(from: outputFileNameText, fallback: fallbackStem)
 
         isConverting = true
+        isCancellingConversion = false
+        conversionProgressText = source.lastPathComponent
+        conversionProgressFraction = 0.05
         conversionError = nil
         convertedFileURL = nil
 
         history.removeAll { !FileManager.default.fileExists(atPath: $0.targetPath) }
         let retainedPaths = Set(history.map { URL(fileURLWithPath: $0.targetPath).standardizedFileURL.path })
 
-        Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             let converter = PatchZipConverter()
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ConvertedPatches", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -746,25 +802,34 @@ struct PatchConverterView: View {
                 }
             }
 
+            let outURL = AovModMergerEngine.uniqueOutputURL(
+                in: tempDir,
+                preferredName: "\(outputStem).\(currentDirection.outputExtension)"
+            )
+
             do {
-                let outURL = AovModMergerEngine.uniqueOutputURL(
-                    in: tempDir,
-                    preferredName: "\(outputStem).\(currentDirection.outputExtension)"
-                )
+                let onProgress: @Sendable (String, Double) -> Void = { stage, frac in
+                    Task { @MainActor in
+                        self.conversionProgressText = stage
+                        self.conversionProgressFraction = frac
+                    }
+                }
                 if currentDirection == .zipToPatch {
                     try await converter.convertZipToPatch(
                         zipURL: source,
                         destinationPatchURL: outURL,
                         password: outputPassword,
                         sourcePassword: sourcePassword,
-                        customProjectName: outputStem
+                        customProjectName: outputStem,
+                        progressHandler: onProgress
                     )
                 } else {
                     try await converter.convertPatchToZip(
                         patchURL: source,
                         destinationZipURL: outURL,
                         password: sourcePassword,
-                        outputPassword: outputPassword
+                        outputPassword: outputPassword,
+                        progressHandler: onProgress
                     )
                 }
                 let attrs = try FileManager.default.attributesOfItem(atPath: outURL.path)
@@ -775,6 +840,8 @@ struct PatchConverterView: View {
                     self.convertedFileURL = outURL
                     self.convertedFileSizeText = sizeStr
                     self.isConverting = false
+                    self.isCancellingConversion = false
+                    self.conversionTask = nil
                     self.history.insert(ConversionHistoryItem(
                         id: UUID(),
                         sourceName: source.lastPathComponent,
@@ -792,13 +859,24 @@ struct PatchConverterView: View {
                     }
                     self.savePersistedHistory()
                 }
+            } catch is CancellationError {
+                try? FileManager.default.removeItem(at: outURL)
+                await MainActor.run {
+                    self.isConverting = false
+                    self.isCancellingConversion = false
+                    self.conversionTask = nil
+                }
             } catch {
+                try? FileManager.default.removeItem(at: outURL)
                 await MainActor.run {
                     self.conversionError = error.localizedDescription
                     self.isConverting = false
+                    self.isCancellingConversion = false
+                    self.conversionTask = nil
                 }
             }
         }
+        conversionTask = worker
     }
 
     private func loadPersistedHistory() {

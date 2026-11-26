@@ -39,6 +39,7 @@ struct MergeFileView: View {
 
     @State private var activeSheet: ActiveMergeSheet? = nil
     @State private var isImportingMods: Bool = false
+    @State private var importProgressText: String = ""
     @State private var isMerging: Bool = false
     @State private var progressStatus: String = ""
     @State private var progressValue: Double = 0.0
@@ -80,7 +81,7 @@ struct MergeFileView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(TotoroxTheme.pageBackground)
+        .background(TotoroxTheme.tabCanvasBackground)
         .onAppear {
             loadPersistedHistory()
             consumePendingMergeModsIfNeeded()
@@ -304,7 +305,9 @@ struct MergeFileView: View {
                             ProgressView()
                                 .tint(TotoroxTheme.mintAccent)
                                 .scaleEffect(0.85)
-                            Text(language.text("merge.button.importing"))
+                            Text(importProgressText.isEmpty ? language.text("merge.button.importing") : importProgressText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         } else {
                             Image(systemName: "plus.circle.fill")
                             Text(language.text(selectedMods.isEmpty ? "merge.button.add_first" : "merge.button.add_more"))
@@ -665,7 +668,20 @@ struct MergeFileView: View {
         return magic == Data([0x50, 0x4B, 0x03, 0x04]) || magic == Data([0x50, 0x4B, 0x05, 0x06])
     }
 
-    private static func copyPickedFile(from url: URL, to localCopy: URL, fileManager: FileManager) -> Bool {
+    private static func copyPickedFile(
+        from url: URL,
+        to localCopy: URL,
+        fileManager: FileManager,
+        byteProgressHandler: FileIOByteProgressHandler? = nil
+    ) -> Bool {
+        if (try? FileIOEngine.shared.copySingleFile(
+            from: url,
+            to: localCopy,
+            syncAfterWrite: false,
+            byteProgressHandler: byteProgressHandler
+        )) != nil {
+            return true
+        }
         if (try? fileManager.copyItem(at: url, to: localCopy)) != nil {
             return true
         }
@@ -674,10 +690,15 @@ struct MergeFileView: View {
         let coordinator = NSFileCoordinator()
         coordinator.coordinate(readingItemAt: url, options: [], error: &coordError) { readableURL in
             do {
-                try fileManager.copyItem(at: readableURL, to: localCopy)
+                try FileIOEngine.shared.copySingleFile(
+                    from: readableURL,
+                    to: localCopy,
+                    syncAfterWrite: false,
+                    byteProgressHandler: byteProgressHandler
+                )
                 didCopy = true
             } catch {
-                didCopy = false
+                didCopy = (try? fileManager.copyItem(at: readableURL, to: localCopy)) != nil
             }
         }
         return didCopy
@@ -702,6 +723,7 @@ struct MergeFileView: View {
             ScopedPickedURL(url: url, hasAccess: url.startAccessingSecurityScopedResource())
         }
         isImportingMods = true
+        importProgressText = "1/\(scopedEntries.count) · \(scopedEntries[0].url.lastPathComponent)"
 
         Task.detached(priority: .userInitiated) {
             struct PickedItem: Sendable {
@@ -711,11 +733,16 @@ struct MergeFileView: View {
 
             var newlyInspected: [PickedItem] = []
             var rejectedDetails: [String] = []
-            for entry in scopedEntries {
+            let totalPicked = max(scopedEntries.count, 1)
+            for (entryIndex, entry) in scopedEntries.enumerated() {
                 let url = entry.url
                 let hasSecurity = entry.hasAccess
                 defer {
                     if hasSecurity { url.stopAccessingSecurityScopedResource() }
+                }
+
+                await MainActor.run {
+                    self.importProgressText = "\(entryIndex + 1)/\(totalPicked) · \(url.lastPathComponent)"
                 }
 
                 if url.pathExtension.lowercased() == "3105" {
@@ -732,7 +759,14 @@ struct MergeFileView: View {
                 let localCopy = importDir.appendingPathComponent(url.lastPathComponent)
                 try? fm.removeItem(at: localCopy)
 
-                if Self.copyPickedFile(from: url, to: localCopy, fileManager: fm) {
+                let copyOK = Self.copyPickedFile(from: url, to: localCopy, fileManager: fm) { copied, totalBytes, _ in
+                    let copiedStr = ByteCountFormatter.string(fromByteCount: copied, countStyle: .file)
+                    let totalStr = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+                    Task { @MainActor in
+                        self.importProgressText = "\(entryIndex + 1)/\(totalPicked) · \(copiedStr) / \(totalStr)"
+                    }
+                }
+                if copyOK {
                     guard Self.isZipArchiveFile(at: localCopy) else {
                         rejectedDetails.append("• \(activeLanguage.text("merge.error.not_valid_zip_entry", url.lastPathComponent))")
                         try? fm.removeItem(at: importDir)
@@ -761,6 +795,7 @@ struct MergeFileView: View {
 
             await MainActor.run {
                 self.isImportingMods = false
+                self.importProgressText = ""
                 var addedHashes = Set(self.modContentHashes.values)
                 var feedbackDetails = rejectedDetails
                 for item in newlyInspected {

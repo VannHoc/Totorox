@@ -756,3 +756,7 @@
 "catalog.tool.merge_sub" = "Combine .zip mods";
 "catalog.tool.overwrite_sub" = "Preselect game";
 "catalog.tool.upcoming" = "More tools soon";
+
+"wallpaper.edit_a11y" = "Customize Wallpaper";
+"wallpaper.change" = "Change Wallpaper";
+"wallpaper.reset_default" = "Remove Wallpaper (Default)";

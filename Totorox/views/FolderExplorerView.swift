@@ -133,6 +133,8 @@ final class FolderTaskProgressModel: ObservableObject {
     @Published var subtitle: String = ""
     @Published var completedCount: Int = 0
     @Published var totalCount: Int = 0
+    @Published var currentFileBytesCopied: Int64 = 0
+    @Published var currentFileTotalBytes: Int64 = 0
     @Published var isCancelling: Bool = false
 
     private var activeTask: Task<Void, Never>? = nil
@@ -146,6 +148,8 @@ final class FolderTaskProgressModel: ObservableObject {
         self.subtitle = subtitle
         self.completedCount = 0
         self.totalCount = totalCount
+        self.currentFileBytesCopied = 0
+        self.currentFileTotalBytes = 0
         self.isCancelling = false
     }
 
@@ -155,11 +159,27 @@ final class FolderTaskProgressModel: ObservableObject {
 
     func update(completed: Int, total: Int? = nil, subtitle: String? = nil) {
         self.completedCount = completed
+        self.currentFileBytesCopied = 0
+        self.currentFileTotalBytes = 0
         if let total {
             self.totalCount = total
         }
         if let subtitle {
             self.subtitle = subtitle
+        }
+    }
+
+    func updateBytes(copied: Int64, total: Int64, fileName: String) {
+        self.currentFileBytesCopied = copied
+        self.currentFileTotalBytes = total
+        if total > 0 {
+            let copiedStr = ByteCountFormatter.string(fromByteCount: copied, countStyle: .file)
+            let totalStr = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+            if totalCount > 1 {
+                self.subtitle = "\(completedCount)/\(totalCount) · \(copiedStr) / \(totalStr) — \(fileName)"
+            } else {
+                self.subtitle = "\(copiedStr) / \(totalStr) — \(fileName)"
+            }
         }
     }
 
@@ -174,6 +194,8 @@ final class FolderTaskProgressModel: ObservableObject {
         subtitle = ""
         completedCount = 0
         totalCount = 0
+        currentFileBytesCopied = 0
+        currentFileTotalBytes = 0
         isCancelling = false
     }
 }
@@ -185,8 +207,18 @@ private struct FolderTaskProgressBanner: View {
     var body: some View {
         if let title = progress.title {
             let fraction: Double? = {
-                guard progress.totalCount > 0 else { return nil }
-                return min(max(Double(progress.completedCount) / Double(progress.totalCount), 0.02), 1.0)
+                if progress.totalCount > 0 {
+                    let fileFrac: Double = progress.currentFileTotalBytes > 0
+                        ? min(max(Double(progress.currentFileBytesCopied) / Double(progress.currentFileTotalBytes), 0), 1)
+                        : 0
+                    let effective = (Double(progress.completedCount) + fileFrac) / Double(progress.totalCount)
+                    return min(max(effective, 0.02), 1.0)
+                }
+                if progress.currentFileTotalBytes > 0 {
+                    let f = Double(progress.currentFileBytesCopied) / Double(progress.currentFileTotalBytes)
+                    return min(max(f, 0.02), 1.0)
+                }
+                return nil
             }()
 
             VStack(alignment: .leading, spacing: 6) {
@@ -728,7 +760,7 @@ struct FolderExplorerView: View {
                 .safeAreaInset(edge: .bottom) {
                     Color.clear.frame(height: 80)
                 }
-                .background(TotoroxTheme.pageBackground)
+                .background(TotoroxTheme.tabCanvasBackground)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1444,6 +1476,11 @@ struct FolderExplorerView: View {
                         }
                     }
                 },
+                byteProgressHandler: { copied, total, name in
+                    Task { @MainActor in
+                        progressModel.updateBytes(copied: copied, total: total, fileName: name)
+                    }
+                },
                 conflictResolver: resolver
             )
             ContainerMetadataCache.shared.invalidate(path: baseDir.path)
@@ -1516,6 +1553,11 @@ struct FolderExplorerView: View {
                                 subtitle: activeLanguage.text("folders.task.processed_progress", completed, totalItems, currentName)
                             )
                         }
+                    }
+                },
+                byteProgressHandler: { copied, total, name in
+                    Task { @MainActor in
+                        progressModel.updateBytes(copied: copied, total: total, fileName: name)
                     }
                 },
                 conflictResolver: resolver
@@ -1616,33 +1658,24 @@ struct FolderExplorerView: View {
                     } catch ZIPArchiveExtractorError.symbolicLinkUnsupported {
                         throw ZIPArchiveExtractorError.symbolicLinkUnsupported
                     } catch {
-                        let archiveSize = (try? srcURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
+                        do {
+                            extractedFileCount = try PatchZipConverter.shared.extractZipArchiveToDirectory(
+                                at: srcURL,
+                                into: tempStaging,
+                                stripMetadataEntries: true,
+                                shouldCancel: { Task.isCancelled },
+                                progressHandler: { extracted, total, entryName in
+                                    Task { @MainActor in
+                                        progressModel.update(
+                                            completed: extracted,
+                                            total: total,
+                                            subtitle: activeLanguage.text("folders.task.processed_progress", extracted, total, entryName)
+                                        )
+                                    }
+                                }
+                            )
+                        } catch PatchZipConverterError.sizeLimitExceeded {
                             throw ZIPArchiveExtractorError.expandedTooLarge
-                        }
-                        let zipData = try Data(contentsOf: srcURL)
-                        let entries = try PatchZipConverter.shared.parseZipArchive(zipData)
-                        for (relPath, fileData) in entries {
-                            if Task.isCancelled { throw CancellationError() }
-                            let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
-                            let parts = normalized
-                                .split(separator: "/", omittingEmptySubsequences: true)
-                                .map(String.init)
-                                .filter { $0 != "." }
-                            guard !parts.isEmpty,
-                                  !parts.contains(".."),
-                                  parts.first != "__MACOSX",
-                                  parts.last != ".DS_Store",
-                                  parts.last?.lowercased() != "patch.json" else {
-                                continue
-                            }
-                            var targetFileURL = tempStaging
-                            for (idx, part) in parts.enumerated() {
-                                targetFileURL.appendPathComponent(part, isDirectory: idx < parts.count - 1)
-                            }
-                            try FileManager.default.createDirectory(at: targetFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                            try fileData.write(to: targetFileURL, options: .atomic)
-                            extractedFileCount += 1
                         }
                     }
                     // Strip stray patch.json if present at archive root
@@ -1675,6 +1708,11 @@ struct FolderExplorerView: View {
                                     subtitle: activeLanguage.text("folders.task.copied_progress", completed, totalItems, currentName)
                                 )
                             }
+                        }
+                    },
+                    byteProgressHandler: { copied, total, name in
+                        Task { @MainActor in
+                            progressModel.updateBytes(copied: copied, total: total, fileName: name)
                         }
                     },
                     conflictResolver: resolver

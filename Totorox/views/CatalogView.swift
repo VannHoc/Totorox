@@ -160,7 +160,7 @@ struct CatalogView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TotoroxTheme.pageBackground)
+        .background(TotoroxTheme.tabCanvasBackground)
         .onAppear {
             if navCoordinator.selectedTab == .merge {
                 navCoordinator.catalogRoute = .aovMerge

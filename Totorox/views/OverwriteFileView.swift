@@ -9,6 +9,8 @@ private final class OverwriteExecutionProgress: ObservableObject {
     @Published var detailText: String = ""
     @Published var completedCount: Int = 0
     @Published var totalCount: Int = 0
+    @Published var currentFileBytesCopied: Int64 = 0
+    @Published var currentFileTotalBytes: Int64 = 0
     @Published var isCancelling: Bool = false
 
     private var activeTask: Task<Void, Never>? = nil
@@ -18,6 +20,8 @@ private final class OverwriteExecutionProgress: ObservableObject {
         detailText = detail
         completedCount = 0
         totalCount = 0
+        currentFileBytesCopied = 0
+        currentFileTotalBytes = 0
         isCancelling = false
     }
 
@@ -28,8 +32,26 @@ private final class OverwriteExecutionProgress: ObservableObject {
     func update(stage: String? = nil, detail: String? = nil, completed: Int? = nil, total: Int? = nil) {
         if let stage { stageText = stage }
         if let detail { detailText = detail }
-        if let completed { completedCount = completed }
+        if let completed {
+            completedCount = completed
+            currentFileBytesCopied = 0
+            currentFileTotalBytes = 0
+        }
         if let total { totalCount = total }
+    }
+
+    func updateBytes(copied: Int64, total: Int64, fileName: String) {
+        currentFileBytesCopied = copied
+        currentFileTotalBytes = total
+        if total > 0 {
+            let copiedStr = ByteCountFormatter.string(fromByteCount: copied, countStyle: .file)
+            let totalStr = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+            if totalCount > 1 {
+                detailText = "\(completedCount)/\(totalCount) · \(copiedStr) / \(totalStr) — \(fileName)"
+            } else {
+                detailText = "\(copiedStr) / \(totalStr) — \(fileName)"
+            }
+        }
     }
 
     func cancel() {
@@ -43,6 +65,8 @@ private final class OverwriteExecutionProgress: ObservableObject {
         detailText = ""
         completedCount = 0
         totalCount = 0
+        currentFileBytesCopied = 0
+        currentFileTotalBytes = 0
         isCancelling = false
     }
 }
@@ -53,8 +77,18 @@ private struct OverwriteProgressCard: View {
 
     var body: some View {
         let fraction: Double? = {
-            guard progress.totalCount > 0 else { return nil }
-            return min(max(Double(progress.completedCount) / Double(progress.totalCount), 0.02), 1.0)
+            if progress.totalCount > 0 {
+                let fileFrac: Double = progress.currentFileTotalBytes > 0
+                    ? min(max(Double(progress.currentFileBytesCopied) / Double(progress.currentFileTotalBytes), 0), 1)
+                    : 0
+                let effective = (Double(progress.completedCount) + fileFrac) / Double(progress.totalCount)
+                return min(max(effective, 0.02), 1.0)
+            }
+            if progress.currentFileTotalBytes > 0 {
+                let f = Double(progress.currentFileBytesCopied) / Double(progress.currentFileTotalBytes)
+                return min(max(f, 0.02), 1.0)
+            }
+            return nil
         }()
 
         VStack(alignment: .leading, spacing: 8) {
@@ -203,7 +237,7 @@ struct OverwriteFileView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 32)
             }
-            .background(TotoroxTheme.pageBackground)
+            .background(TotoroxTheme.tabCanvasBackground)
             
             // MARK: - Lớp Conflict Dialog (Nổi trên cùng, không bị che khuất)
             if let conflict = activeConflict {
@@ -1735,7 +1769,7 @@ struct OverwriteFileView: View {
                 if hasSecurityAccess { patchURL.stopAccessingSecurityScopedResource() }
             }
 
-            // 0. Activate container sandbox permissions via MCM & bad_query (retained lease)
+            // 0. Activate container permissions via MCM & worse_query (retained lease)
             var actError: NSString? = nil
             let knownClass = MCMContainerClassForPath(targetApp.dataPath)
             let actClass = knownClass != 0 ? knownClass : 2
@@ -1793,7 +1827,17 @@ struct OverwriteFileView: View {
                     try await converter.convertPatch3105ToZip(
                         inputURL: patchURL,
                         outputZipURL: zipOutput,
-                        password: currentPassword
+                        password: currentPassword,
+                        progressHandler: { stage, frac in
+                            Task { @MainActor in
+                                progressModel.update(
+                                    stage: activeLanguage.text("overwrite.progress.extracting"),
+                                    detail: stage,
+                                    completed: Int(frac * 100),
+                                    total: 100
+                                )
+                            }
+                        }
                     )
                     if Task.isCancelled { throw CancellationError() }
                     let payloadDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
@@ -1862,47 +1906,31 @@ struct OverwriteFileView: View {
                     do {
                         let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                         try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
-                        let parseZipManually = { () throws -> Int in
-                            let archiveSize = (try? patchURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                            guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
+                        let parseZipStreaming = { () throws -> Int in
+                            do {
+                                return try PatchZipConverter.shared.extractZipArchiveToDirectory(
+                                    at: patchURL,
+                                    into: extractedDir,
+                                    password: currentPassword,
+                                    stripMetadataEntries: false,
+                                    shouldCancel: { Task.isCancelled },
+                                    progressHandler: { extracted, total, lastName in
+                                        Task { @MainActor in
+                                            progressModel.update(
+                                                stage: activeLanguage.text("overwrite.progress.extracting"),
+                                                detail: activeLanguage.text("folders.task.processed_progress", extracted, total, lastName),
+                                                completed: extracted,
+                                                total: total
+                                            )
+                                        }
+                                    }
+                                )
+                            } catch PatchZipConverterError.sizeLimitExceeded {
                                 throw ZIPArchiveExtractorError.expandedTooLarge
                             }
-                            let zipData = try Data(contentsOf: patchURL, options: .alwaysMapped)
-                            let entries = try PatchZipConverter.shared.parseZipArchive(zipData, password: currentPassword)
-                            var written = 0
-                            let total = max(entries.count, 1)
-                            for (relPath, fileData) in entries {
-                                if Task.isCancelled { throw CancellationError() }
-                                let normalized = relPath.replacingOccurrences(of: "\\", with: "/")
-                                let parts = normalized
-                                    .split(separator: "/", omittingEmptySubsequences: true)
-                                    .map(String.init)
-                                    .filter { $0 != "." }
-                                guard !parts.isEmpty, !parts.contains("..") else { continue }
-                                var targetFile = extractedDir
-                                for (idx, part) in parts.enumerated() {
-                                    targetFile.appendPathComponent(part, isDirectory: idx < parts.count - 1)
-                                }
-                                try FileManager.default.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-                                try fileData.write(to: targetFile, options: .atomic)
-                                written += 1
-                                if written == 1 || written == total || written % 8 == 0 {
-                                    let lastName = parts.last ?? targetFile.lastPathComponent
-                                    let snapshot = written
-                                    Task { @MainActor in
-                                        progressModel.update(
-                                            stage: activeLanguage.text("overwrite.progress.extracting"),
-                                            detail: activeLanguage.text("folders.task.processed_progress", snapshot, total, lastName),
-                                            completed: snapshot,
-                                            total: total
-                                        )
-                                    }
-                                }
-                            }
-                            return written
                         }
                         if isPatchPasswordProtected || currentPassword != nil {
-                            extractedFileCount = try parseZipManually()
+                            extractedFileCount = try parseZipStreaming()
                         } else {
                             do {
                                 extractedFileCount = try ZIPArchiveExtractor.extractFlatContents(
@@ -1927,7 +1955,7 @@ struct OverwriteFileView: View {
                             } catch ZIPArchiveExtractorError.symbolicLinkUnsupported {
                                 throw ZIPArchiveExtractorError.symbolicLinkUnsupported
                             } catch {
-                                extractedFileCount = try parseZipManually()
+                                extractedFileCount = try parseZipStreaming()
                             }
                         }
                         rawExtractedRoot = extractedDir
@@ -1969,7 +1997,17 @@ struct OverwriteFileView: View {
                         let extractedDir = stagingDir.appendingPathComponent("extracted", isDirectory: true)
                         try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
                         let stagedFile = extractedDir.appendingPathComponent(patchURL.lastPathComponent)
-                        try FileManager.default.copyItem(at: patchURL, to: stagedFile)
+                        try FileIOEngine.shared.copySingleFile(
+                            from: patchURL,
+                            to: stagedFile,
+                            syncAfterWrite: false,
+                            cancelCheck: { Task.isCancelled },
+                            byteProgressHandler: { copied, total, name in
+                                Task { @MainActor in
+                                    progressModel.updateBytes(copied: copied, total: total, fileName: name)
+                                }
+                            }
+                        )
                         rawExtractedRoot = extractedDir
                         extractedFileCount = 1
                     } catch {
@@ -2095,6 +2133,11 @@ struct OverwriteFileView: View {
                                 total: totalMappings
                             )
                         }
+                    }
+                },
+                byteProgressHandler: { copied, total, name in
+                    Task { @MainActor in
+                        progressModel.updateBytes(copied: copied, total: total, fileName: name)
                     }
                 },
                 beforeWriteFile: { destURL, existedBefore in
@@ -2462,7 +2505,16 @@ private struct OverwriteBackupDetailSheet: View {
         restoreCurrentName = ""
 
         Task {
-            let res = await backupManager.restoreSession(target) { completed, total, name in
+            let res = await backupManager.restoreSession(
+                target,
+                byteProgressHandler: { copied, totalBytes, fileName in
+                    Task { @MainActor in
+                        let copiedStr = ByteCountFormatter.string(fromByteCount: copied, countStyle: .file)
+                        let totalStr = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+                        self.restoreCurrentName = "\(copiedStr) / \(totalStr) — \(fileName)"
+                    }
+                }
+            ) { completed, total, name in
                 Task { @MainActor in
                     self.restoreCompleted = completed
                     self.restoreTotal = total

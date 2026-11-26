@@ -5,6 +5,7 @@ struct ContentView: View {
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var license = LicenseManager.shared
     @ObservedObject private var themeManager = ThemeManager.shared
+    @ObservedObject private var wallpaperManager = WallpaperManager.shared
     @State private var showSettings: Bool = false
     @State private var showLogs: Bool = false
     @State private var showRedeemSheet: Bool = false
@@ -29,10 +30,13 @@ struct ContentView: View {
     }
 
     private var mainAppBody: some View {
-        VStack(spacing: 0) {
-            TotoroxTopHeader {
-                showSettings = true
-            }
+        ZStack {
+            TotoroxWallpaperLayer()
+
+            VStack(spacing: 0) {
+                TotoroxTopHeader {
+                    showSettings = true
+                }
 
             if !license.hasActivePackage {
                 AccountStatusBar(
@@ -67,6 +71,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             TotoroxTabBar(selectedTab: $navCoordinator.selectedTab)
+            }
         }
         .animation(.easeInOut(duration: 0.25), value: license.hasActivePackage)
         .animation(.easeInOut(duration: 0.25), value: license.isDeviceVerified)

@@ -43,8 +43,10 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
 struct TotoroxTabBar: View {
     @Binding var selectedTab: TotoroxTab
     @Environment(\.appLanguage) private var language
+    @ObservedObject private var wallpaper = WallpaperManager.shared
 
     var body: some View {
+        let _ = wallpaper.hasWallpaper
         VStack(spacing: 0) {
             Divider()
                 .overlay(TotoroxTheme.dividerColor)
@@ -101,9 +103,9 @@ struct TotoroxTabBar: View {
                 }
             }
             .frame(height: 58)
-            .background(TotoroxTheme.cardBackground)
+            .background(TotoroxTheme.activeCardBackground)
         }
-        .background(TotoroxTheme.cardBackground.ignoresSafeArea(edges: .bottom))
+        .background(TotoroxTheme.activeCardBackground.ignoresSafeArea(edges: .bottom))
         .shadow(color: TotoroxTheme.shadowColor, radius: 6, x: 0, y: -2)
     }
 }

@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import PhotosUI
+import ImageIO
 import UniformTypeIdentifiers
 
 // MARK: - App Theme Mode & Window Style Synchronization
@@ -201,6 +203,127 @@ enum TotoroxTheme {
         light: UIColor(white: 0.0, alpha: 0.04),
         dark: UIColor(white: 0.0, alpha: 0.26)
     )
+
+    /// Translucent card surface used when a custom wallpaper is active so the
+    /// wallpaper shines through gently while preserving full WCAG text contrast.
+    static let translucentCardBackground = dynamicColor(
+        light: UIColor(red: 1.000, green: 1.000, blue: 1.000, alpha: 0.84),
+        dark: UIColor(red: 0.086, green: 0.106, blue: 0.141, alpha: 0.82)
+    )
+
+    static var tabCanvasBackground: Color {
+        WallpaperManager.hasActiveWallpaper ? .clear : pageBackground
+    }
+
+    static var activeCardBackground: Color {
+        WallpaperManager.hasActiveWallpaper ? translucentCardBackground : cardBackground
+    }
+}
+
+// MARK: - Custom App Wallpaper Manager (Downsampled, Zero-Permission PhotosPicker)
+
+@MainActor
+final class WallpaperManager: ObservableObject {
+    static let shared = WallpaperManager()
+    nonisolated(unsafe) private(set) static var hasActiveWallpaper: Bool = false
+
+    @Published private(set) var image: UIImage? = nil {
+        didSet {
+            Self.hasActiveWallpaper = (image != nil)
+        }
+    }
+
+    var hasWallpaper: Bool { image != nil }
+
+    private let fileURL: URL
+
+    private init() {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        var dir = base.appendingPathComponent("TotoroxWallpaper", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        var rv = URLResourceValues()
+        rv.isExcludedFromBackup = true
+        try? dir.setResourceValues(rv)
+        self.fileURL = dir.appendingPathComponent("custom_wallpaper.jpg", isDirectory: false)
+
+        if let data = try? Data(contentsOf: fileURL),
+           let loaded = UIImage(data: data) {
+            self.image = loaded
+            Self.hasActiveWallpaper = true
+        }
+    }
+
+    func applyPickedData(_ rawData: Data) async {
+        let destURL = fileURL
+        let processed: UIImage? = await Task.detached(priority: .userInitiated) {
+            guard let downsampled = Self.downsampleImage(data: rawData, maxPixelSize: 2048),
+                  let jpegData = downsampled.jpegData(compressionQuality: 0.85) else {
+                return nil
+            }
+            try? jpegData.write(to: destURL, options: .atomic)
+            return UIImage(data: jpegData) ?? downsampled
+        }.value
+
+        guard let processed else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            self.image = processed
+        }
+    }
+
+    func resetToDefault() {
+        try? FileManager.default.removeItem(at: fileURL)
+        withAnimation(.easeInOut(duration: 0.22)) {
+            self.image = nil
+        }
+    }
+
+    /// Uses ImageIO thumbnailing so even a 48MP photo is decoded directly at <= 2048px
+    /// without spiking full uncompressed bitmap memory.
+    nonisolated private static func downsampleImage(data: Data, maxPixelSize: Int) -> UIImage? {
+        let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cgImage)
+    }
+}
+
+struct TotoroxWallpaperLayer: View {
+    @ObservedObject private var wallpaper = WallpaperManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                TotoroxTheme.pageBackground
+
+                if let uiImage = wallpaper.image {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+
+                    // Subtle adaptive contrast veil so header & text stay legible on any photo
+                    (themeManager.mode == .dark
+                        ? Color.black.opacity(0.34)
+                        : Color.white.opacity(0.18))
+                }
+            }
+        }
+        .ignoresSafeArea(.all)
+    }
 }
 
 // MARK: - Card Styling Modifier
@@ -208,11 +331,13 @@ enum TotoroxTheme {
 struct TotoroxCardModifier: ViewModifier {
     var cornerRadius: CGFloat = 16
     var padding: CGFloat = 16
+    @ObservedObject private var wallpaper = WallpaperManager.shared
 
     func body(content: Content) -> some View {
+        let _ = wallpaper.hasWallpaper
         content
             .padding(padding)
-            .background(TotoroxTheme.cardBackground)
+            .background(TotoroxTheme.activeCardBackground)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -232,6 +357,10 @@ extension View {
 
 struct TotoroxTopHeader: View {
     var onSettingsTapped: () -> Void
+    @ObservedObject private var wallpaper = WallpaperManager.shared
+    @Environment(\.appLanguage) private var language
+    @State private var showPhotoPicker: Bool = false
+    @State private var pickedPhotoItem: PhotosPickerItem? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -252,21 +381,87 @@ struct TotoroxTopHeader: View {
 
             Spacer()
 
-            // Settings Gear Button
-            Button(action: onSettingsTapped) {
-                ZStack {
-                    Circle()
-                        .fill(TotoroxTheme.searchBackground)
-                        .frame(width: 40, height: 40)
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
+            HStack(spacing: 10) {
+                // Wallpaper Edit / Reset Button (right next to Settings gear)
+                if wallpaper.hasWallpaper {
+                    Menu {
+                        Button {
+                            showPhotoPicker = true
+                        } label: {
+                            Label(language.text("wallpaper.change"), systemImage: "photo.on.rectangle")
+                        }
+
+                        Button(role: .destructive) {
+                            wallpaper.resetToDefault()
+                        } label: {
+                            Label(language.text("wallpaper.reset_default"), systemImage: "trash")
+                        }
+                    } label: {
+                        wallpaperButtonCircle(isActive: true)
+                    }
+                    .accessibilityLabel(language.text("wallpaper.edit_a11y"))
+                } else {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
+                        wallpaperButtonCircle(isActive: false)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(language.text("wallpaper.edit_a11y"))
                 }
+
+                // Settings Gear Button
+                Button(action: onSettingsTapped) {
+                    ZStack {
+                        Circle()
+                            .fill(TotoroxTheme.searchBackground.opacity(wallpaper.hasWallpaper ? 0.88 : 1.0))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(TotoroxTheme.textPrimary)
+                    }
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $pickedPhotoItem,
+            matching: .images,
+            photoLibrary: .shared()
+        )
+        .onChange(of: pickedPhotoItem) { newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    await wallpaper.applyPickedData(data)
+                }
+                await MainActor.run {
+                    pickedPhotoItem = nil
+                }
+            }
+        }
+    }
+
+    private func wallpaperButtonCircle(isActive: Bool) -> some View {
+        ZStack {
+            Circle()
+                .fill(
+                    isActive
+                        ? TotoroxTheme.mintAccent.opacity(0.20)
+                        : TotoroxTheme.searchBackground
+                )
+                .frame(width: 40, height: 40)
+                .overlay(
+                    Circle()
+                        .stroke(isActive ? TotoroxTheme.mintAccent.opacity(0.55) : Color.clear, lineWidth: 1)
+                )
+            Image(systemName: isActive ? "photo.fill.on.rectangle.fill" : "photo.badge.plus")
+                .font(.system(size: 16.5, weight: .medium))
+                .foregroundStyle(isActive ? TotoroxTheme.mintAccent : TotoroxTheme.textPrimary)
+        }
     }
 }
 
@@ -342,7 +537,7 @@ struct AccountStatusBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(TotoroxTheme.cardBackground)
+        .background(TotoroxTheme.activeCardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
