@@ -178,25 +178,36 @@ public final class OverwriteSessionRecorder: @unchecked Sendable {
                 originalSize = sz.int64Value
             }
 
-            let safeName = stdDest.lastPathComponent.replacingOccurrences(of: "/", with: "_")
-            let backupFileName = String(format: "%05d_%@", assignedIndex, safeName)
-            let backupURL = filesDirectory.appendingPathComponent(backupFileName, isDirectory: false)
-            do {
-                try fileManager.createDirectory(at: filesDirectory, withIntermediateDirectories: true)
-                do {
-                    try FileIOEngine.shared.copySingleFile(from: stdDest, to: backupURL)
-                } catch {
-                    try fileManager.copyItem(at: stdDest, to: backupURL)
-                }
-                backupRelativePath = "files/\(backupFileName)"
-                if originalSize == nil,
-                   let attrs = try? fileManager.attributesOfItem(atPath: backupURL.path),
-                   let sz = attrs[.size] as? NSNumber {
-                    originalSize = sz.int64Value
-                }
-            } catch {
-                log("overwrite-backup: failed to snapshot \(relativePath): \(error.localizedDescription)")
+            // Skip backing up a huge file if available disk space is critically low (< fileSize + 128 MB),
+            // so automatic pre-overwrite snapshots never exhaust the user's device storage.
+            let minimumFreeHeadroom: Int64 = 128 * 1_024 * 1_024
+            let freeBytes: Int64? = (try? sessionDirectory.deletingLastPathComponent()
+                .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                .volumeAvailableCapacityForImportantUsage)
+            if let free = freeBytes, let needed = originalSize, free < needed + minimumFreeHeadroom {
+                log("overwrite-backup: skipping snapshot for \(relativePath) (low disk space: \(free)B available)")
                 backupRelativePath = nil
+            } else {
+                let safeName = stdDest.lastPathComponent.replacingOccurrences(of: "/", with: "_")
+                let backupFileName = String(format: "%05d_%@", assignedIndex, safeName)
+                let backupURL = filesDirectory.appendingPathComponent(backupFileName, isDirectory: false)
+                do {
+                    try fileManager.createDirectory(at: filesDirectory, withIntermediateDirectories: true)
+                    do {
+                        try FileIOEngine.shared.copySingleFile(from: stdDest, to: backupURL, syncAfterWrite: false)
+                    } catch {
+                        try fileManager.copyItem(at: stdDest, to: backupURL)
+                    }
+                    backupRelativePath = "files/\(backupFileName)"
+                    if originalSize == nil,
+                       let attrs = try? fileManager.attributesOfItem(atPath: backupURL.path),
+                       let sz = attrs[.size] as? NSNumber {
+                        originalSize = sz.int64Value
+                    }
+                } catch {
+                    log("overwrite-backup: failed to snapshot \(relativePath): \(error.localizedDescription)")
+                    backupRelativePath = nil
+                }
             }
         } else {
             effectiveWasNew = true
@@ -310,16 +321,19 @@ public final class OverwriteBackupManager: ObservableObject {
 
     public let backupsRoot: URL
     public let maxRetainedSessions: Int
+    public let maxTotalBackupBytes: Int64
     private let metadataURL: URL
     private let fileManager: FileManager
 
     public init(
         rootDirectory: URL? = nil,
         maxRetainedSessions: Int = 5,
+        maxTotalBackupBytes: Int64 = 600 * 1_024 * 1_024,
         fileManager: FileManager = .default
     ) {
         self.fileManager = fileManager
         self.maxRetainedSessions = max(1, maxRetainedSessions)
+        self.maxTotalBackupBytes = max(64 * 1_024 * 1_024, maxTotalBackupBytes)
         let resolvedRoot: URL
         if let rootDirectory {
             resolvedRoot = rootDirectory
@@ -368,6 +382,15 @@ public final class OverwriteBackupManager: ObservableObject {
             }
             sessions.removeLast(sessions.count - maxRetainedSessions)
         }
+        // Evict oldest sessions when cumulative backup storage exceeds `maxTotalBackupBytes`
+        // (always keeping at least the newly saved session at index 0).
+        while sessions.count > 1 && totalStoredBackupBytes > maxTotalBackupBytes {
+            if let oldest = sessions.popLast() {
+                let oldDir = backupsRoot.appendingPathComponent(oldest.id.uuidString, isDirectory: true)
+                try? fileManager.removeItem(at: oldDir)
+                log("overwrite-backup: evicted oldest session \(oldest.id.uuidString) to stay under \(maxTotalBackupBytes)B cap")
+            }
+        }
         persistSessions()
         pruneOrphanedBackupDirectories()
     }
@@ -398,6 +421,7 @@ public final class OverwriteBackupManager: ObservableObject {
     /// - Các tệp mới thêm vào -> xóa bỏ khỏi container và dọn thư mục rỗng mới phát sinh.
     public func restoreSession(
         _ session: OverwriteBackupSession,
+        byteProgressHandler: FileIOByteProgressHandler? = nil,
         progressHandler: (@Sendable (_ completed: Int, _ total: Int, _ fileName: String) -> Void)? = nil
     ) async -> OverwriteRestoreResult {
         // Không cho khôi phục lại một phiên đã khôi phục: bản gốc đã được trả về,
@@ -526,7 +550,12 @@ public final class OverwriteBackupManager: ObservableObject {
                     }
                     do {
                         try FileIOEngine.createDirectoryIfNeeded(at: targetURL.deletingLastPathComponent())
-                        try FileIOEngine.shared.copySingleFile(from: backupURL, to: targetURL)
+                        try FileIOEngine.shared.copySingleFile(
+                            from: backupURL,
+                            to: targetURL,
+                            syncAfterWrite: false,
+                            byteProgressHandler: byteProgressHandler
+                        )
                         restoredOriginalCount += 1
                     } catch {
                         failedItems.append(FileIOFailureRecord(url: targetURL, reason: error.localizedDescription))

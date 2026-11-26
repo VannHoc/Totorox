@@ -92,6 +92,8 @@ enum ZIPArchiveWriter {
             try handle.close()
             try fileManager.moveItem(at: stagingURL, to: destinationURL)
             return ZIPArchiveWriteResult(entryCount: entries.count, sourceBytes: sourceBytes)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as ZIPArchiveWriterError {
             throw error
         } catch {
@@ -207,21 +209,38 @@ enum ZIPArchiveWriter {
               offset <= UInt64(UInt32.max) else {
             throw ZIPArchiveWriterError.archiveTooLarge
         }
-        let checksum = isDirectory ? 0 : try crc32(of: sourceURL)
         let date = dosDate(values.contentModificationDate ?? Date())
-        let entry = Entry(
+        var entry = Entry(
             sourceURL: sourceURL,
             archivePath: archivePath,
             isDirectory: isDirectory,
             byteCount: UInt32(fileSize),
-            crc32: checksum,
+            crc32: 0,
             modifiedTime: date.time,
             modifiedDate: date.date,
             localHeaderOffset: UInt32(offset)
         )
         try writeLocalHeader(entry, nameData: nameData, to: handle)
         if !isDirectory {
-            try stream(sourceURL, to: handle)
+            let computedCRC = try streamAndComputeCRC32(sourceURL, to: handle)
+            let endPos = try currentOffset(handle)
+            // Patch CRC-32 at offset + 14 in the local file header without reading the source file twice.
+            try handle.seek(toOffset: offset + 14)
+            var crcData = Data()
+            crcData.appendLittleEndian(computedCRC)
+            try handle.write(contentsOf: crcData)
+            try handle.seek(toOffset: endPos)
+
+            entry = Entry(
+                sourceURL: sourceURL,
+                archivePath: archivePath,
+                isDirectory: false,
+                byteCount: UInt32(fileSize),
+                crc32: computedCRC,
+                modifiedTime: date.time,
+                modifiedDate: date.date,
+                localHeaderOffset: UInt32(offset)
+            )
             let (nextBytes, overflow) = sourceBytes.addingReportingOverflow(fileSize)
             guard !overflow, !PatchPackageLimits.exceedsExpandedLimit(nextBytes) else {
                 throw ZIPArchiveWriterError.archiveTooLarge
@@ -242,6 +261,8 @@ enum ZIPArchiveWriter {
                 throw ZIPArchiveWriterError.symbolicLinkUnsupported
             }
             return values
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as ZIPArchiveWriterError {
             throw error
         } catch {
@@ -315,23 +336,25 @@ enum ZIPArchiveWriter {
         try handle.write(contentsOf: record)
     }
 
-    private static func stream(_ sourceURL: URL, to destination: FileHandle) throws {
+    private static func streamAndComputeCRC32(_ sourceURL: URL, to destination: FileHandle) throws -> UInt32 {
         let source = try FileHandle(forReadingFrom: sourceURL)
         defer { try? source.close() }
-        while let chunk = try source.read(upToCount: chunkSize), !chunk.isEmpty {
-            try destination.write(contentsOf: chunk)
-        }
-    }
-
-    private static func crc32(of url: URL) throws -> UInt32 {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
         var crc: UInt32 = 0xffff_ffff
-        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
-            for byte in chunk {
-                let index = Int((crc ^ UInt32(byte)) & 0xff)
-                crc = crcTable[index] ^ (crc >> 8)
+        while true {
+            if Task.isCancelled {
+                throw CancellationError()
             }
+            let chunk: Data? = try autoreleasepool {
+                try source.read(upToCount: chunkSize)
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+            chunk.withUnsafeBytes { rawBuffer in
+                for byte in rawBuffer {
+                    let index = Int((crc ^ UInt32(byte)) & 0xff)
+                    crc = crcTable[index] ^ (crc >> 8)
+                }
+            }
+            try destination.write(contentsOf: chunk)
         }
         return crc ^ 0xffff_ffff
     }

@@ -96,7 +96,7 @@ private final class FileIOConflictSession: @unchecked Sendable {
 }
 
 private final class FileIOBatchContext {
-    let bufferSize: Int = 512 * 1024
+    let bufferSize: Int = 1_024 * 1_024
     let buffer: UnsafeMutablePointer<UInt8>
     let syncEachFile: Bool
     var createdDirectories = Set<String>()
@@ -105,7 +105,7 @@ private final class FileIOBatchContext {
     var verifiedWritePaths = Set<String>()
 
     init(syncEachFile: Bool = false) {
-        self.buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 512 * 1024)
+        self.buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1_024 * 1_024)
         self.syncEachFile = syncEachFile
     }
 
@@ -113,6 +113,12 @@ private final class FileIOBatchContext {
         buffer.deallocate()
     }
 }
+
+public typealias FileIOByteProgressHandler = @Sendable (
+    _ bytesCopied: Int64,
+    _ totalBytes: Int64,
+    _ currentItemName: String
+) -> Void
 
 public final class FileIOEngine: @unchecked Sendable {
     public static let shared = FileIOEngine()
@@ -153,6 +159,7 @@ public final class FileIOEngine: @unchecked Sendable {
         from sourceURL: URL,
         to destinationURL: URL,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)? = nil,
+        byteProgressHandler: FileIOByteProgressHandler? = nil,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
         let cancelState = FileIOCancellationState()
@@ -261,6 +268,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
+                byteProgressHandler: byteProgressHandler,
                 conflictResolver: conflictResolver,
                 batchContext: batchContext
             )
@@ -284,10 +292,12 @@ public final class FileIOEngine: @unchecked Sendable {
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
+        byteProgressHandler: FileIOByteProgressHandler? = nil,
         conflictResolver: FileIOConflictResolver,
         batchContext: FileIOBatchContext? = nil,
         beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil
     ) async {
+        await Task.yield()
         defer {
             let totalDone = result.succeeded.count + result.skipped.count + result.failed.count
             progressHandler?(totalDone, source.lastPathComponent)
@@ -374,6 +384,7 @@ public final class FileIOEngine: @unchecked Sendable {
                     result: &result,
                     cancelState: cancelState,
                     progressHandler: progressHandler,
+                    byteProgressHandler: byteProgressHandler,
                     conflictResolver: conflictResolver,
                     batchContext: batchContext,
                     beforeWriteFile: beforeWriteFile
@@ -381,8 +392,22 @@ public final class FileIOEngine: @unchecked Sendable {
             } else {
                 do {
                     beforeWriteFile?(exactDestination, false)
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
-                    result.succeeded.append(exactDestination)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
+                    if cancelState.isCancelled {
+                        result.isCancelled = true
+                        result.skipped.append(source)
+                    } else {
+                        result.succeeded.append(exactDestination)
+                    }
+                } catch is CancellationError {
+                    result.isCancelled = true
+                    result.skipped.append(source)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
@@ -401,6 +426,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
+                byteProgressHandler: byteProgressHandler,
                 conflictResolver: conflictResolver,
                 batchContext: batchContext,
                 beforeWriteFile: beforeWriteFile
@@ -413,8 +439,22 @@ public final class FileIOEngine: @unchecked Sendable {
             if conflictSession.shouldReplaceAllConflicts {
                 do {
                     beforeWriteFile?(exactDestination, true)
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
-                    result.succeeded.append(exactDestination)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
+                    if cancelState.isCancelled {
+                        result.isCancelled = true
+                        result.skipped.append(source)
+                    } else {
+                        result.succeeded.append(exactDestination)
+                    }
+                } catch is CancellationError {
+                    result.isCancelled = true
+                    result.skipped.append(source)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
@@ -426,8 +466,22 @@ public final class FileIOEngine: @unchecked Sendable {
             case .replace:
                 do {
                     beforeWriteFile?(exactDestination, true)
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
-                    result.succeeded.append(exactDestination)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
+                    if cancelState.isCancelled {
+                        result.isCancelled = true
+                        result.skipped.append(source)
+                    } else {
+                        result.succeeded.append(exactDestination)
+                    }
+                } catch is CancellationError {
+                    result.isCancelled = true
+                    result.skipped.append(source)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
@@ -436,8 +490,22 @@ public final class FileIOEngine: @unchecked Sendable {
                 self.shouldReplaceAllConflicts = true
                 do {
                     beforeWriteFile?(exactDestination, true)
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
-                    result.succeeded.append(exactDestination)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
+                    if cancelState.isCancelled {
+                        result.isCancelled = true
+                        result.skipped.append(source)
+                    } else {
+                        result.succeeded.append(exactDestination)
+                    }
+                } catch is CancellationError {
+                    result.isCancelled = true
+                    result.skipped.append(source)
                 } catch {
                     result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
                 }
@@ -464,14 +532,24 @@ public final class FileIOEngine: @unchecked Sendable {
                         result: &result,
                         cancelState: cancelState,
                         progressHandler: progressHandler,
+                        byteProgressHandler: byteProgressHandler,
                         conflictResolver: conflictResolver,
                         batchContext: batchContext,
                         beforeWriteFile: beforeWriteFile
                     )
                 } else {
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
                     result.succeeded.append(exactDestination)
                 }
+            } catch is CancellationError {
+                result.isCancelled = true
+                result.skipped.append(source)
             } catch {
                 result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
             }
@@ -501,14 +579,24 @@ public final class FileIOEngine: @unchecked Sendable {
                         result: &result,
                         cancelState: cancelState,
                         progressHandler: progressHandler,
+                        byteProgressHandler: byteProgressHandler,
                         conflictResolver: conflictResolver,
                         batchContext: batchContext,
                         beforeWriteFile: beforeWriteFile
                     )
                 } else {
-                    try copySingleFile(from: source, to: exactDestination, batchContext: batchContext)
+                    try copySingleFile(
+                        from: source,
+                        to: exactDestination,
+                        batchContext: batchContext,
+                        cancelCheck: { cancelState.isCancelled },
+                        byteProgressHandler: byteProgressHandler
+                    )
                     result.succeeded.append(exactDestination)
                 }
+            } catch is CancellationError {
+                result.isCancelled = true
+                result.skipped.append(source)
             } catch {
                 result.failed.append(FileIOFailureRecord(url: exactDestination, reason: error.localizedDescription))
             }
@@ -527,6 +615,7 @@ public final class FileIOEngine: @unchecked Sendable {
         result: inout FileIOResult,
         cancelState: FileIOCancellationState,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)?,
+        byteProgressHandler: FileIOByteProgressHandler? = nil,
         conflictResolver: FileIOConflictResolver,
         batchContext: FileIOBatchContext? = nil,
         beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil
@@ -603,6 +692,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 result: &result,
                 cancelState: cancelState,
                 progressHandler: progressHandler,
+                byteProgressHandler: byteProgressHandler,
                 conflictResolver: conflictResolver,
                 batchContext: batchContext,
                 beforeWriteFile: beforeWriteFile
@@ -621,15 +711,28 @@ public final class FileIOEngine: @unchecked Sendable {
     ///    falling back to `FileReplacementService.replace` and direct POSIX overwrite if the container disallows sibling temp files.
     public func copySingleFile(
         from source: URL,
-        to destination: URL
+        to destination: URL,
+        syncAfterWrite: Bool = true,
+        cancelCheck: (() -> Bool)? = nil,
+        byteProgressHandler: FileIOByteProgressHandler? = nil
     ) throws {
-        try copySingleFile(from: source, to: destination, batchContext: nil)
+        try copySingleFile(
+            from: source,
+            to: destination,
+            batchContext: nil,
+            syncAfterWrite: syncAfterWrite,
+            cancelCheck: cancelCheck,
+            byteProgressHandler: byteProgressHandler
+        )
     }
 
     private func copySingleFile(
         from source: URL,
         to destination: URL,
-        batchContext: FileIOBatchContext?
+        batchContext: FileIOBatchContext?,
+        syncAfterWrite: Bool = true,
+        cancelCheck: (() -> Bool)? = nil,
+        byteProgressHandler: FileIOByteProgressHandler? = nil
     ) throws {
         // A copy onto itself must never truncate the source through the staging/overwrite fallbacks.
         guard source.standardizedFileURL != destination.standardizedFileURL else { return }
@@ -683,7 +786,17 @@ public final class FileIOEngine: @unchecked Sendable {
         }
 
         // 1. Low-level POSIX stream to sibling staging file + atomic rename
-        if posixCopyStream(from: source.path, to: stagingURL.path, mode: preservedMode, batchContext: batchContext) {
+        let itemName = source.lastPathComponent
+        if try posixCopyStream(
+            from: source.path,
+            to: stagingURL.path,
+            mode: preservedMode,
+            batchContext: batchContext,
+            syncAfterWrite: syncAfterWrite,
+            cancelCheck: cancelCheck,
+            itemName: itemName,
+            byteProgressHandler: byteProgressHandler
+        ) {
             if let protection {
                 try? fileManager.setAttributes([.protectionKey: protection], ofItemAtPath: stagingURL.path)
             }
@@ -711,9 +824,18 @@ public final class FileIOEngine: @unchecked Sendable {
             || fileManager.fileExists(atPath: destination.path)
             || lstat(destination.path, &destinationStat) == 0
         let hasInPlaceBackup = destinationExisted
-            && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext)
+            && ((try? posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext, syncAfterWrite: false)) ?? false)
         _ = chmod(destination.path, preservedMode | mode_t(S_IWUSR))
-        if posixCopyStream(from: source.path, to: destination.path, mode: preservedMode, batchContext: batchContext) {
+        if try posixCopyStream(
+            from: source.path,
+            to: destination.path,
+            mode: preservedMode,
+            batchContext: batchContext,
+            syncAfterWrite: syncAfterWrite,
+            cancelCheck: cancelCheck,
+            itemName: itemName,
+            byteProgressHandler: byteProgressHandler
+        ) {
             _ = chmod(destination.path, preservedMode)
             if let protection {
                 try? fileManager.setAttributes([.protectionKey: protection], ofItemAtPath: destination.path)
@@ -721,7 +843,7 @@ public final class FileIOEngine: @unchecked Sendable {
             return
         }
         if hasInPlaceBackup {
-            _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext)
+            _ = try? posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext, syncAfterWrite: false)
         }
 
         // 4. Direct Data read + POSIX write fallback (never deletes the destination first)
@@ -736,7 +858,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 || fileManager.fileExists(atPath: destination.path)
                 || lstat(destination.path, &fallbackStat) == 0
             let hasFallbackBackup = fallbackExisted
-                && posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext)
+                && ((try? posixCopyStream(from: destination.path, to: inPlaceBackupURL.path, mode: preservedMode, batchContext: batchContext, syncAfterWrite: false)) ?? false)
             if posixWriteData(data, to: destination.path, mode: preservedMode) {
                 _ = chmod(destination.path, preservedMode)
                 if let protection {
@@ -745,7 +867,7 @@ public final class FileIOEngine: @unchecked Sendable {
                 return
             }
             if hasFallbackBackup {
-                _ = posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext)
+                _ = try? posixCopyStream(from: inPlaceBackupURL.path, to: destination.path, mode: preservedMode, batchContext: batchContext, syncAfterWrite: false)
             }
         }
 
@@ -779,11 +901,20 @@ public final class FileIOEngine: @unchecked Sendable {
         from sourcePath: String,
         to destinationPath: String,
         mode: mode_t = 0o644,
-        batchContext: FileIOBatchContext? = nil
-    ) -> Bool {
+        batchContext: FileIOBatchContext? = nil,
+        syncAfterWrite: Bool = true,
+        cancelCheck: (() -> Bool)? = nil,
+        itemName: String = "",
+        byteProgressHandler: FileIOByteProgressHandler? = nil
+    ) throws -> Bool {
         let srcFD = open(sourcePath, O_RDONLY | O_CLOEXEC)
         guard srcFD >= 0 else { return false }
         defer { close(srcFD) }
+
+        var srcStat = stat()
+        let totalBytes: Int64 = (fstat(srcFD, &srcStat) == 0 && srcStat.st_size > 0)
+            ? Int64(srcStat.st_size)
+            : 0
 
         let dstFD = open(destinationPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode)
         guard dstFD >= 0 else { return false }
@@ -797,7 +928,7 @@ public final class FileIOEngine: @unchecked Sendable {
             buffer = ctx.buffer
             ownsBuffer = false
         } else {
-            bufferSize = 256 * 1024
+            bufferSize = 512 * 1024
             buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
             ownsBuffer = true
         }
@@ -807,7 +938,17 @@ public final class FileIOEngine: @unchecked Sendable {
             }
         }
 
+        var copiedBytes: Int64 = 0
+        var lastReportedTime = CFAbsoluteTimeGetCurrent()
+        // Report initial 0-byte state for large files (>= 4 MB) so the UI immediately shows byte progress.
+        if let byteProgressHandler, totalBytes >= 4 * 1_024 * 1_024 {
+            byteProgressHandler(0, totalBytes, itemName)
+        }
+
         while true {
+            if cancelCheck?() == true || Task.isCancelled {
+                throw CancellationError()
+            }
             let bytesRead = read(srcFD, buffer, bufferSize)
             if bytesRead < 0 {
                 if errno == EINTR { continue }
@@ -828,9 +969,17 @@ public final class FileIOEngine: @unchecked Sendable {
                 }
                 offset += bytesWritten
             }
+            copiedBytes += Int64(bytesRead)
+            if let byteProgressHandler, totalBytes > 0 {
+                let now = CFAbsoluteTimeGetCurrent()
+                if now - lastReportedTime >= 0.1 || copiedBytes >= totalBytes {
+                    lastReportedTime = now
+                    byteProgressHandler(copiedBytes, totalBytes, itemName)
+                }
+            }
         }
         _ = fchmod(dstFD, mode)
-        if batchContext?.syncEachFile ?? true {
+        if batchContext?.syncEachFile ?? syncAfterWrite {
             _ = fsync(dstFD)
         }
         return true
@@ -1093,6 +1242,7 @@ public final class FileIOEngine: @unchecked Sendable {
         from sourceRoot: URL,
         to destinationRoot: URL,
         progressHandler: (@Sendable (_ completedCount: Int, _ currentItemName: String) -> Void)? = nil,
+        byteProgressHandler: FileIOByteProgressHandler? = nil,
         beforeWriteFile: (@Sendable (_ destinationURL: URL, _ existedBefore: Bool) -> Void)? = nil,
         conflictResolver: @escaping FileIOConflictResolver
     ) async -> FileIOResult {
@@ -1191,6 +1341,7 @@ public final class FileIOEngine: @unchecked Sendable {
                     result: &result,
                     cancelState: cancelState,
                     progressHandler: progressHandler,
+                    byteProgressHandler: byteProgressHandler,
                     conflictResolver: conflictResolver,
                     batchContext: batchContext,
                     beforeWriteFile: beforeWriteFile

@@ -16,6 +16,7 @@ struct LogView: View {
     /// Builds the full log text. Computed only inside actions (not in `body`)
     /// so a 100k-line log does not get re-joined on every SwiftUI render.
     private func buildLogText() -> String {
+        appLog.flushToPublished()
         var lines: [String] = []
         lines.append("Totorox Log")
         lines.append("iOS \(AppInfo.osVersion) (\(AppInfo.osBuild)) — \(AppInfo.machineName)")
@@ -70,7 +71,8 @@ struct LogView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(Array(appLog.entries.enumerated()), id: \.offset) { index, entry in
+                                ForEach(appLog.entries.indices, id: \.self) { index in
+                                    let entry = appLog.entries[index]
                                     VStack(spacing: 0) {
                                         Text(entry)
                                             .font(.system(.caption, design: .monospaced))
@@ -94,13 +96,7 @@ struct LogView: View {
                         }
                         .onChange(of: appLog.entries.count) { count in
                             guard count > 0 else { return }
-                            if reduceMotion {
-                                proxy.scrollTo(count - 1, anchor: .bottom)
-                            } else {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo(count - 1, anchor: .bottom)
-                                }
-                            }
+                            proxy.scrollTo(count - 1, anchor: .bottom)
                         }
                     }
                 }

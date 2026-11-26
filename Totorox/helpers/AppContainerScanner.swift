@@ -158,30 +158,36 @@ struct AppScanSnapshot: Codable {
     /// on next launch in the background; if the set changed (new app installed),
     /// drop the cache and rescan automatically.
     let bundleIDs: [String]
+    /// Container UUIDs recorded from MCM / scan when the snapshot was saved.
+    /// Acts as a secondary fast detector for newly installed or removed apps
+    /// even when csstore is unavailable.
+    let containerUUIDs: [String]
 
-    enum CodingKeys: String, CodingKey { case apps, finishedAt, bundleIDs }
+    enum CodingKeys: String, CodingKey { case apps, finishedAt, bundleIDs, containerUUIDs }
 
-    init(apps: [CachedAppEntry], finishedAt: Date, bundleIDs: [String]) {
+    init(apps: [CachedAppEntry], finishedAt: Date, bundleIDs: [String], containerUUIDs: [String] = []) {
         self.apps = apps
         self.finishedAt = finishedAt
         self.bundleIDs = bundleIDs
+        self.containerUUIDs = containerUUIDs
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         apps = try c.decode([CachedAppEntry].self, forKey: .apps)
         finishedAt = try c.decode(Date.self, forKey: .finishedAt)
-        // 旧快照没有这个字段 → 空集合，validation 会跳过，不会误作废。
         bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+        containerUUIDs = try c.decodeIfPresent([String].self, forKey: .containerUUIDs) ?? []
     }
 }
 
-/// WQ Files stores AppScanSnapshot + finishedAt and reuses it within its TTL,
-/// which is why its app list appears immediately on later launches. Totorox
-/// used to re-scan every launch, which on iOS 16–18 also means waiting for the
-/// kernel exploit again.
+/// Persistent app scan snapshot: once the app has completed a full scan, later
+/// launches restore the cached app list immediately (<10ms) and only rescan in
+/// the background when a new/removed app is detected (or the user pulls to refresh).
 enum AppScanCache {
-    static let ttl: TimeInterval = 600
+    /// Long safety TTL (30 days); invalidation is driven by new-app detection
+    /// (`bundleIDs` / `containerUUIDs` diff) or manual refresh rather than a short timer.
+    static let ttl: TimeInterval = 30 * 24 * 3600
 
     private static var fileURL: URL? {
         guard let base = try? FileManager.default.url(
@@ -202,7 +208,7 @@ enum AppScanCache {
         return snapshot
     }
 
-    static func store(_ apps: [AppContainerInfo], bundleIDs: [String]) {
+    static func store(_ apps: [AppContainerInfo], bundleIDs: [String], containerUUIDs: [String] = []) {
         guard let url = fileURL, apps.count > 2 else { return }
         let entries = apps.map {
             CachedAppEntry(appName: $0.appName,
@@ -213,7 +219,8 @@ enum AppScanCache {
         }
         let snapshot = AppScanSnapshot(apps: entries,
                                        finishedAt: Date(),
-                                       bundleIDs: Array(Set(bundleIDs)).sorted())
+                                       bundleIDs: Array(Set(bundleIDs)).sorted(),
+                                       containerUUIDs: Array(Set(containerUUIDs.map { $0.uppercased() })).sorted())
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: url, options: .atomic)
     }
@@ -257,23 +264,51 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         log("browser: waited for kernel exploit before scanning finished=\(AppState.kernelExploitFinished)")
     }
 
-    /// So sánh danh sách bundle ID hiện tại snapshot; nếu có app mới/cài lại thì
-    /// tự invalidate cache và quét full. Chạy nền sau khi đã trả snapshot cũ để
-    /// danh sách vẫn hiện ngay.
+    /// So sánh danh sách bundle ID (csstore) và container UUID (MCM) hiện tại với
+    /// snapshot đã lưu; nếu có app mới cài hoặc vừa gỡ thì tự invalidate cache và
+    /// quét full lại ở nền, trong khi danh sách cũ vẫn hiển thị ngay lập tức.
     private func validateSnapshotAndRescanIfNeeded(_ snapshot: AppScanSnapshot) {
-        guard !snapshot.bundleIDs.isEmpty else { return }
+        guard !snapshot.bundleIDs.isEmpty || !snapshot.containerUUIDs.isEmpty else { return }
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             await self.waitForPrivilegesIfNeeded()
-            let current = ContainerStore.launchServicesStoreIdentifiers()
-            // Không thể đọc csstore → không kết luận gì, giữ snapshot.
-            guard !current.isEmpty else { return }
-            let savedSet = Set(snapshot.bundleIDs)
-            let currentSet = Set(current)
-            guard savedSet != currentSet else { return }
-            log("browser: installed app set changed \(savedSet.count) -> \(currentSet.count), rescanning")
-            AppScanCache.invalidate()
-            _ = await self.scanAllContainers(forceRefresh: true)
+
+            // 1. Primary check: LaunchServices csstore bundle ID set
+            if !snapshot.bundleIDs.isEmpty {
+                let current = ContainerStore.launchServicesStoreIdentifiers()
+                if !current.isEmpty {
+                    let savedSet = Set(snapshot.bundleIDs)
+                    let currentSet = Set(current)
+                    if savedSet != currentSet {
+                        log("browser: installed app set changed (csstore) \(savedSet.count) -> \(currentSet.count), rescanning")
+                        AppScanCache.invalidate()
+                        _ = await self.scanAllContainers(forceRefresh: true)
+                        return
+                    }
+                }
+            }
+
+            // 2. Secondary check: MCM container UUIDs (fast, works even when csstore is unavailable)
+            if snapshot.containerUUIDs.count >= 5 {
+                var detail: NSString? = nil
+                let records = MCMEnumerateApplicationContainers(4_096, &detail)
+                let currentUUIDs: [String] = records.compactMap { rec in
+                    guard let path = rec["path"] as? String,
+                          ContainerStore.isApplicationContainerPath(path) else { return nil }
+                    let uuid = (path as NSString).lastPathComponent.uppercased()
+                    return UUID(uuidString: uuid) != nil ? uuid : nil
+                }
+                if currentUUIDs.count >= 5 {
+                    let savedUUIDSet = Set(snapshot.containerUUIDs.map { $0.uppercased() })
+                    let currentUUIDSet = Set(currentUUIDs)
+                    if savedUUIDSet != currentUUIDSet {
+                        log("browser: container UUID set changed (MCM) \(savedUUIDSet.count) -> \(currentUUIDSet.count), rescanning")
+                        AppScanCache.invalidate()
+                        _ = await self.scanAllContainers(forceRefresh: true)
+                        return
+                    }
+                }
+            }
         }
     }
 
@@ -492,12 +527,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
         let mcmRecords = MCMEnumerateApplicationContainers(4_096, &mcmDetail)
         log("browser: MCM app containers=\(mcmRecords.count) " +
             "classes=\(mcmDetail.map(String.init) ?? "none")")
-        // Do NOT force the bad_query-blocked memo from a short MCM list. On
-        // 26.6.2+/iOS 27 bad_query is disabled by OS policy anyway
-        // (SandboxGrantRouter.badQueryUsable == false), so the router already
-        // goes straight to worse_query; forcing the memo would only duplicate
-        // grants and poison the negative cache. On 26.0–26.6.1 bad_query still
-        // works and Tier 4 must prove itself first, so leave the memo alone.
+        // SandboxGrantRouter uses worse_query exclusively on iOS 26+.
         _ = mcmRecords
         var containerManagerPaths: [String] = []
         containerManagerPaths.reserveCapacity(mcmRecords.count)
@@ -655,6 +685,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             // Retry the containers a previous pass could not name, so a
             // transient token failure does not hide an app for the session.
             ContainerMetadataCache.shared.retryUnresolvedContainers()
+            // Xóa cache csstore trong RAM để refresh thủ công luôn đọc lại app mới cài.
+            ContainerMetadataCache.shared.cachedLaunchServicesIDs = nil
+            ContainerMetadataCache.shared.cachedLSStore = nil
             // Bỏ checkpoint + slot scan của lần trước (port WQFiles enumerate_invalidate).
             ContainerScanCoordinator.invalidate()
             AppScanCache.invalidate()
@@ -745,9 +778,9 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             log("browser: stage2 resolved=\(newlyResolvedInStage2) direct_csstore=\(directPathCount) " +
                 "candidates=\(prioritizedCandidates.count)")
 
-            // STAGE 3: Filesystem Container Discovery (only when a tier can grant raw
-            // UUID paths: kernel sandbox escape, iOS < 26, a directly readable root,
-            // or Tier 4 worse_query on iOS 26+ sideloads)
+            // STAGE 3: Filesystem Container Discovery (when raw UUID paths are
+            // reachable: iOS < 26, active kernel access, a directly readable root,
+            // or worse_query with a valid App Group on iOS 26+ sideloads)
             let canOpenRootDirectly: Bool = {
                 if let d = opendir(ContainerStore.appDataRoot) {
                     closedir(d)
@@ -758,8 +791,8 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             let canReadRawUUIDContainers = ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26
                 || KernelExploit.hasSandboxAccess()
                 || canOpenRootDirectly
-                // Tier 4 grants traversal of the app-data root exactly like Tier 1
-                // does, so raw UUID containers stay reachable on iOS 26+ sideloads.
+                // worse_query grants traversal of the app-data root when an App Group
+                // is available, keeping raw UUID containers reachable on iOS 26+.
                 || (WorseQuery.grantGroup != nil)
             self.cacheLock.lock()
             let containerManagerDirs = self.mcmContainerPaths
@@ -905,16 +938,22 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             let finalSorted = self.buildSortedSnapshotFromCache()
             log("browser: inventory scan done apps=\(finalSorted.count) " +
                 "unresolved=\(ContainerMetadataCache.shared.unresolvedContainerCount) " +
-                "tier=\(SandboxGrantRouter.lastBackend?.rawValue ?? "none") " +
-                "badQueryBlocked=\(SandboxGrantRouter.badQueryBlocked)")
+                "tier=\(SandboxGrantRouter.lastBackend ?? "none")")
             self.cacheLock.lock()
             self.hasCompletedFullScan = true
             self.activeScanTask = nil
             self.cacheLock.unlock()
-            // Lưu kèm danh sách bundle ID lấy từ csstore để lần sau so sánh,
-            // tự phát hiện app mới cài mà không cần đợi hết TTL.
+            // Lưu kèm danh sách bundle ID (csstore) và container UUID (MCM) để lần mở
+            // sau khôi phục ngay lập tức và chỉ quét lại khi phát hiện app mới/gỡ app.
+            self.cacheLock.lock()
+            let mcmUUIDs = self.mcmContainerPaths.compactMap { path -> String? in
+                let uuid = (path as NSString).lastPathComponent.uppercased()
+                return UUID(uuidString: uuid) != nil ? uuid : nil
+            }
+            self.cacheLock.unlock()
             AppScanCache.store(finalSorted,
-                               bundleIDs: ContainerMetadataCache.shared.cachedLaunchServicesIDs ?? [])
+                               bundleIDs: ContainerMetadataCache.shared.cachedLaunchServicesIDs ?? [],
+                               containerUUIDs: mcmUUIDs)
 
             await MainActor.run {
                 self.apps = finalSorted

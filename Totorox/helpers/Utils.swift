@@ -3,22 +3,57 @@ import UIKit
 import Darwin
 import Combine
 
-// MARK: - Global logger
+// MARK: - Global logger (throttled batching to avoid flooding Main Thread)
 class AppLog: ObservableObject {
     static let shared = AppLog()
 
     /// Keep the in-app log bounded; stdout/stderr capture can emit very chatty output.
     private static let maximumEntries = 5_000
+    private static let flushInterval: TimeInterval = 0.12
 
     @Published var entries: [String] = []
+    private let bufferLock = NSLock()
+    private var pendingEntries: [String] = []
+    private var flushScheduled = false
 
     func append(_ msg: String) {
-        DispatchQueue.main.async {
-            self.entries.append(msg)
-            let overflow = self.entries.count - Self.maximumEntries
-            if overflow > 0 {
-                self.entries.removeFirst(overflow)
+        bufferLock.lock()
+        pendingEntries.append(msg)
+        let shouldSchedule = !flushScheduled
+        if shouldSchedule {
+            flushScheduled = true
+        }
+        bufferLock.unlock()
+
+        if shouldSchedule {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.flushInterval) { [weak self] in
+                self?.flushToPublished()
             }
+        }
+    }
+
+    func flushToPublished() {
+        bufferLock.lock()
+        let batch = pendingEntries
+        pendingEntries.removeAll(keepingCapacity: true)
+        flushScheduled = false
+        bufferLock.unlock()
+
+        guard !batch.isEmpty else { return }
+        if Thread.isMainThread {
+            applyBatchOnMain(batch)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyBatchOnMain(batch)
+            }
+        }
+    }
+
+    private func applyBatchOnMain(_ batch: [String]) {
+        entries.append(contentsOf: batch)
+        let overflow = entries.count - Self.maximumEntries
+        if overflow > 0 {
+            entries.removeFirst(overflow)
         }
     }
 }
@@ -47,9 +82,10 @@ func setupLogCapture() {
         let data = handle.availableData
         guard !data.isEmpty else { return }
         if let text = String(data: data, encoding: .utf8) {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                DispatchQueue.main.async {
+            let lines = text.split(whereSeparator: \.isNewline)
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
                     AppLog.shared.append(trimmed)
                 }
             }

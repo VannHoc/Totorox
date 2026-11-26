@@ -477,13 +477,15 @@ public final class PatchZipConverter {
         inputURL: URL,
         outputZipURL: URL,
         password: String? = nil,
-        outputPassword: String? = nil
+        outputPassword: String? = nil,
+        progressHandler: (@Sendable (_ stage: String, _ fraction: Double) -> Void)? = nil
     ) async throws {
         try await convertPatchToZip(
             patchURL: inputURL,
             destinationZipURL: outputZipURL,
             password: password,
-            outputPassword: outputPassword
+            outputPassword: outputPassword,
+            progressHandler: progressHandler
         )
     }
 
@@ -491,8 +493,11 @@ public final class PatchZipConverter {
         patchURL: URL,
         destinationZipURL: URL,
         password: String? = nil,
-        outputPassword: String? = nil
+        outputPassword: String? = nil,
+        progressHandler: (@Sendable (_ stage: String, _ fraction: Double) -> Void)? = nil
     ) async throws {
+        try Task.checkCancellation()
+        progressHandler?(patchURL.lastPathComponent, 0.08)
         guard fileManager.fileExists(atPath: patchURL.path) else {
             throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.missing_source_3105"))
         }
@@ -527,12 +532,16 @@ public final class PatchZipConverter {
                 passwordForServer = password
             }
 
+            try Task.checkCancellation()
+            progressHandler?("header.3105", 0.25)
             let response = try await sendConvertHeader(
                 mode: "from_zip",
                 password: passwordForServer,
                 payload: headerOnly,
                 fileName: "header.3105"
             )
+            try Task.checkCancellation()
+            progressHandler?(patchURL.lastPathComponent, 0.48)
             let contentKey: Data
             if let contentKeyB64 = response.contentKeyB64,
                let serverKey = Data(base64Encoded: contentKeyB64) {
@@ -573,10 +582,15 @@ public final class PatchZipConverter {
                 return try decodePayloadProject(from: payloadBytes)
             }
 
+            try Task.checkCancellation()
+            progressHandler?(destinationZipURL.lastPathComponent, 0.80)
             try writeProjectZip(project, to: destinationZipURL, password: cleanOutputPassword)
+            progressHandler?(destinationZipURL.lastPathComponent, 1.0)
             return
         }
 
+        try Task.checkCancellation()
+        progressHandler?(patchURL.lastPathComponent, 0.30)
         let patchData: Data
         do {
             patchData = try Data(contentsOf: patchURL, options: .alwaysMapped)
@@ -589,7 +603,10 @@ public final class PatchZipConverter {
             password: password,
             outputPassword: outputPassword
         )
+        try Task.checkCancellation()
+        progressHandler?(destinationZipURL.lastPathComponent, 0.88)
         try writeAtomically(zipData, to: destinationZipURL, description: AppLanguage.current.text("error.patch_converter.output_zip_label"))
+        progressHandler?(destinationZipURL.lastPathComponent, 1.0)
     }
 
     public func convertPatchDataToZipData(
@@ -626,14 +643,16 @@ public final class PatchZipConverter {
         outputPatchURL: URL,
         password: String? = nil,
         sourcePassword: String? = nil,
-        customProjectName: String? = nil
+        customProjectName: String? = nil,
+        progressHandler: (@Sendable (_ stage: String, _ fraction: Double) -> Void)? = nil
     ) async throws {
         try await convertZipToPatch(
             zipURL: inputZipURL,
             destinationPatchURL: outputPatchURL,
             password: password,
             sourcePassword: sourcePassword,
-            customProjectName: customProjectName
+            customProjectName: customProjectName,
+            progressHandler: progressHandler
         )
     }
 
@@ -642,8 +661,11 @@ public final class PatchZipConverter {
         destinationPatchURL: URL,
         password: String? = nil,
         sourcePassword: String? = nil,
-        customProjectName: String? = nil
+        customProjectName: String? = nil,
+        progressHandler: (@Sendable (_ stage: String, _ fraction: Double) -> Void)? = nil
     ) async throws {
+        try Task.checkCancellation()
+        progressHandler?(zipURL.lastPathComponent, 0.10)
         guard fileManager.fileExists(atPath: zipURL.path) else {
             throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.missing_source_zip"))
         }
@@ -655,20 +677,99 @@ public final class PatchZipConverter {
         defer {
             if hasScope { zipURL.stopAccessingSecurityScopedResource() }
         }
-        let zipData: Data
-        do {
-            zipData = try Data(contentsOf: zipURL, options: .alwaysMapped)
-        } catch {
-            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.read_zip_failed", error.localizedDescription))
-        }
 
-        let patchData = try await convertZipDataToPatchData(
-            zipData,
-            password: password,
-            sourcePassword: sourcePassword,
-            customProjectName: customProjectName
+        let cleanPassword = password.flatMap { $0.isEmpty ? nil : $0 }
+        let built: (project: PatchProject, settings: [Any]) = try autoreleasepool {
+            let zipData: Data
+            do {
+                zipData = try Data(contentsOf: zipURL, options: .alwaysMapped)
+            } catch {
+                throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.read_zip_failed", error.localizedDescription))
+            }
+            guard !PatchPackageLimits.exceedsExpandedLimit(UInt64(zipData.count)) else {
+                throw PatchZipConverterError.sizeLimitExceeded
+            }
+            guard zipData.count >= 4,
+                  zipData.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]) else {
+                throw PatchZipConverterError.corruptedArchive(AppLanguage.current.text("error.patch_converter.invalid_zip_magic"))
+            }
+            return try buildPatchProjectWithSettings(
+                fromZipData: zipData,
+                sourcePassword: sourcePassword,
+                customProjectName: customProjectName
+            )
+        }
+        try Task.checkCancellation()
+        progressHandler?("manifest.json", 0.40)
+
+        let project = built.project
+        let metadataPayload = try manifestData(for: project)
+        let response = try await sendConvertHeader(
+            mode: "to_zip",
+            password: cleanPassword,
+            payload: metadataPayload,
+            fileName: "manifest.json"
         )
-        try writeAtomically(patchData, to: destinationPatchURL, description: AppLanguage.current.text("error.patch_converter.output_3105_label"))
+        try Task.checkCancellation()
+        progressHandler?(destinationPatchURL.lastPathComponent, 0.65)
+
+        guard let contentKeyB64 = response.contentKeyB64,
+              let contentKey = Data(base64Encoded: contentKeyB64) else {
+            throw PatchZipConverterError.corruptedArchive(
+                response.note ?? AppLanguage.current.text("error.patch_converter.missing_content_key")
+            )
+        }
+        let packageID = response.packageId.flatMap(UUID.init(uuidString:)) ?? project.id
+        let schemaVersion = 9
+        let isProtected = cleanPassword != nil
+
+        let envelopeData: Data = try autoreleasepool {
+            let sealedPayload = try sealPayload(
+                project: project,
+                contentKey: contentKey,
+                packageID: packageID,
+                schemaVersion: schemaVersion,
+                settingsPlist: built.settings
+            )
+            return try buildEnvelope(
+                project: project,
+                packageID: packageID,
+                schemaVersion: schemaVersion,
+                contentKey: contentKey,
+                isProtected: isProtected,
+                password: cleanPassword,
+                response: response,
+                sealedPayload: sealedPayload
+            )
+        }
+        try Task.checkCancellation()
+        progressHandler?(destinationPatchURL.lastPathComponent, 0.90)
+
+        // Stream magic + envelope directly via FileHandle to avoid allocating another full copy in RAM.
+        let parent = destinationPatchURL.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: parent.path) {
+            try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+        let stagingURL = parent.appendingPathComponent(".totorox-conv-\(UUID().uuidString).tmp")
+        guard fileManager.createFile(atPath: stagingURL.path, contents: nil) else {
+            throw PatchZipConverterError.ioFailure("Unable to create temporary output file.")
+        }
+        defer { try? fileManager.removeItem(at: stagingURL) }
+        do {
+            let outHandle = try FileHandle(forWritingTo: stagingURL)
+            defer { try? outHandle.close() }
+            try outHandle.write(contentsOf: Data("3105PATCH\0".utf8))
+            try outHandle.write(contentsOf: envelopeData)
+            try outHandle.synchronize()
+            try outHandle.close()
+            if fileManager.fileExists(atPath: destinationPatchURL.path) {
+                try fileManager.removeItem(at: destinationPatchURL)
+            }
+            try fileManager.moveItem(at: stagingURL, to: destinationPatchURL)
+        } catch {
+            throw PatchZipConverterError.ioFailure(AppLanguage.current.text("error.patch_converter.write_failed", AppLanguage.current.text("error.patch_converter.output_3105_label"), error.localizedDescription))
+        }
+        progressHandler?(destinationPatchURL.lastPathComponent, 1.0)
     }
 
     public func convertZipDataToPatchData(
@@ -1691,6 +1792,70 @@ public final class PatchZipConverter {
         }
         let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readZipArchiveHeaders(from: data)
+    }
+
+    /// Giải nén cuốn chiếu từng entry từ tệp `.zip` (hỗ trợ cả mật khẩu PKZIP & ZIP64)
+    /// trực tiếp ra đĩa qua `mmap` + `autoreleasepool`, giữ đỉnh RAM chỉ bằng ~1 tệp con
+    /// thay vì nạp toàn bộ `[String: Data]` vào RAM gây tràn bộ nhớ (Jetsam) với gói lớn.
+    @discardableResult
+    public func extractZipArchiveToDirectory(
+        at archiveURL: URL,
+        into destinationDir: URL,
+        password: String? = nil,
+        stripMetadataEntries: Bool = false,
+        shouldCancel: (() -> Bool)? = nil,
+        progressHandler: ((_ extracted: Int, _ total: Int, _ entryName: String) -> Void)? = nil
+    ) throws -> Int {
+        let archiveSize = (try? archiveURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard !PatchPackageLimits.exceedsExpandedLimit(Int64(archiveSize)) else {
+            throw PatchZipConverterError.sizeLimitExceeded
+        }
+        let mappedData = try Data(contentsOf: archiveURL, options: .alwaysMapped)
+        let headers = try readZipArchiveHeaders(from: mappedData)
+        let sortedKeys = headers.keys.sorted()
+        let total = max(sortedKeys.count, 1)
+        var written = 0
+        var createdDirs = Set<String>()
+
+        for rawPath in sortedKeys {
+            if shouldCancel?() == true || Task.isCancelled {
+                throw CancellationError()
+            }
+            guard let header = headers[rawPath] else { continue }
+            let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
+            let parts = normalized
+                .split(separator: "/", omittingEmptySubsequences: true)
+                .map(String.init)
+                .filter { $0 != "." }
+            guard !parts.isEmpty, !parts.contains("..") else { continue }
+            if stripMetadataEntries {
+                if parts.first == "__MACOSX"
+                    || parts.last == ".DS_Store"
+                    || parts.last?.lowercased() == "patch.json" {
+                    continue
+                }
+            }
+
+            var targetFile = destinationDir
+            for (idx, part) in parts.enumerated() {
+                targetFile.appendPathComponent(part, isDirectory: idx < parts.count - 1)
+            }
+            let parentDir = targetFile.deletingLastPathComponent()
+            if createdDirs.insert(parentDir.path).inserted {
+                try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
+            }
+
+            try autoreleasepool {
+                let entryData = try extractZipEntry(header: header, from: mappedData, password: password)
+                try entryData.write(to: targetFile, options: .atomic)
+            }
+            written += 1
+            if written == 1 || written == total || written % 4 == 0 {
+                let lastName = parts.last ?? targetFile.lastPathComponent
+                progressHandler?(written, total, lastName)
+            }
+        }
+        return written
     }
 
     public func isZipPasswordProtected(url: URL) -> Bool {
