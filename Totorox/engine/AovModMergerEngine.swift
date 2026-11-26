@@ -1142,6 +1142,11 @@ public final class AovModMergerEngine: @unchecked Sendable {
         "lluevty", "4t4d", "kianamod", "trong đấu luyện có thể không hiển thị đầy đủ",
     ]
 
+    private static let copyrightTailRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"(\\n)+<size=\d+>(?:<i>)?<color=[^>]+>[^<]*(?:File\s*mod|Mod\s*by|Bản\s*quyền).*$"#,
+        options: [.caseInsensitive]
+    )
+
     private static func containsUniversalAdText(_ value: String) -> Bool {
         let low = value.lowercased()
         return universalAdSubstrings.contains { low.contains($0) }
@@ -1167,7 +1172,10 @@ public final class AovModMergerEngine: @unchecked Sendable {
 
         var changed = false
         var foundWatermark = false
-        let rawLines = text.components(separatedBy: .newlines)
+        let normalizedText = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let rawLines = normalizedText.components(separatedBy: "\n")
         var outLines: [String] = []
         outLines.reserveCapacity(rawLines.count)
 
@@ -1191,11 +1199,18 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     changed = true
                     continue
                 }
-                if let copyRange = val.range(of: #"(\\n)+<size=\d+>(<i>)?<color=[^>]+>©️?\s*(File\s*mod|Mod\s*by|Bản\s*quyền).*$"#, options: [.regularExpression, .caseInsensitive]) {
-                    let trimmedVal = String(val[..<copyRange.lowerBound]).trimmingCharacters(in: .whitespaces)
-                    outLines.append("\(key) = \(trimmedVal)")
-                    changed = true
-                    continue
+                if val.contains("<"),
+                   let regex = copyrightTailRegex {
+                    let nsVal = val as NSString
+                    let fullRange = NSRange(location: 0, length: nsVal.length)
+                    if let match = regex.firstMatch(in: val, options: [], range: fullRange),
+                       match.range.location != NSNotFound {
+                        let trimmedVal = nsVal.substring(to: match.range.location)
+                            .trimmingCharacters(in: .whitespaces)
+                        outLines.append("\(key) = \(trimmedVal)")
+                        changed = true
+                        continue
+                    }
                 }
                 if containsUniversalAdText(val) && (
                     val.lowercased().contains("vượt link")
