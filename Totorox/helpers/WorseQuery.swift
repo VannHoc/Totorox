@@ -1,29 +1,20 @@
 import Foundation
 
-/// Tier 4 of the container-access chain: `worse_query`.
+/// Primary container-access backend on iOS 26+ (`worse_query`).
 ///
-/// `worse_query` grants a sandbox extension for an arbitrary absolute path by
-/// temporarily pointing `<AppGroup>/Library/Caches` at that path and asking
-/// MobileContainerManager for the App Group token.
+/// Grants a sandbox extension for an arbitrary absolute path through an
+/// entitled App Group container via MobileContainerManager.
 ///
-/// It only works when **all** of the following are true:
+/// Active when **all** of the following are true:
 /// 1. the code signature declares `com.apple.security.application-groups`;
 /// 2. the provisioning profile used to sign the app contains that group, so
 ///    `containerURL(forSecurityApplicationGroupIdentifier:)` returns a URL;
 /// 3. the private ContainerManager symbols still exist on this iOS build;
-/// 4. the user has not turned the tier off in Settings.
-///
-/// It is never the first choice: `SandboxGrantRouter` always tries `bad_query`
-/// (Tier 1) first and only falls back here when Tier 1 is blocked.
+/// 4. the running build is not patched (`!isPatchedBuild`, i.e. <= iOS 27.3 beta 1).
 enum WorseQuery {
 
-    /// User toggle. Default ON: when the signature is right, Tier 4 is the only
-    /// thing that works on iOS 26+ sideloads; when it is wrong every attempt
-    /// fails fast with a clear log line.
-    static let enabledDefaultsKey = "totorox.useWorseQuery"
-
-    /// Optional override when the signature declares more than one group and the
-    /// first one is not the usable one. Useful for sideload profiles.
+    /// Optional override when the signature declares more than one group and a
+    /// specific group was rotated & persisted due to a shared-group swap conflict.
     static let groupOverrideDefaultsKey = "totorox.worseQueryGroup"
 
     // MARK: - Eligibility
@@ -52,8 +43,8 @@ enum WorseQuery {
         #endif
     }
 
-    /// True when this iOS build has patched `worse_query` (iOS 27.3 beta 2+),
-    /// so Tier 4 cannot grant anything and must stay disabled.
+    /// True when this iOS build has patched `worse_query` (iOS 27.3 beta 2+,
+    /// or any `24C` build outside `24C5000..<24C5049`).
     static var isPatchedBuild: Bool {
         #if targetEnvironment(simulator)
         return false
@@ -62,10 +53,8 @@ enum WorseQuery {
         #endif
     }
 
-    /// Tier 4 is now always on. The Settings toggle was removed; ignore any
-    /// stale "off" value from an older build so grant resolution cannot be
-    /// silently disabled with no visible control to turn it back on.
-    static var isEnabled: Bool { true }
+    /// Always active on eligible unpatched iOS 26+ builds (no user toggle).
+    static let isEnabled: Bool = true
 
     /// Every group declared in the code signature (empty when the entitlement
     /// is missing — that is a signing problem, not a code problem).
@@ -83,13 +72,14 @@ enum WorseQuery {
     private static var cachedGrantGroup: String?
     private static var didResolveGrantGroup = false
 
-    /// Group that will actually be used for grants, or `nil` when Tier 4 cannot
-    /// run on this device/session. Cached after the first resolution.
+    /// Group that will actually be used for grants, or `nil` when `worse_query`
+    /// cannot run on this device/session (missing entitlement/profile, patched
+    /// build, or unavailable API — in which case `SandboxGrantRouter.grant`
+    /// returns `-1` immediately with no fallback backend).
     ///
-    /// Hot path: once resolved, the answer comes from the cache without touching
-    /// `UserDefaults` or `worse_query_available()` (this is called for every
-    /// container grant). `invalidateGroupCache()` is what re-runs the gates —
-    /// `SettingsView` calls it whenever the toggle or the group override changes.
+    /// Hot path: cached after first resolution without touching `UserDefaults`
+    /// or `worse_query_available()`. `invalidateGroupCache()` clears the cache
+    /// when rotating App Groups or during tests.
     static var grantGroup: String? {
         #if targetEnvironment(simulator)
         return nil
@@ -277,8 +267,9 @@ enum WorseQuery {
         #endif
     }
 
-    /// Lazily resolved probe used by the grant router. Nil when Tier 4 is not
-    /// eligible or the daemon refused both flags — callers keep their old fallback.
+    /// Lazily resolved probe used by `SandboxGrantRouter` to pick the working
+    /// flag variant. `nil` when `worse_query` is ineligible or the probe failed,
+    /// in which case the router falls back to `preferredVariant` heuristics.
     static var tokenProbe: TokenProbe? {
         tokenProbeLock.lock()
         let cached = tokenProbeCache
@@ -318,22 +309,7 @@ enum WorseQuery {
         #endif
     }
 
-    /// Raw grant. Returns a handle `>= 0` on success, or a negative `WQ_ERR_*`.
-    static func grantRaw(path: String, group: String, usedVariant: inout Int32) -> Int64 {
-        usedVariant = -1
-        #if targetEnvironment(simulator)
-        return Int64(WQ_ERR_API_UNAVAILABLE)
-        #else
-        return path.withCString { pathPtr in
-            group.withCString { groupPtr in
-                worse_query_try_both(pathPtr, groupPtr, &usedVariant)
-            }
-        }
-        #endif
-    }
-
-    /// `sandbox_extension_release` wrapper. Safe for negative handles, and valid
-    /// for handles produced by `bad_query` too (both are plain sandbox extensions).
+    /// Releases a consumed extension handle (safe no-op for negative handles).
     static func release(_ handle: Int64) {
         guard handle >= 0 else { return }
         worse_query_release(handle)
@@ -434,10 +410,7 @@ enum WorseQuery {
         #if targetEnvironment(simulator)
         return
         #else
-        // Respect the user toggle: when Tier 4 is disabled, do not touch any
-        // group's `Library/Caches` (including the recovery sweep), so a disabled
-        // tier leaves no `worse_query` trace in the log.
-        guard isEligibleOnThisDevice, isEnabled, !isPatchedBuild else { return }
+        guard isEligibleOnThisDevice, !isPatchedBuild else { return }
         let groups = usableGroups()
         guard !groups.isEmpty else { return }
         for group in groups {
@@ -492,95 +465,6 @@ enum WorseQuery {
         // Pure C switch, no private API involved.
         guard let raw = worse_query_error_name(code) else { return "WQ_ERR_UNKNOWN" }
         return String(cString: raw)
-    }
-
-    /// Localization key describing the current Tier 4 state, for Settings.
-    ///
-    /// `enabled` is passed in by the caller (the `@AppStorage` value) instead of
-    /// being read from `UserDefaults` here, so the subtitle re-renders as soon
-    /// as the toggle flips. `grantGroup` would otherwise keep reading the
-    /// stored value through `isEnabled`.
-    static func statusLocalizationKey(enabled: Bool) -> String {
-        guard isEligibleOnThisDevice else { return "settings.worse_query_not_needed" }
-        guard enabled else { return "settings.worse_query_disabled" }
-        guard isAPIAvailable else { return "settings.worse_query_api_missing" }
-        if grantGroup == nil { return "settings.worse_query_missing_group" }
-        return "settings.worse_query_ready"
-    }
-}
-
-// MARK: - Tier state machine (pure, unit-testable)
-
-enum SandboxBackend: String {
-    case badQuery = "bad_query"
-    case worseQuery = "worse_query"
-}
-
-/// Remembers, for the lifetime of the process only (RAM), that Tier 1 is blocked.
-///
-/// The memo is flipped **only after Tier 4 succeeded for the same path**, so a
-/// path-specific `bad_query` failure can never disable Tier 1 session-wide.
-/// From the second file on, `bad_query` is skipped entirely — but it stays as
-/// the last attempt, so a Tier 4 regression can never leave the app without a
-/// grant.
-struct SandboxTierState {
-    private(set) var badQueryBlocked = false
-    private(set) var lastBadQueryError: Int64 = 0
-
-    mutating func noteBadQueryFailure(_ code: Int64) {
-        guard code < 0 else { return }
-        lastBadQueryError = code
-    }
-
-    /// Tier 1 worked for this path; drop stale failure evidence so a later
-    /// Tier 4 success is only blamed on a failure that just happened.
-    mutating func noteBadQuerySuccess() {
-        lastBadQueryError = 0
-    }
-
-    /// Tier 4 produced a handle for this path.
-    ///
-    /// `strict == false` means the extension only covered the closest existing
-    /// *ancestor* of the requested path (write into a file that does not exist
-    /// yet). That says nothing about Tier 1, so the memo must not flip; the
-    /// stale failure evidence is dropped instead.
-    mutating func noteWorseQuerySuccess(strict: Bool = true) {
-        guard strict else {
-            lastBadQueryError = 0
-            return
-        }
-        guard !badQueryBlocked, lastBadQueryError < 0 else { return }
-        badQueryBlocked = true
-        lastBadQueryError = 0
-    }
-
-    mutating func reset() {
-        badQueryBlocked = false
-        lastBadQueryError = 0
-    }
-
-    /// Force the memo on without requiring a prior Tier 4 success or a Tier 1
-    /// failure code. Used by the enumeration fallback when `bad_query` hands
-    /// back a usable handle but does not unlock traversal of the app-data root.
-    mutating func forceBadQueryBlocked() {
-        badQueryBlocked = true
-        lastBadQueryError = 0
-    }
-
-    /// Attempt order for the next grant.
-    ///
-    /// - Tier 1 disabled by OS policy (26.6.2+ / iOS 27): `worse_query` only,
-    ///   or nothing at all when Tier 4 is also unusable. Never fall back to a
-    ///   `bad_query` that returns `-3` for every path.
-    /// - memo off: `bad_query` first (the documented order).
-    /// - memo on: `worse_query` first, `bad_query` last.
-    /// - memo on but Tier 4 unusable: Tier 1 is the only option left, so it is
-    ///   still attempted instead of failing the grant outright.
-    func attemptOrder(worseQueryUsable: Bool,
-                      badQueryUsable: Bool = true) -> [SandboxBackend] {
-        guard badQueryUsable else { return worseQueryUsable ? [.worseQuery] : [] }
-        guard worseQueryUsable else { return [.badQuery] }
-        return badQueryBlocked ? [.worseQuery, .badQuery] : [.badQuery, .worseQuery]
     }
 }
 

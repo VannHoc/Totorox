@@ -331,10 +331,9 @@ enum ContainerStore {
         _uuidMap?[cleanUUID.lowercased()] = cleanBundleID
     }
 
-    /// bad_query chỉ có ý nghĩa trên iOS 26+ (nơi WQFiles/worse_query là tầng
-    /// chính). iOS 16–18 dùng DarkSword kernel exploit / MHA-C2 + truy cập trực
-    /// tiếp, không gọi bad_query ở bất kỳ đâu.
-    private static var shouldUseBadQuery: Bool {
+    /// `worse_query` chỉ áp dụng trên iOS 26+. iOS 16–18 dùng cơ chế truy cập
+    /// trực tiếp / MHA-C2, không đi qua SandboxGrantRouter.
+    private static var shouldUseWorseQuery: Bool {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
     }
     private static let applicationBundleRoots: [(path: String, nested: Bool)] = [
@@ -698,7 +697,7 @@ enum ContainerStore {
             if hasLease {
                 leasedCachePaths.insert(ContainerDiscoveryMerger.canonicalPath(cachePath))
             }
-        } else if shouldUseBadQuery {
+        } else if shouldUseWorseQuery {
             let detail = serviceLookupError.map { String($0) } ?? "no path"
             log("browser: MCM com.apple.lsd path unavailable detail=\(detail)")
         }
@@ -749,7 +748,7 @@ enum ContainerStore {
                 ContainerDiscoveryMerger.canonicalPath(cachePath)
             )
             if !hasLease && access(cachePath, R_OK) != 0 {
-                let handle = shouldUseBadQuery ? grantContainerAccess(cachePath) : -1
+                let handle = shouldUseWorseQuery ? grantContainerAccess(cachePath) : -1
                 if handle < 0 && access(cachePath, R_OK) != 0 {
                     continue
                 }
@@ -977,7 +976,7 @@ enum ContainerStore {
         // A folder that does not exist can neither be granted nor enumerated.
         // Device logs on iOS 26/27 show every missing sibling
         // (Library/Cookies, Library/WebKit, Library/Caches/Snapshots, …) paying
-        // for a full bad_query + worse_query round-trip and then logging
+        // for a full worse_query round-trip and then logging
         // "enumerate: NULL" — pure latency for a folder that was never there.
         if isDefinitelyMissing(clean) { return [] }
 
@@ -1051,7 +1050,7 @@ enum ContainerStore {
         if isDefinitelyMissing(path) { return [] }
 
         let handle = grantContainerAccess(path)
-        if handle >= 0 || !shouldUseBadQuery {
+        if handle >= 0 || !shouldUseWorseQuery {
             let clean = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
             if let subdirs = posixSubdirectories(at: clean, includeHidden: false), !subdirs.isEmpty {
                 return subdirs
@@ -1161,7 +1160,7 @@ enum ContainerStore {
 
         if plistData == nil {
             // The container lease is the only thing that unlocks this plist: a
-            // bad_query/worse_query token covers the container's directory node
+            // worse_query token covers the container's directory node
             // while `.com.apple.mobile_container_manager.metadata.plist` keeps
             // answering EPERM (the iOS 27.0.1 log shows exactly that), which is
             // why only one container out of 211 ever resolved to a bundle id.
@@ -1431,7 +1430,7 @@ enum ContainerStore {
         }
         grantHandlesLock.unlock()
 
-        // Tier 1 bad_query -> Tier 4 worse_query fallback (badQueryBlocked memo).
+        // Grant container access via worse_query (SandboxGrantRouter).
         // `key` is the real path (/private/var/...); pass it to the daemon instead
         // of `clean`, which callers may supply in the /var/... symlink spelling.
         let handle = SandboxGrantRouter.grant(path: key, requireWrite: requireWrite)
@@ -1544,7 +1543,7 @@ enum ContainerStore {
             return targetPath
         }
 
-        // Container-level activation + grant (bad_query -> worse_query).
+        // Container-level activation + grant (worse_query).
         if let info = containerInfo {
             if info.isAppGroup {
                 var actErr: NSString?

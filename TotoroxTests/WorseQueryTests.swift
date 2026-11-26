@@ -1,8 +1,8 @@
 import XCTest
 @testable import Totorox
 
-/// Tests for the Tier 4 (`worse_query`) path helpers and the Tier 1 -> Tier 4
-/// fallback state machine.
+/// Tests for the `worse_query` path helpers, `SandboxGrantRouter` access checks,
+/// and `ExploitSupportPolicy` build-train boundaries on iOS 26–27.3 beta 1.
 ///
 /// These never touch the private ContainerManager API: the C helpers under test
 /// only manipulate a temporary directory, so everything runs on the simulator.
@@ -179,120 +179,36 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertTrue(WorseQuery.isEligible(majorVersion: 27))
     }
 
-    // MARK: - bad_query access verification
+    // MARK: - Access verification & worse_query-only routing
 
-    func testBadQueryAccessErrorFlagsOnlySandboxDenials() {
-        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: EPERM), -Int64(EPERM))
-        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: EACCES), -Int64(EACCES))
-        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: ENOENT), 0)
-        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: ENOTDIR), 0)
-        XCTAssertEqual(SandboxGrantRouter.badQueryAccessError(forErrno: 0), 0)
+    func testAccessDenialErrorFlagsOnlyPermissionDenials() {
+        XCTAssertEqual(SandboxGrantRouter.accessDenialError(forErrno: EPERM), -Int64(EPERM))
+        XCTAssertEqual(SandboxGrantRouter.accessDenialError(forErrno: EACCES), -Int64(EACCES))
+        XCTAssertEqual(SandboxGrantRouter.accessDenialError(forErrno: ENOENT), 0)
+        XCTAssertEqual(SandboxGrantRouter.accessDenialError(forErrno: ENOTDIR), 0)
+        XCTAssertEqual(SandboxGrantRouter.accessDenialError(forErrno: 0), 0)
     }
 
-    func testPermissionDeniedKeepsTierOneUnmemoizedUntilTierFourSucceeds() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-Int64(EACCES))
+    func testSupportPolicyAndPatchedBuildTrainAlignment() {
+        // 27.0 / 27.1 / 27.2.1 use 24A / 24B build trains (unpatched)
+        XCTAssertFalse(ExploitSupportPolicy.isPatchedWorseQueryBuild("24A348"))
+        XCTAssertFalse(ExploitSupportPolicy.isPatchedWorseQueryBuild("24B2091"))
+        XCTAssertTrue(ExploitSupportPolicy.isSupported(major: 27, minor: 2, patch: 1, build: "24B2091"))
 
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.lastBadQueryError, -Int64(EACCES))
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
+        // 27.3 beta 1 uses 24C5000..<24C5049 (unpatched)
+        XCTAssertFalse(ExploitSupportPolicy.isPatchedWorseQueryBuild("24C5030a"))
+        XCTAssertTrue(ExploitSupportPolicy.isSupported(major: 27, minor: 3, patch: 0, build: "24C5030a"))
 
-        state.noteWorseQuerySuccess()
-        XCTAssertTrue(state.badQueryBlocked)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
-    }
+        // Any 24C build outside 5000..<5049 (e.g. 27.3 beta 2 `24C5049d` or 24C release `24C101`) is patched!
+        XCTAssertTrue(ExploitSupportPolicy.isPatchedWorseQueryBuild("24C5049d"))
+        XCTAssertTrue(ExploitSupportPolicy.isPatchedWorseQueryBuild("24C101"))
+        XCTAssertFalse(ExploitSupportPolicy.isSupported(major: 27, minor: 3, patch: 0, build: "24C5049d"))
+        XCTAssertFalse(ExploitSupportPolicy.isSupported(major: 27, minor: 2, patch: 1, build: "24C101"))
+        XCTAssertFalse(ExploitSupportPolicy.isSupported(major: 27, minor: 3, patch: 1, build: "24C5055a"))
 
-    // MARK: - Tier state machine
-
-    func testTierOneFailureAloneDoesNotBlockTierOne() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.lastBadQueryError, -5)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
-    }
-
-    func testTierOneIsMemoizedAfterTierFourSucceeds() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-        state.noteWorseQuerySuccess()
-
-        XCTAssertTrue(state.badQueryBlocked)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
-    }
-
-    func testMemoStaysOffWhenTierFourAlsoFails() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-
-        // No noteWorseQuerySuccess() -> Tier 1 keeps being tried.
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
-    }
-
-    func testTierFourAbsentKeepsTierOneOnly() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-        state.noteWorseQuerySuccess()
-
-        // Memo is on, but with Tier 4 unusable Tier 1 is the only option left:
-        // the grant must still be attempted instead of failing outright.
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: false), [.badQuery])
-    }
-
-    func testWorseQueryOnlyBuildsNeverFallBackToBadQuery() {
-        var state = SandboxTierState()
-
-        // 26.6.2+ / iOS 27: Tier 1 is disabled by OS policy, so the only grant
-        // backend is worse_query — never a bad_query that answers -3 everywhere.
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true,
-                                          badQueryUsable: false), [.worseQuery])
-
-        // The internal memo must not resurrect Tier 1 on these builds either.
-        state.forceBadQueryBlocked()
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true,
-                                          badQueryUsable: false), [.worseQuery])
-
-        // Both tiers unusable: give up instead of burning daemon round-trips.
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: false,
-                                          badQueryUsable: false), [])
-    }
-
-    func testTierOneSuccessClearsStaleFailureEvidence() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-        XCTAssertEqual(state.lastBadQueryError, -5)
-
-        // A later path worked with Tier 1, so the old failure must not be blamed
-        // on a future Tier 4 success.
-        state.noteBadQuerySuccess()
-        XCTAssertEqual(state.lastBadQueryError, 0)
-
-        state.noteWorseQuerySuccess()
-        XCTAssertFalse(state.badQueryBlocked)
-    }
-
-    func testResetClearsMemo() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-5)
-        state.noteWorseQuerySuccess()
-        XCTAssertTrue(state.badQueryBlocked)
-
-        state.reset()
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.lastBadQueryError, 0)
-    }
-
-    func testForceBadQueryBlockedFlipsMemoDirectly() {
-        var state = SandboxTierState()
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
-
-        state.forceBadQueryBlocked()
-        XCTAssertTrue(state.badQueryBlocked)
-        XCTAssertEqual(state.lastBadQueryError, 0)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
+        // 24D+ and 25A+ are patched
+        XCTAssertTrue(ExploitSupportPolicy.isPatchedWorseQueryBuild("24D100"))
+        XCTAssertTrue(ExploitSupportPolicy.isPatchedWorseQueryBuild("25A300"))
     }
 
     // MARK: - Variant retry policy
@@ -328,28 +244,6 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertEqual(WorseQuery.Variant.anyPath.rawValue, 1)
         XCTAssertEqual(WorseQuery.Variant.primary.label, "primary")
         XCTAssertEqual(WorseQuery.Variant.anyPath.label, "any_path")
-    }
-
-    // MARK: - Memo strictness
-
-    func testAncestorOnlySuccessDoesNotBlockTierOne() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-3)
-        state.noteWorseQuerySuccess(strict: false)
-
-        // The grant only covered an existing ancestor, so Tier 1 keeps its turn.
-        XCTAssertFalse(state.badQueryBlocked)
-        XCTAssertEqual(state.lastBadQueryError, 0)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.badQuery, .worseQuery])
-    }
-
-    func testStrictTierFourSuccessStillBlocksTierOne() {
-        var state = SandboxTierState()
-        state.noteBadQueryFailure(-3)
-        state.noteWorseQuerySuccess(strict: true)
-
-        XCTAssertTrue(state.badQueryBlocked)
-        XCTAssertEqual(state.attemptOrder(worseQueryUsable: true), [.worseQuery, .badQuery])
     }
 
     // MARK: - Ancestor resolution
