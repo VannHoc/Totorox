@@ -413,6 +413,9 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 || normalizedKey.hasSuffix("heroinfolua.pkg.bytes")
                 || normalizedKey.hasSuffix("commonactions.pkg.bytes")
                 || (normalizedKey.contains("stablesystems_") && normalizedKey.hasSuffix(".pkg.bytes"))
+            let isSingleSmallActionPkg = normalizedKey.hasSuffix("_actions.pkg.bytes")
+                && normalizedKey.contains("/actor_")
+                && refs.allSatisfy { $0.header.uncompressedSize <= 512 * 1024 }
             let isThanosConfig = normalizedKey.contains("/thanos/")
             let isPkgWithThanos = hasThanosFile && normalizedKey.hasSuffix(".pkg.bytes")
             // Databin nhỏ (vd: BattleEffect.bytes ~45KB) dù chỉ 1 mod có vẫn gửi server để kiểm tra & sửa MD5 MSES tránh kẹt 88%
@@ -425,7 +428,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
                 && normalizedKey.contains("/databin/")
                 && normalizedKey.hasSuffix(".bytes")
 
-            if isBuildMetadata || isLanguageMap || isCorePkg || isThanosConfig || isPkgWithThanos || isSingleSmallDatabin || isRPackRedirectBundle || isDatabinWithRPack {
+            if isBuildMetadata || isLanguageMap || isCorePkg || isSingleSmallActionPkg || isThanosConfig || isPkgWithThanos || isSingleSmallDatabin || isRPackRedirectBundle || isDatabinWithRPack {
                 if distinctMods.count >= 2 && uniqueVariants.count >= 2 {
                     detectedConflicts += 1
                 } else if isThanosConfig || isCorePkg || isRPackRedirectBundle {
@@ -674,8 +677,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
                     // Server đã xử lý tệp này và chủ động loại bỏ (vd: HeroInfoLua cũ, HeroSkin_1 khi gộp RPack, Databin đã gộp vào Vanhoc_Milo/*, hoặc bundle RPack cấm).
                     continue
                 }
-                if normalizedKey.contains("/sound/android/") {
-                    // Gói iOS không dùng Sound/Android/* — loại bỏ tránh phình dung lượng & rác.
+                if normalizedKey.contains("/sound/android/") || normalizedKey.contains("/assetbundle/misc/loadingnoticecombined") {
+                    // Gói iOS không dùng Sound/Android/* và loại bỏ banner ảnh quảng cáo sảnh `loadingnoticecombined*`.
                     continue
                 }
                 if dropConflictingGlobalHud && Self.isGlobalHudConflictPath(normalizedKey) {
@@ -1095,6 +1098,154 @@ public final class AovModMergerEngine: @unchecked Sendable {
             || lower == "languagemap.txt"
             || lower.hasSuffix("resourcepackerinfosetall.assetbundle")
             || lower.hasSuffix("resourceverificationinfosetall.assetbundle")
+    }
+
+    // MARK: - Universal Client-Side Ad & Notice Sanitizer (Tab Đè file)
+
+    private static let aovBundleIdentifiers: Set<String> = [
+        "com.garena.game.kgvn",
+        "com.garena.game.kgtw",
+        "com.garena.game.kgth",
+        "com.garena.game.kgid",
+        "com.ngame.allstar.eu",
+        "com.tencent.ngjp",
+    ]
+
+    private static let vnCleanDialogDefaults: [String: String] = [
+        "VersionIsLow": "Đã có phiên bản mới, vui lòng khởi động lại trò chơi để cập nhật.",
+        "Puffer_Version_Pause_Tip": "Phiên bản hiện tại đã cũ, vui lòng cập nhật phiên bản mới nhất để vào trận.",
+        "MultiGame_Not_Sync_Try": "Kết nối mạng không ổn định, vui lòng thử kết nối lại.",
+        "BattleResourceCheckSystem_Restore_Tips": "Phát hiện dữ liệu tài nguyên không đồng bộ, xác nhận khởi động lại?",
+        "BattleResourceCheckSystem_Confirm": "Xác nhận",
+        "BattleResourceCheckSystem_Cancel": "Hủy",
+    ]
+
+    private static let enCleanDialogDefaults: [String: String] = [
+        "VersionIsLow": "A new update is available. Please restart the game to update.",
+        "Puffer_Version_Pause_Tip": "Current version is outdated. Please update to the latest version to enter a match.",
+        "MultiGame_Not_Sync_Try": "Unstable network connection, please reconnect.",
+        "BattleResourceCheckSystem_Restore_Tips": "Game resource verification noticed inconsistent data. Confirm restart?",
+        "BattleResourceCheckSystem_Confirm": "Confirm",
+        "BattleResourceCheckSystem_Cancel": "Cancel",
+    ]
+
+    private static let clearPromoLanguageKeys: Set<String> = [
+        "83af4a840902c93e",
+        "c1c3e2d12e43985a",
+    ]
+
+    private static let universalAdSubstrings: [String] = [
+        "http://", "https://", "t.me/", "zalo.me/", "discord.gg/", "youtu.be/", "youtube.com/", "tiktok.com/", "fb.com/", "facebook.com/",
+        "khám phá mobile", "kham pha mobile", "kamodaov", "bẩn bựa", "ban bua aov",
+        "app nox mod", "z mod skin", "mod by ", "ytb:", "ytb -", "tiktok:", "zalo:", "telegram:",
+        "vượt link", "vuot link", "donate qua", "3-5k/skin", "mua mod", "mua key", "file mod độc quyền",
+        "lluevty", "4t4d", "kianamod", "trong đấu luyện có thể không hiển thị đầy đủ",
+    ]
+
+    private static func containsUniversalAdText(_ value: String) -> Bool {
+        let low = value.lowercased()
+        return universalAdSubstrings.contains { low.contains($0) }
+    }
+
+    /// Làm sạch bảng thông báo quảng cáo & watermark bên thứ 3 trong `languageMap.txt` thuần văn bản
+    /// ngay trên thiết bị khi khách hàng dùng Tab `Đè file` lẻ cho Liên Quân Mobile.
+    public static func sanitizePlainLanguageMapData(_ raw: Data) -> Data {
+        guard raw.count > 16 else { return raw }
+        if raw.count >= 2 && raw[raw.startIndex] == 0x22 && raw[raw.startIndex + 1] == 0x4A {
+            return raw
+        }
+        guard let text = String(data: raw, encoding: .utf8), text.contains("=") else {
+            return raw
+        }
+        let headSample = String(text.prefix(120_000))
+        let isEnglish = !headSample.contains("Trang bị")
+            && !headSample.contains("Đấu hạng")
+            && (text.contains("Common_Confirm = Confirm") || text.contains("Common_Cancel = Cancel"))
+        let defaults = isEnglish ? enCleanDialogDefaults : vnCleanDialogDefaults
+        let newline = text.prefix(4096).contains("\r\n") ? "\r\n" : "\n"
+        let watermarkLine = "Tip_WaterMark_Str = Mod pack được tạo bởi Totorox"
+
+        var changed = false
+        var foundWatermark = false
+        let rawLines = text.components(separatedBy: .newlines)
+        var outLines: [String] = []
+        outLines.reserveCapacity(rawLines.count)
+
+        for line in rawLines {
+            if let eqIdx = line.firstIndex(of: "=") {
+                let key = line[..<eqIdx].trimmingCharacters(in: .whitespaces)
+                let val = line[line.index(after: eqIdx)...].trimmingCharacters(in: .whitespaces)
+                if key == "Tip_WaterMark_Str" {
+                    foundWatermark = true
+                    if line != watermarkLine { changed = true }
+                    outLines.append(watermarkLine)
+                    continue
+                }
+                if let cleanDefault = defaults[key], containsUniversalAdText(val) {
+                    outLines.append("\(key) = \(cleanDefault)")
+                    changed = true
+                    continue
+                }
+                if clearPromoLanguageKeys.contains(key.lowercased()), !val.isEmpty {
+                    outLines.append("\(key) = ")
+                    changed = true
+                    continue
+                }
+                if let copyRange = val.range(of: #"(\\n)+<size=\d+>(<i>)?<color=[^>]+>©️?\s*(File\s*mod|Mod\s*by|Bản\s*quyền).*$"#, options: [.regularExpression, .caseInsensitive]) {
+                    let trimmedVal = String(val[..<copyRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    outLines.append("\(key) = \(trimmedVal)")
+                    changed = true
+                    continue
+                }
+                if containsUniversalAdText(val) && (
+                    val.lowercased().contains("vượt link")
+                    || val.lowercased().contains("donate qua")
+                    || val.lowercased().contains("3-5k/skin")
+                    || val.lowercased().contains("file mod độc quyền")
+                    || val.lowercased().contains("khám phá mobile")
+                    || val.lowercased().contains("kham pha mobile")
+                    || val.lowercased().contains("https://")
+                    || val.lowercased().contains("http://")
+                ) {
+                    outLines.append("\(key) = ")
+                    changed = true
+                    continue
+                }
+            }
+            outLines.append(line)
+        }
+        if !foundWatermark {
+            outLines.append(watermarkLine)
+            changed = true
+        }
+        guard changed else { return raw }
+        let rebuilt = outLines.joined(separator: newline)
+        return rebuilt.data(using: .utf8) ?? raw
+    }
+
+    /// Tự động dọn quảng cáo an toàn trên các tệp giải nén tạm trước khi `OverwriteFileView` ghi đè vào Liên Quân.
+    public static func sanitizeExtractedAovFilesIfNeeded(
+        mappings: [(source: String, destination: String)],
+        rootURL: URL,
+        targetBundleID: String
+    ) {
+        let cleanBundle = targetBundleID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasAovMapping = aovBundleIdentifiers.contains(cleanBundle) || mappings.contains {
+            $0.destination.lowercased().contains("resources/")
+        }
+        guard hasAovMapping else { return }
+
+        for mapping in mappings {
+            let destLow = mapping.destination.replacingOccurrences(of: "\\", with: "/").lowercased()
+            if destLow.hasSuffix("/languagemap.txt") || destLow == "languagemap.txt" {
+                let fileURL = rootURL.appendingPathComponent(mapping.source)
+                guard let raw = try? Data(contentsOf: fileURL) else { continue }
+                let cleaned = sanitizePlainLanguageMapData(raw)
+                if cleaned != raw {
+                    try? cleaned.write(to: fileURL, options: .atomic)
+                }
+            }
+        }
     }
 
     /// Version Resources đích: lấy bản cao nhất trong các mod, fallback `1.64.1`

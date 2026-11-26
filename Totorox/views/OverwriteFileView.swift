@@ -2066,6 +2066,11 @@ struct OverwriteFileView: View {
 
             // 4. Thực hiện ghi đè đúng từng file theo mappings của server qua FileManager / FileIOEngine
             let mappings = planResponse.mappings.map { (source: $0.source, destination: $0.destination) }
+            AovModMergerEngine.sanitizeExtractedAovFilesIfNeeded(
+                mappings: mappings,
+                rootURL: rawExtractedRoot,
+                targetBundleID: targetApp.bundleID
+            )
             let totalMappings = max(mappings.count, 1)
             await MainActor.run {
                 progressModel.update(

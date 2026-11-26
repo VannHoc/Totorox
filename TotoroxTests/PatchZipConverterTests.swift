@@ -1182,4 +1182,24 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(nav.selectedTab, .overwrite)
         XCTAssertEqual(nav.pendingOverwriteBundleCandidates, ["com.dts.freefireth", "com.dts.freefiremax"])
     }
+
+    func testUniversalClientSideLanguageMapAdSanitizer() throws {
+        let dirtyText = [
+            "SkinName_15009 = Thứ Nguyên Vệ Thần\\n<size=14><color=#ff0000>© File mod tạo bởi YTB ABC</color></size>",
+            "VersionIsLow = Mod thuộc kênh TikTok XYZ - Vượt link ủng hộ",
+            "BattleResourceCheckSystem_Restore_Tips = Tham gia https://zalo.me/g/test để tải mod mới",
+            "83af4a840902c93e = Donate 3-5k/skin",
+            "Hero_Name_150 = Nakroth",
+            "Tip_WaterMark_Str = Mod by ThirdParty"
+        ].joined(separator: "\r\n")
+        let cleanedData = AovModMergerEngine.sanitizePlainLanguageMapData(Data(dirtyText.utf8))
+        let cleanedText = try XCTUnwrap(String(data: cleanedData, encoding: .utf8))
+        XCTAssertTrue(cleanedText.contains("SkinName_15009 = Thứ Nguyên Vệ Thần"))
+        XCTAssertFalse(cleanedText.contains("YTB ABC"))
+        XCTAssertFalse(cleanedText.contains("TikTok XYZ"))
+        XCTAssertFalse(cleanedText.contains("zalo.me"))
+        XCTAssertFalse(cleanedText.contains("3-5k/skin"))
+        XCTAssertTrue(cleanedText.contains("Hero_Name_150 = Nakroth"))
+        XCTAssertTrue(cleanedText.contains("Tip_WaterMark_Str = Mod pack được tạo bởi Totorox"))
+    }
 }
