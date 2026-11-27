@@ -1165,11 +1165,20 @@ final class PatchZipConverterTests: XCTestCase {
 
         // Secondary capsule pills hierarchy for Liên Quân Mobile
         let aovPills = CatalogSubFeatureID.pills(for: .aov)
-        XCTAssertEqual(aovPills, [.hokSkin, .camXa, .modMap, .fixLag])
+        XCTAssertEqual(aovPills, [.hokSkin, .updateModSkin, .camXa, .modMap, .fixLag])
         XCTAssertTrue(CatalogSubFeatureID.hokSkin.isSemiHighlighted)
+        XCTAssertFalse(CatalogSubFeatureID.updateModSkin.isSemiHighlighted)
         XCTAssertFalse(CatalogSubFeatureID.camXa.isSemiHighlighted)
         XCTAssertFalse(CatalogSubFeatureID.modMap.isSemiHighlighted)
         XCTAssertFalse(CatalogSubFeatureID.fixLag.isSemiHighlighted)
+
+        // Update Mod Skin config vs heavy asset classification
+        XCTAssertTrue(AovModUpdaterEngine.isResourcesSnapshotConfigRel("databin/client/actor/heroskin.bytes"))
+        XCTAssertTrue(AovModUpdaterEngine.isResourcesSnapshotConfigRel("assetrefs/hero/595_assetref.bytes"))
+        XCTAssertFalse(AovModUpdaterEngine.isResourcesSnapshotConfigRel("assetbundle/prefab_characters/prefab_hero/150_hanxin/1501_hanxin_lod1.assetbundle"))
+        XCTAssertTrue(AovModUpdaterEngine.isHeavyBinaryAssetInOldMod("sound/ios/hero_sinon_skin_1_vo.bnk"))
+        XCTAssertTrue(AovModUpdaterEngine.isHeavyBinaryAssetInOldMod("assetbundle/battle/hero/595_lixin_battle_base.assetbundle"))
+        XCTAssertFalse(AovModUpdaterEngine.isHeavyBinaryAssetInOldMod("assetbundle/resourcepackerinfosetall.assetbundle"))
 
         let nav = AppNavigationCoordinator.shared
         let prevTab = nav.selectedTab

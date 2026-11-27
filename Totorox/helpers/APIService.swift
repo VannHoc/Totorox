@@ -2063,3 +2063,408 @@ struct ModCatalogResponseBody: Decodable {
     let ok: Bool
     let mods: [ModCatalogItem]
 }
+
+// MARK: - Update Mod Skin (100% Server-Authoritative + SHA-256 Snapshot Cache)
+
+struct ModUpdaterResourcesStatusResponse: Codable, Equatable, Sendable {
+    let ok: Bool
+    let cached: Bool
+    let sha256: String?
+    let gameVersion: String?
+    let versionTxt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, cached, sha256
+        case gameVersion = "game_version"
+        case versionTxt = "version_txt"
+    }
+}
+
+struct ModUpdaterInspectionItem: Codable, Equatable, Sendable, Identifiable {
+    let heroID: Int
+    let heroName: String
+    let sourceSkinID: Int
+    let sourceSkinName: String
+    let applyToAllSkins: Bool?
+    let mappingLabels: [String]?
+
+    var id: String { "\(heroID)-\(sourceSkinID)" }
+
+    private enum CodingKeys: String, CodingKey {
+        case heroID = "hero_id"
+        case heroName = "hero_name"
+        case sourceSkinID = "source_skin_id"
+        case sourceSkinName = "source_skin_name"
+        case applyToAllSkins = "apply_to_all_skins"
+        case mappingLabels = "mapping_labels"
+    }
+}
+
+struct ModUpdaterInspectionResponse: Codable, Equatable, Sendable {
+    let ok: Bool
+    let filename: String?
+    let inputFormat: String?
+    let oldGameVersion: String?
+    let oldVersionTxt: String?
+    let targetGameVersion: String?
+    let targetVersionTxt: String?
+    let needsVersionUpgrade: Bool?
+    let detectedMode: String?
+    let detectedStream: String?
+    let cameraPercent: Double?
+    let heroCount: Int?
+    let skinCount: Int?
+    let customAssetbundleCount: Int?
+    let customAssetbundlePaths: [String]?
+    let items: [ModUpdaterInspectionItem]?
+    let user: UserProfile?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, filename, items, user
+        case inputFormat = "input_format"
+        case oldGameVersion = "old_game_version"
+        case oldVersionTxt = "old_version_txt"
+        case targetGameVersion = "target_game_version"
+        case targetVersionTxt = "target_version_txt"
+        case needsVersionUpgrade = "needs_version_upgrade"
+        case detectedMode = "detected_mode"
+        case detectedStream = "detected_stream"
+        case cameraPercent = "camera_percent"
+        case heroCount = "hero_count"
+        case skinCount = "skin_count"
+        case customAssetbundleCount = "custom_assetbundle_count"
+        case customAssetbundlePaths = "custom_assetbundle_paths"
+    }
+}
+
+struct ModUpdaterUpdateResponse: Codable, Equatable, Sendable {
+    let ok: Bool
+    let resultID: String
+    let filename: String
+    let sizeBytes: Int64
+    let sha256: String
+    let engineTier: String?
+    let targetGameVersion: String?
+    let targetVersionTxt: String?
+    let clientRepackBundlePaths: [String]?
+    let inspection: ModUpdaterInspectionResponse?
+    let user: UserProfile?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, filename, sha256, inspection, user
+        case resultID = "result_id"
+        case sizeBytes = "size_bytes"
+        case engineTier = "engine_tier"
+        case targetGameVersion = "target_game_version"
+        case targetVersionTxt = "target_version_txt"
+        case clientRepackBundlePaths = "client_repack_bundle_paths"
+    }
+}
+
+extension APIService {
+    private static let modUpdaterChunkThresholdBytes: Int64 = 3 * 1024 * 1024
+
+    func checkModUpdaterResourcesStatus(
+        sha256: String,
+        token: String,
+        hwid: String
+    ) async -> Result<ModUpdaterResourcesStatusResponse, APIServiceError> {
+        let cleanSHA = sha256.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard cleanSHA.count == 64,
+              var components = URLComponents(
+                  url: baseURL.appendingPathComponent("api/v1/mod-updater/resources-status"),
+                  resolvingAgainstBaseURL: false
+              ) else {
+            return .failure(.invalidConfiguration)
+        }
+        components.queryItems = [URLQueryItem(name: "sha256", value: cleanSHA)]
+        guard let url = components.url else { return .failure(.invalidConfiguration) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 { notifyUnauthorized(msg) }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            return .success(try parseJSON(ModUpdaterResourcesStatusResponse.self, from: data))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    func uploadModUpdaterResourcesSnapshot(
+        fileURL: URL,
+        sha256: String,
+        token: String,
+        hwid: String,
+        onChunkProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> Result<ModUpdaterResourcesStatusResponse, APIServiceError> {
+        let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        guard fileSize > 0, fileSize <= APIService.maximumMergeBundleBytes else {
+            return .failure(.payloadTooLarge)
+        }
+
+        var fields: [String: String] = ["sha256": sha256.lowercased()]
+        if !hwid.isEmpty { fields["udid"] = hwid }
+
+        var sendFiles: [URL] = [fileURL]
+        if fileSize > Self.modUpdaterChunkThresholdBytes {
+            let uploadID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            let chunkRes = await uploadMergeChunks(
+                fileURL: fileURL,
+                fileSize: fileSize,
+                uploadID: uploadID,
+                token: token,
+                hwid: hwid
+            ) { stage in
+                if case .uploadingChunk(let idx, let total) = stage {
+                    onChunkProgress?(idx, total)
+                }
+            }
+            switch chunkRes {
+            case .success(let maybeTotal):
+                if let totalChunks = maybeTotal {
+                    fields["upload_id"] = uploadID
+                    fields["total_chunks"] = String(totalChunks)
+                    sendFiles = []
+                }
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+
+        do {
+            let body = try buildMultipartBody(
+                fields: fields,
+                fileURLs: sendFiles,
+                fileFieldName: "file"
+            )
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/mod-updater/resources"))
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            request.timeoutInterval = APIService.mergeTimeout
+            signRequest(&request)
+
+            let (data, response) = try await upload(request, body: body)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 { notifyUnauthorized(msg) }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            return .success(try parseJSON(ModUpdaterResourcesStatusResponse.self, from: data))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    func inspectOldModOnServer(
+        resourcesSHA256: String,
+        fileURL: URL,
+        fileName: String,
+        inputPassword: String?,
+        token: String,
+        hwid: String
+    ) async -> Result<ModUpdaterInspectionResponse, APIServiceError> {
+        let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        guard fileSize > 0, fileSize <= APIService.maximumMergeBundleBytes else {
+            return .failure(.payloadTooLarge)
+        }
+
+        var fields: [String: String] = [
+            "resources_sha256": resourcesSHA256.lowercased(),
+            "filename": fileName,
+        ]
+        if let pw = inputPassword?.trimmingCharacters(in: .whitespacesAndNewlines), !pw.isEmpty {
+            fields["input_password"] = pw
+        }
+        if !hwid.isEmpty { fields["udid"] = hwid }
+
+        var sendFiles: [URL] = [fileURL]
+        if fileSize > Self.modUpdaterChunkThresholdBytes {
+            let uploadID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            let chunkRes = await uploadMergeChunks(
+                fileURL: fileURL,
+                fileSize: fileSize,
+                uploadID: uploadID,
+                token: token,
+                hwid: hwid
+            ) { _ in }
+            switch chunkRes {
+            case .success(let maybeTotal):
+                if let totalChunks = maybeTotal {
+                    fields["upload_id"] = uploadID
+                    fields["total_chunks"] = String(totalChunks)
+                    sendFiles = []
+                }
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+
+        do {
+            let body = try buildMultipartBody(fields: fields, fileURLs: sendFiles, fileFieldName: "file")
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/mod-updater/inspect"))
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            request.timeoutInterval = APIService.mergeTimeout
+            signRequest(&request)
+
+            let (data, response) = try await upload(request, body: body)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 { notifyUnauthorized(msg) }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            let decoded = try parseJSON(ModUpdaterInspectionResponse.self, from: data)
+            if let user = decoded.user {
+                notifyUserProfileUpdated(user)
+            }
+            return .success(decoded)
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    func updateOldModOnServer(
+        resourcesSHA256: String,
+        fileURL: URL,
+        fileName: String,
+        optionsJSON: String,
+        destinationURL: URL,
+        token: String,
+        hwid: String,
+        onChunkProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> Result<ModUpdaterUpdateResponse, APIServiceError> {
+        let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        guard fileSize > 0, fileSize <= APIService.maximumMergeBundleBytes else {
+            return .failure(.payloadTooLarge)
+        }
+
+        var fields: [String: String] = [
+            "resources_sha256": resourcesSHA256.lowercased(),
+            "filename": fileName,
+            "options_json": optionsJSON,
+        ]
+        if !hwid.isEmpty { fields["udid"] = hwid }
+
+        var sendFiles: [URL] = [fileURL]
+        if fileSize > Self.modUpdaterChunkThresholdBytes {
+            let uploadID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            let chunkRes = await uploadMergeChunks(
+                fileURL: fileURL,
+                fileSize: fileSize,
+                uploadID: uploadID,
+                token: token,
+                hwid: hwid
+            ) { stage in
+                if case .uploadingChunk(let idx, let total) = stage {
+                    onChunkProgress?(idx, total)
+                }
+            }
+            switch chunkRes {
+            case .success(let maybeTotal):
+                if let totalChunks = maybeTotal {
+                    fields["upload_id"] = uploadID
+                    fields["total_chunks"] = String(totalChunks)
+                    sendFiles = []
+                }
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+
+        do {
+            let body = try buildMultipartBody(fields: fields, fileURLs: sendFiles, fileFieldName: "file")
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/v1/mod-updater/update"))
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            request.timeoutInterval = APIService.mergeTimeout
+            signRequest(&request)
+
+            let (data, response) = try await upload(request, body: body)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 { notifyUnauthorized(msg) }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            let decoded = try parseJSON(ModUpdaterUpdateResponse.self, from: data)
+            if let user = decoded.user {
+                notifyUserProfileUpdated(user)
+            }
+
+            // Stream result binary from `/api/v1/mod-updater/result?result_id=...`
+            guard var dlComps = URLComponents(
+                url: baseURL.appendingPathComponent("api/v1/mod-updater/result"),
+                resolvingAgainstBaseURL: false
+            ) else {
+                return .failure(.invalidConfiguration)
+            }
+            dlComps.queryItems = [URLQueryItem(name: "result_id", value: decoded.resultID)]
+            guard let dlURL = dlComps.url else { return .failure(.invalidConfiguration) }
+
+            var dlReq = URLRequest(url: dlURL)
+            dlReq.httpMethod = "GET"
+            applyAuthHeaders(to: &dlReq, token: token, hwid: hwid)
+            dlReq.timeoutInterval = APIService.mergeTimeout
+            signRequest(&dlReq)
+
+            let (tempDLURL, dlResp) = try await session.download(for: dlReq)
+            defer { try? FileManager.default.removeItem(at: tempDLURL) }
+            guard let dlHTTP = dlResp as? HTTPURLResponse, (200..<300).contains(dlHTTP.statusCode) else {
+                return .failure(.invalidResponse)
+            }
+
+            let fm = FileManager.default
+            try? fm.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destinationURL.path) {
+                try? fm.removeItem(at: destinationURL)
+            }
+            try fm.moveItem(at: tempDLURL, to: destinationURL)
+
+            // Verify SHA-256 integrity on disk
+            let actualSHA = try Self.sha256HexOfFile(at: destinationURL)
+            guard actualSHA == decoded.sha256.lowercased() else {
+                try? fm.removeItem(at: destinationURL)
+                return .failure(.ioFailure(AppLanguage.current.text("modstore.error.checksum_mismatch")))
+            }
+
+            return .success(decoded)
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
+    }
+
+    private static func sha256HexOfFile(at url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}

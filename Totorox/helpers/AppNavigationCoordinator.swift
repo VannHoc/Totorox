@@ -93,6 +93,9 @@ final class AppNavigationCoordinator: ObservableObject {
         case "mods", "store":
             self.catalogRoute = .aovModSkin
             self.selectedTab = .catalog
+        case "update-mod", "updatemod":
+            self.catalogRoute = .aovUpdateModSkin
+            self.selectedTab = .catalog
         case "patch", "convert":
             self.selectedTab = .patch
         case "folders", "explorer":

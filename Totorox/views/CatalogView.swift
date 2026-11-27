@@ -100,6 +100,7 @@ enum CatalogGameID: String, CaseIterable, Identifiable, Hashable, Sendable {
 enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable {
     // Liên Quân Mobile secondary pills
     case hokSkin
+    case updateModSkin
     case camXa
     case modMap
     case fixLag
@@ -113,6 +114,7 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
     var iconName: String {
         switch self {
         case .hokSkin: return "crown.fill"
+        case .updateModSkin: return "arrow.triangle.2.circlepath.circle.fill"
         case .camXa: return "viewfinder"
         case .modMap: return "map.fill"
         case .fixLag, .brFixLag: return "bolt.shield.fill"
@@ -129,6 +131,8 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
         switch self {
         case .hokSkin:
             return Color(red: 0.92, green: 0.66, blue: 0.14)
+        case .updateModSkin:
+            return Color(red: 0.16, green: 0.56, blue: 0.96)
         case .camXa:
             return Color(red: 0.24, green: 0.63, blue: 0.95)
         case .modMap:
@@ -143,6 +147,7 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
     func title(for language: AppLanguage) -> String {
         switch self {
         case .hokSkin: return language.text("catalog.sub.hok_skin")
+        case .updateModSkin: return language.text("catalog.sub.update_mod")
         case .camXa: return language.text("catalog.sub.cam_xa")
         case .modMap: return language.text("catalog.sub.mod_map")
         case .fixLag, .brFixLag: return language.text("catalog.sub.fix_lag")
@@ -153,6 +158,7 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
     func detailSubtitle(for language: AppLanguage) -> String {
         switch self {
         case .hokSkin: return language.text("catalog.sub.hok_skin.desc")
+        case .updateModSkin: return language.text("catalog.sub.update_mod.desc")
         case .camXa: return language.text("catalog.sub.cam_xa.desc")
         case .modMap: return language.text("catalog.sub.mod_map.desc")
         case .fixLag, .brFixLag: return language.text("catalog.sub.fix_lag.desc")
@@ -163,7 +169,7 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
     static func pills(for game: CatalogGameID) -> [CatalogSubFeatureID] {
         switch selfGame(game) {
         case .aov:
-            return [.hokSkin, .camXa, .modMap, .fixLag]
+            return [.hokSkin, .updateModSkin, .camXa, .modMap, .fixLag]
         case .pubg, .freeFire:
             return [.brModSkin, .brFixLag]
         }
@@ -177,6 +183,7 @@ enum CatalogRoute: Equatable, Hashable, Sendable {
     case game(CatalogGameID)
     case aovModSkin
     case aovMerge
+    case aovUpdateModSkin
     case subFeature(game: CatalogGameID, feature: CatalogSubFeatureID)
 }
 
@@ -462,6 +469,9 @@ struct CatalogView: View {
             case .aovMerge:
                 aovMergeContent
                     .transition(.opacity)
+            case .aovUpdateModSkin:
+                aovUpdateModSkinContent
+                    .transition(.opacity)
             case .subFeature(let game, let feature):
                 subFeatureDetailContent(game: game, feature: feature)
                     .transition(.opacity)
@@ -618,7 +628,11 @@ struct CatalogView: View {
                         ForEach(CatalogSubFeatureID.pills(for: game)) { subItem in
                             secondaryCapsulePill(for: subItem) {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    navCoordinator.catalogRoute = .subFeature(game: game, feature: subItem)
+                                    if game == .aov && subItem == .updateModSkin {
+                                        navCoordinator.catalogRoute = .aovUpdateModSkin
+                                    } else {
+                                        navCoordinator.catalogRoute = .subFeature(game: game, feature: subItem)
+                                    }
                                 }
                             }
                         }
@@ -752,6 +766,21 @@ struct CatalogView: View {
             }
 
             MergeFileView(isEmbedded: true)
+        }
+    }
+
+    private var aovUpdateModSkinContent: some View {
+        VStack(spacing: 0) {
+            compactSubheader(
+                backTitle: CatalogGameID.aov.title(for: language),
+                trailingGame: .aov
+            ) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    navCoordinator.catalogRoute = .game(.aov)
+                }
+            }
+
+            UpdateModSkinView(isEmbedded: true)
         }
     }
 
