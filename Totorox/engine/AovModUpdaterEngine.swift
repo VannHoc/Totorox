@@ -25,7 +25,7 @@ public struct UpdatedModOutput: Equatable, Sendable {
     public let targetGameVersion: String
     public let engineTier: String
     public let preservedBundleCount: Int
-    public let inspection: ModUpdaterInspectionResponse?
+    let inspection: ModUpdaterInspectionResponse?
 
     public var formattedSize: String {
         ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
@@ -782,7 +782,7 @@ public final class AovModUpdaterEngine: @unchecked Sendable {
         )
     }
 
-    public func inspectOldMod(
+    func inspectOldMod(
         snapshot: (meta: CachedResourcesSnapshot, fileURL: URL),
         oldModURL: URL,
         inputPassword: String?,
