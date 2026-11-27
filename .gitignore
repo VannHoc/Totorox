@@ -1,0 +1,54 @@
+# Xcode
+*.xcodeproj
+*.xcworkspace
+build/
+DerivedData/
+*.moved-aside
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# App Packages & Test Artifacts
+Totorox-*.ipa
+TestResults.xcresult
+analysis_3105/
+
+# System & Server / Mod Studio (NEVER push to GitHub)
+.DS_Store
+Thumbs.db
+sever_security.md
+TotoroxBackend/
+Totorox-Backend/
+Totorox-Mod-Studio/
+MOD_SKIN_ANALYSIS_REPORT.md
+HANDOFF_TO_NEW_AGENT.md
+AGENTS.md
+.cursorrules
+TOTOROX_3.0_PROGRESS.md
+WORSE_QUERY_INTEGRATION_PLAN.md
+WORSE_QUERY_PROGRESS.md
+scripts/
+output/
+probe_game_global_metadata.py
+*.db
+__pycache__/
+*.pyc
+
+# Local debris (not part of the build)
+Totorox-engine-jgdecrypted.txt
+Totorox-engine-jgencrypted.txt
+ion to 1.2*
+
+# Agent/tooling state
+.kilo/
+.freebuff/
+.cloud-attachments/
+.pytest_cache/
+
+# Local test/job scratch
+tmp/
+main.py
+
+# Local-only HOK mod tools, source assets, builds, and analysis
+/HOK/
+/analysis_hok/
