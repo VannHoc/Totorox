@@ -773,28 +773,15 @@
 "catalog.tool.overwrite_sub" = "Preselect game";
 "catalog.tool.upcoming" = "More tools soon";
 
-"wallpaper.edit_a11y" = "Customize Wallpaper";
-"wallpaper.reposition" = "Adjust Position & Crop";
-"wallpaper.change" = "Choose Another Photo";
-"wallpaper.reset_default" = "Remove Wallpaper (Default)";
-"wallpaper.crop_title" = "Position & Scale";
-"wallpaper.crop_hint" = "Drag to reposition • Pinch to zoom";
-"wallpaper.crop_reset" = "Reset";
-"wallpaper.preview_ui" = "App Frame";
-"wallpaper.cancel" = "Cancel";
-"wallpaper.confirm" = "Apply";
-"wallpaper.saving" = "Saving...";
-
 /* --- Update Mod Skin (Server-Side + Smart Snapshot Cache) --- */
 "modupdater.header.badge" = "Cloud-Compiled • Smart Snapshot Cache";
 "modupdater.step1.title" = "Latest Base Resources";
-"modupdater.step1.hint" = "Scan directly from installed Arena of Valor or pick a Resources.zip / folder (extracts only ~20MB of config tables and caches them persistently).";
+"modupdater.step1.hint" = "Scan directly from installed Arena of Valor or pick a Resources.zip file.";
 "modupdater.step1.cached_meta" = "%@ • Cached %@";
-"modupdater.step1.scan_game" = "Scan Installed Game";
-"modupdater.step1.pick_file" = "Choose File / Folder";
-"modupdater.step1.change_file" = "Change Resources";
-"modupdater.step1.pick_zip" = "Choose Resources (.zip)";
-"modupdater.step1.pick_folder" = "Choose Resources Folder";
+"modupdater.step1.scan_game" = "Scan on Device";
+"modupdater.step1.pick_file" = "Choose ZIP";
+"modupdater.step1.change_file" = "Choose ZIP";
+"modupdater.step1.pick_zip" = "Choose ZIP";
 "modupdater.step2.title" = "Old Mod File to Update";
 "modupdater.step2.pick_button" = "Select Old Mod (.zip or .3105)";
 "modupdater.step2.change" = "Change";

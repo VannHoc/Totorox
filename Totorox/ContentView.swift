@@ -5,7 +5,6 @@ struct ContentView: View {
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var license = LicenseManager.shared
     @ObservedObject private var themeManager = ThemeManager.shared
-    @ObservedObject private var wallpaperManager = WallpaperManager.shared
     @State private var showSettings: Bool = false
     @State private var showLogs: Bool = false
     @State private var showRedeemSheet: Bool = false
@@ -31,7 +30,8 @@ struct ContentView: View {
 
     private var mainAppBody: some View {
         ZStack {
-            TotoroxWallpaperLayer()
+            TotoroxTheme.pageBackground
+                .ignoresSafeArea(.all)
 
             VStack(spacing: 0) {
                 TotoroxTopHeader {
@@ -103,7 +103,18 @@ struct ContentView: View {
             )
         }
         .onAppear {
+            Self.purgeLegacyCustomWallpaperIfNeeded()
             AppContainerScanner.shared.prewarmOnLaunch()
+        }
+    }
+
+    private static func purgeLegacyCustomWallpaperIfNeeded() {
+        let fm = FileManager.default
+        if let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let legacyDir = base.appendingPathComponent("TotoroxWallpaper", isDirectory: true)
+            if fm.fileExists(atPath: legacyDir.path) {
+                try? fm.removeItem(at: legacyDir)
+            }
         }
     }
 

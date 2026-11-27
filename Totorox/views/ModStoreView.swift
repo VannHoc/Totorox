@@ -158,13 +158,16 @@ struct ModStoreView: View {
         isDownloading || !selectedIDs.isEmpty
     }
 
+    private var usesAmbientMainBackground: Bool {
+        config.palette == .crimsonRed || config.palette == .blazingGold
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 16) {
                     ModStoreHeaderCard(
                         title: language.text(config.titleKey),
-                        subtitle: language.text(config.subtitleKey),
                         iconName: config.iconName,
                         accentColor: accentColor,
                         totalCount: mods.count,
@@ -183,7 +186,17 @@ struct ModStoreView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(isEmbedded ? TotoroxTheme.tabCanvasBackground : TotoroxTheme.pageBackground)
+        .background {
+            if usesAmbientMainBackground {
+                if isEmbedded {
+                    Color.clear
+                } else {
+                    CatalogAmbientBackground(palette: config.palette)
+                }
+            } else {
+                isEmbedded ? TotoroxTheme.tabCanvasBackground : TotoroxTheme.pageBackground
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showBottomDock {
                 bottomActionDock
@@ -324,22 +337,6 @@ struct ModStoreView: View {
                             }
                         }
                     }
-                }
-            }
-
-            // Selection helper row
-            HStack(spacing: 6) {
-                Image(systemName: "hand.tap.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
-                Text(language.text("modstore.select_guide"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-                Spacer(minLength: 4)
-                if !filteredMods.isEmpty {
-                    Text(language.text("modstore.showing_count", filteredMods.count))
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
                 }
             }
 
@@ -885,70 +882,45 @@ struct ModStoreView: View {
 private struct ModStoreHeaderCard: View {
     @Environment(\.appLanguage) private var language
     let title: String
-    let subtitle: String
     let iconName: String
     let accentColor: Color
     let totalCount: Int
     let cachedCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    accentColor.opacity(0.22),
-                                    accentColor.opacity(0.08)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                accentColor.opacity(0.22),
+                                accentColor.opacity(0.08)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                        .frame(width: 48, height: 48)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(accentColor.opacity(0.28), lineWidth: 0.9)
-                        )
+                    )
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(accentColor.opacity(0.28), lineWidth: 0.9)
+                    )
 
-                    Image(systemName: iconName)
-                        .font(.system(size: 21, weight: .bold))
-                        .foregroundStyle(accentColor)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.88)
-
-                    HStack(spacing: 5) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 11, weight: .bold))
-                        Text(language.text("modstore.header.credit"))
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.88)
-                    }
+                Image(systemName: iconName)
+                    .font(.system(size: 19, weight: .bold))
                     .foregroundStyle(accentColor)
-                }
-
-                Spacer(minLength: 0)
             }
 
-            Rectangle()
-                .fill(TotoroxTheme.dividerColor)
-                .frame(height: 1)
+            Text(title)
+                .font(.system(size: 17.5, weight: .bold))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
 
-            Text(subtitle)
-                .font(.system(size: 13))
-                .lineSpacing(3)
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 6)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 HStack(spacing: 4) {
                     Image(systemName: "doc.zipper")
                         .font(.system(size: 10.5, weight: .bold))
@@ -974,26 +946,9 @@ private struct ModStoreHeaderCard: View {
                     .background(accentColor.opacity(0.13))
                     .clipShape(Capsule())
                 }
-
-                Spacer(minLength: 4)
-
-                HStack(spacing: 4) {
-                    Image(systemName: "link.badge.plus")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(accentColor)
-                    Text(language.text("modstore.header.quota_short"))
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(TotoroxTheme.searchBackground)
-                .clipShape(Capsule())
             }
         }
-        .totoroxCard(cornerRadius: 16, padding: 16)
+        .totoroxCard(cornerRadius: 16, padding: 14)
     }
 }
 

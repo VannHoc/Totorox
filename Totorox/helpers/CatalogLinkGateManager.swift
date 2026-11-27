@@ -56,6 +56,140 @@ enum CatalogScreenPalette: Equatable, Sendable {
         }
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
+
+    /// Nền màu tĩnh cực dịu phủ dưới các luồng sáng động để 2 tab chính không bị trắng toát / đen tuyền.
+    func ambientCanvasBase(isDark: Bool) -> Color {
+        switch self {
+        case .crimsonRed:
+            return isDark
+                ? Color(red: 0.095, green: 0.052, blue: 0.068)
+                : Color(red: 0.994, green: 0.962, blue: 0.964)
+        case .blazingGold:
+            return isDark
+                ? Color(red: 0.095, green: 0.073, blue: 0.045)
+                : Color(red: 0.996, green: 0.978, blue: 0.942)
+        case .royalViolet:
+            return isDark
+                ? Color(red: 0.075, green: 0.058, blue: 0.115)
+                : Color(red: 0.976, green: 0.965, blue: 0.998)
+        default:
+            return TotoroxTheme.pageBackground
+        }
+    }
+
+    func ambientPrimaryOrb(isDark: Bool) -> Color {
+        switch self {
+        case .crimsonRed:
+            return isDark
+                ? Color(red: 0.92, green: 0.20, blue: 0.26).opacity(0.24)
+                : Color(red: 0.95, green: 0.28, blue: 0.32).opacity(0.18)
+        case .blazingGold:
+            return isDark
+                ? Color(red: 0.96, green: 0.62, blue: 0.10).opacity(0.24)
+                : Color(red: 0.98, green: 0.68, blue: 0.14).opacity(0.20)
+        case .royalViolet:
+            return isDark
+                ? Color(red: 0.60, green: 0.32, blue: 0.96).opacity(0.22)
+                : Color(red: 0.62, green: 0.38, blue: 0.96).opacity(0.15)
+        default:
+            return accent(isDark: isDark).opacity(isDark ? 0.16 : 0.11)
+        }
+    }
+
+    func ambientSecondaryOrb(isDark: Bool) -> Color {
+        switch self {
+        case .crimsonRed:
+            return isDark
+                ? Color(red: 0.98, green: 0.44, blue: 0.24).opacity(0.17)
+                : Color(red: 1.00, green: 0.56, blue: 0.38).opacity(0.14)
+        case .blazingGold:
+            return isDark
+                ? Color(red: 1.00, green: 0.80, blue: 0.28).opacity(0.17)
+                : Color(red: 1.00, green: 0.84, blue: 0.36).opacity(0.16)
+        case .royalViolet:
+            return isDark
+                ? Color(red: 0.42, green: 0.50, blue: 0.98).opacity(0.16)
+                : Color(red: 0.52, green: 0.58, blue: 0.98).opacity(0.12)
+        default:
+            return accent(isDark: isDark).opacity(isDark ? 0.12 : 0.08)
+        }
+    }
+}
+
+/// Nền hoạt ảnh chuyển động êm dịu theo tông màu chủ đạo của 2 tab chính (`Mod Skin AOV` đỏ ruby dịu,
+/// `Gộp File` vàng hổ phách dịu) cho cả Light Mode và Dark Mode, giữ độ tương phản chữ sắc nét.
+struct CatalogAmbientBackground: View {
+    let palette: CatalogScreenPalette
+
+    @ObservedObject private var themeManager = ThemeManager.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var phaseSeed: Double {
+        switch palette {
+        case .crimsonRed: return 0.0
+        case .blazingGold: return 1.85
+        case .royalViolet: return 3.40
+        default: return 0.9
+        }
+    }
+
+    var body: some View {
+        let isDark = (themeManager.mode == .dark)
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
+            let t = reduceMotion ? 0.0 : context.date.timeIntervalSinceReferenceDate
+            let slowA = sin(t * 0.55 + phaseSeed)
+            let slowB = cos(t * 0.43 + phaseSeed * 0.7)
+            let pulse = 0.5 + 0.5 * sin(t * 0.72 + phaseSeed)
+
+            GeometryReader { geo in
+                let w = max(geo.size.width, 1)
+                let h = max(geo.size.height, 1)
+                let maxDim = max(w, h)
+
+                ZStack {
+                    palette.ambientCanvasBase(isDark: isDark)
+
+                    // Vùng hào quang dịu phía trên trôi nhẹ
+                    RadialGradient(
+                        colors: [
+                            palette.ambientPrimaryOrb(isDark: isDark),
+                            palette.ambientPrimaryOrb(isDark: isDark).opacity(0.38),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: maxDim * 0.62
+                    )
+                    .frame(width: maxDim * 1.15, height: maxDim * 1.15)
+                    .scaleEffect(0.95 + 0.08 * pulse)
+                    .position(
+                        x: w * (0.26 + 0.22 * CGFloat(slowA)),
+                        y: h * (0.16 + 0.10 * CGFloat(slowB))
+                    )
+
+                    // Vùng hào quang dịu phía dưới đối xứng
+                    RadialGradient(
+                        colors: [
+                            palette.ambientSecondaryOrb(isDark: isDark),
+                            palette.ambientSecondaryOrb(isDark: isDark).opacity(0.32),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 10,
+                        endRadius: maxDim * 0.58
+                    )
+                    .frame(width: maxDim * 1.08, height: maxDim * 1.08)
+                    .scaleEffect(1.02 - 0.07 * pulse)
+                    .position(
+                        x: w * (0.76 - 0.20 * CGFloat(slowB)),
+                        y: h * (0.78 - 0.12 * CGFloat(slowA))
+                    )
+                }
+            }
+        }
+        .ignoresSafeArea(.all)
+        .allowsHitTesting(false)
+    }
 }
 
 struct ModStoreSectionConfig: Equatable, Sendable {
@@ -418,7 +552,7 @@ struct CatalogLinkGateSheetView: View {
                 Button {
                     manager.cancelActiveGate()
                 } label: {
-                    Text(language.text("wallpaper.cancel"))
+                    Text(language.text("common.cancel"))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.textSecondary)
                         .padding(.vertical, 6)

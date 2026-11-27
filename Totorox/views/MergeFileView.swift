@@ -86,7 +86,13 @@ struct MergeFileView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(TotoroxTheme.tabCanvasBackground)
+        .background {
+            if isEmbedded {
+                Color.clear
+            } else {
+                CatalogAmbientBackground(palette: .blazingGold)
+            }
+        }
         .onAppear {
             loadPersistedHistory()
             consumePendingMergeModsIfNeeded()
@@ -119,95 +125,51 @@ struct MergeFileView: View {
     // MARK: - Card 1: Header Banner
 
     private var headerBannerCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    mergeAccent.opacity(0.22),
-                                    mergeAccent.opacity(0.08)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                mergeAccent.opacity(0.22),
+                                mergeAccent.opacity(0.08)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                        .frame(width: 48, height: 48)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(mergeAccent.opacity(0.28), lineWidth: 0.9)
-                        )
+                    )
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(mergeAccent.opacity(0.28), lineWidth: 0.9)
+                    )
 
-                    Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 21, weight: .bold))
-                        .foregroundStyle(mergeAccent)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(language.text("merge.header.title"))
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.88)
-
-                    HStack(spacing: 5) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 11, weight: .bold))
-
-                        Text(language.text("merge.header.credit"))
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.88)
-                    }
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 19, weight: .bold))
                     .foregroundStyle(mergeAccent)
-                }
-
-                Spacer(minLength: 0)
             }
 
-            Rectangle()
-                .fill(TotoroxTheme.dividerColor)
-                .frame(height: 1)
+            Text(language.text("catalog.aov.hero.merge"))
+                .font(.system(size: 17.5, weight: .bold))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
 
-            Text(language.text("merge.header.subtitle"))
-                .font(.system(size: 13))
-                .lineSpacing(3)
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 6)
 
-            HStack(spacing: 8) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.zipper")
-                            .font(.system(size: 10.5, weight: .bold))
-                        Text(".ZIP")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundStyle(mergeAccent)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(mergeAccent.opacity(0.13))
-                    .clipShape(Capsule())
-
-                    Spacer(minLength: 6)
-
-                    HStack(spacing: 5) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(mergeAccent)
-                        Text(language.text("merge.header.subcredit"))
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(TotoroxTheme.searchBackground.opacity(0.9))
-                    .clipShape(Capsule())
+            HStack(spacing: 4) {
+                Image(systemName: "doc.zipper")
+                    .font(.system(size: 10.5, weight: .bold))
+                Text(".ZIP")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
             }
+            .foregroundStyle(mergeAccent)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(mergeAccent.opacity(0.13))
+            .clipShape(Capsule())
         }
-        .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
+        .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 14))
     }
 
     // MARK: - Card 2: Danh sách gói Mod (.zip)
@@ -345,11 +307,6 @@ struct MergeFileView: View {
                     .disabled(isMerging || isImportingMods)
                 }
             }
-
-            Text(language.text("merge.list.multi_hint"))
-                .font(.system(size: 11.5))
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
     }

@@ -345,39 +345,4 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, 1)
         XCTAssertNotEqual(decoded.schemaVersion, AppScanSnapshot.currentSchemaVersion)
     }
-
-    // MARK: - Wallpaper crop & position geometry
-
-    func testWallpaperCropGeometryClampsEdgesAndCoversViewport() {
-        let viewport = CGSize(width: 390, height: 844)
-        let landscapePhoto = CGSize(width: 1920, height: 1080)
-
-        // At 1.0x zoom on a 16:9 photo inside a tall phone screen, verticalpanning is locked (0), horizontal has room
-        let clampedAt1x = WallpaperCropGeometry.clampedOffset(
-            CGSize(width: 5000, height: 5000),
-            imageSize: landscapePhoto,
-            viewportSize: viewport,
-            zoomScale: 1.0
-        )
-        XCTAssertEqual(clampedAt1x.height, 0, accuracy: 0.01)
-        XCTAssertGreaterThan(clampedAt1x.width, 100)
-
-        // Output bitmap preserves viewport aspect ratio while capping max dimension <= 2160
-        let outSize = WallpaperCropGeometry.outputPixelSize(for: viewport, screenScale: 3.0, maxDimension: 2160)
-        XCTAssertEqual(outSize.height, 2160, accuracy: 1.0)
-        XCTAssertEqual(outSize.width / outSize.height, viewport.width / viewport.height, accuracy: 0.003)
-
-        // Draw rect always covers the entire output canvas without leaving black borders
-        let rect = WallpaperCropGeometry.drawRect(
-            imageSize: landscapePhoto,
-            viewportSize: viewport,
-            outputSize: outSize,
-            zoomScale: 2.2,
-            offset: CGSize(width: -9999, height: 9999)
-        )
-        XCTAssertLessThanOrEqual(rect.minX, 0.01)
-        XCTAssertLessThanOrEqual(rect.minY, 0.01)
-        XCTAssertGreaterThanOrEqual(rect.maxX, outSize.width - 0.01)
-        XCTAssertGreaterThanOrEqual(rect.maxY, outSize.height - 0.01)
-    }
 }

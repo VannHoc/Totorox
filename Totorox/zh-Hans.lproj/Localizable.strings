@@ -773,28 +773,15 @@
 "catalog.tool.overwrite_sub" = "自动选定游戏";
 "catalog.tool.upcoming" = "更多功能即将推出";
 
-"wallpaper.edit_a11y" = "自定义壁纸";
-"wallpaper.reposition" = "调整位置与裁剪";
-"wallpaper.change" = "更换其他图片";
-"wallpaper.reset_default" = "移除壁纸（恢复默认）";
-"wallpaper.crop_title" = "调整壁纸位置";
-"wallpaper.crop_hint" = "拖动调整位置 • 双指缩放裁剪";
-"wallpaper.crop_reset" = "重置";
-"wallpaper.preview_ui" = "界面预览";
-"wallpaper.cancel" = "取消";
-"wallpaper.confirm" = "确认使用";
-"wallpaper.saving" = "正在保存...";
-
 /* --- Update Mod Skin (Server-Side + Smart Snapshot Cache) --- */
 "modupdater.header.badge" = "云端安全编译 • 智能快照缓存";
 "modupdater.step1.title" = "最新原版 Resources";
-"modupdater.step1.hint" = "直接从本机传说对决扫描，或选择 Resources.zip / 文件夹（仅提取约 20MB 核心配置表并持久缓存）。";
+"modupdater.step1.hint" = "直接扫描本机传说对决或选择 Resources.zip 文件。";
 "modupdater.step1.cached_meta" = "%@ • 已缓存 %@";
-"modupdater.step1.scan_game" = "扫描本机游戏";
-"modupdater.step1.pick_file" = "选择文件 / 目录";
-"modupdater.step1.change_file" = "更换 Resources";
-"modupdater.step1.pick_zip" = "选择 Resources (.zip)";
-"modupdater.step1.pick_folder" = "选择 Resources 文件夹";
+"modupdater.step1.scan_game" = "本机扫描";
+"modupdater.step1.pick_file" = "选择 ZIP";
+"modupdater.step1.change_file" = "选择 ZIP";
+"modupdater.step1.pick_zip" = "选择 ZIP";
 "modupdater.step2.title" = "待升级的旧模组文件";
 "modupdater.step2.pick_button" = "选择旧模组（.zip 或 .3105）";
 "modupdater.step2.change" = "更换";

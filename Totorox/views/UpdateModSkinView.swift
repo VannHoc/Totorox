@@ -4,14 +4,12 @@ import UIKit
 
 private enum ModUpdaterPickerMode: Identifiable {
     case resourcesZip
-    case resourcesFolder
     case oldModFile
     case share(URL)
 
     var id: String {
         switch self {
         case .resourcesZip: return "resourcesZip"
-        case .resourcesFolder: return "resourcesFolder"
         case .oldModFile: return "oldModFile"
         case .share(let u): return "share:\(u.path)"
         }
@@ -32,6 +30,7 @@ struct UpdateModSkinView: View {
     // Step 2: Old Mod Selection & Options
     @State private var selectedOldModURL: URL? = nil
     @State private var oldModSizeText: String = ""
+    @State private var isImportingOldMod: Bool = false
     @State private var requiresPasswordInput: Bool = false
     @State private var inputPassword: String = ""
     @State private var upgradeMissingFeatures: Bool = true
@@ -47,11 +46,31 @@ struct UpdateModSkinView: View {
     @State private var activeSheet: ModUpdaterPickerMode? = nil
     @State private var alertMessage: String? = nil
 
+    private var updaterAccent: Color {
+        CatalogScreenPalette.oceanBlue.accent(isDark: themeManager.mode == .dark)
+    }
+
+    private static var resourcesZipContentTypes: [UTType] {
+        [UTType.zip, UTType.archive, UTType.data]
+    }
+
+    private static var oldModContentTypes: [UTType] {
+        var types: [UTType] = [UTType.zip, UTType.archive]
+        if let patchExported = UTType("com.totorox.patch-package") {
+            types.append(patchExported)
+        }
+        if let patchExt = UTType(filenameExtension: "3105") {
+            types.append(patchExt)
+        }
+        types.append(contentsOf: [UTType.data, UTType.content])
+        return types
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 14) {
-                    headerIntroCard
+                    headerTitleCard
 
                     step1ResourcesCard
 
@@ -80,22 +99,23 @@ struct UpdateModSkinView: View {
         .sheet(item: $activeSheet) { mode in
             switch mode {
             case .resourcesZip:
-                SingleFileOrFolderDocumentPicker(allowDirectories: false) { url in
-                    if let url { handlePickedResources(url) }
-                }
-                .preferredColorScheme(themeManager.mode.colorScheme)
-            case .resourcesFolder:
-                SingleFileOrFolderDocumentPicker(allowDirectories: true) { url in
-                    if let url { handlePickedResources(url) }
+                DocumentPickerWrapper(
+                    allowedContentTypes: Self.resourcesZipContentTypes,
+                    asCopy: true
+                ) { url in
+                    handlePickedResources(url)
                 }
                 .preferredColorScheme(themeManager.mode.colorScheme)
             case .oldModFile:
-                SingleFileOrFolderDocumentPicker(allowDirectories: false) { url in
-                    if let url { handlePickedOldMod(url) }
+                DocumentPickerWrapper(
+                    allowedContentTypes: Self.oldModContentTypes,
+                    asCopy: true
+                ) { url in
+                    handlePickedOldMod(url)
                 }
                 .preferredColorScheme(themeManager.mode.colorScheme)
             case .share(let url):
-                ModUpdaterShareSheet(items: [url])
+                ActivityViewControllerWrapper(activityItems: [url])
                     .preferredColorScheme(themeManager.mode.colorScheme)
             }
         }
@@ -109,42 +129,45 @@ struct UpdateModSkinView: View {
         }
     }
 
-    // MARK: - Header Intro Card (Description Shown Inside Feature Screen)
+    // MARK: - Compact Title Header (No Subtitles or Descriptions)
 
-    private var headerIntroCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(Color(red: 0.16, green: 0.56, blue: 0.96).opacity(0.16))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(Color(red: 0.16, green: 0.56, blue: 0.96))
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(language.text("catalog.sub.update_mod"))
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(TotoroxTheme.textPrimary)
-                    Text(language.text("modupdater.header.badge"))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                }
-
-                Spacer(minLength: 0)
+    private var headerTitleCard: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(updaterAccent.opacity(0.16))
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(updaterAccent.opacity(0.28), lineWidth: 0.9)
+                    )
+                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                    .font(.system(size: 21, weight: .bold))
+                    .foregroundStyle(updaterAccent)
             }
 
-            Text(language.text("catalog.sub.update_mod.desc"))
-                .font(.system(size: 13))
-                .lineSpacing(3)
-                .foregroundStyle(TotoroxTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(language.text("catalog.sub.update_mod"))
+                .font(.system(size: 17.5, weight: .bold))
+                .foregroundStyle(TotoroxTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Spacer(minLength: 6)
+
+            if let snap = cachedSnapshot {
+                Text("v\(snap.meta.gameVersion)")
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(updaterAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(updaterAccent.opacity(0.13))
+                    .clipShape(Capsule())
+            }
         }
-        .totoroxCard(cornerRadius: 18, padding: 15)
+        .totoroxCard(cornerRadius: 16, padding: 14)
     }
 
-    // MARK: - Step 1: Resources Gốc Mới Nhất
+    // MARK: - Step 1: Resources Gốc Mới Nhất (Chỉ giữ Quét trên máy & Chọn ZIP)
 
     private var step1ResourcesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -192,7 +215,7 @@ struct UpdateModSkinView: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(isWorking || isPreparingResources)
+                        .disabled(isWorking || isPreparingResources || isImportingOldMod)
                     }
                     .padding(11)
                     .background(TotoroxTheme.mintAccent.opacity(0.10))
@@ -201,10 +224,6 @@ struct UpdateModSkinView: View {
                     resourcesPickerButtons(compact: true)
                 }
             } else {
-                Text(language.text("modupdater.step1.hint"))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(TotoroxTheme.textSecondary)
-
                 resourcesPickerButtons(compact: false)
             }
         }
@@ -226,40 +245,32 @@ struct UpdateModSkinView: View {
                 }
                 .foregroundStyle(compact ? TotoroxTheme.mintAccent : .white)
                 .frame(maxWidth: .infinity)
-                .frame(height: 40)
+                .frame(height: 42)
                 .background(compact ? TotoroxTheme.mintAccent.opacity(0.14) : TotoroxTheme.mintAccent)
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(isWorking || isPreparingResources)
+            .disabled(isWorking || isPreparingResources || isImportingOldMod)
 
-            Menu {
-                Button {
-                    activeSheet = .resourcesZip
-                } label: {
-                    Label(language.text("modupdater.step1.pick_zip"), systemImage: "doc.zipper")
-                }
-                Button {
-                    activeSheet = .resourcesFolder
-                } label: {
-                    Label(language.text("modupdater.step1.pick_folder"), systemImage: "folder")
-                }
+            Button {
+                activeSheet = .resourcesZip
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "folder.badge.plus")
+                    Image(systemName: "doc.zipper")
                         .font(.system(size: 13, weight: .bold))
-                    Text(language.text(compact ? "modupdater.step1.change_file" : "modupdater.step1.pick_file"))
+                    Text(language.text("modupdater.step1.pick_zip"))
                         .font(.system(size: 12.5, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                 }
                 .foregroundStyle(TotoroxTheme.textPrimary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 40)
+                .frame(height: 42)
                 .background(TotoroxTheme.searchBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             }
-            .disabled(isWorking || isPreparingResources)
+            .buttonStyle(.plain)
+            .disabled(isWorking || isPreparingResources || isImportingOldMod)
         }
     }
 
@@ -273,7 +284,20 @@ struct UpdateModSkinView: View {
                 isReady: selectedOldModURL != nil
             )
 
-            if let modURL = selectedOldModURL {
+            if isImportingOldMod {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(TotoroxTheme.mintAccent)
+                        .scaleEffect(0.9)
+                    Text(language.text("common.loading"))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(TotoroxTheme.textSecondary)
+                    Spacer()
+                }
+                .padding(12)
+                .background(TotoroxTheme.searchBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            } else if let modURL = selectedOldModURL {
                 HStack(spacing: 10) {
                     Image(systemName: "archivebox.fill")
                         .font(.system(size: 18, weight: .bold))
@@ -350,7 +374,7 @@ struct UpdateModSkinView: View {
 
             if let insp = inspectionPreview {
                 inspectionSummaryBox(insp)
-            } else if cachedSnapshot != nil && selectedOldModURL != nil && !isWorking && !isPreparingResources {
+            } else if cachedSnapshot != nil && selectedOldModURL != nil && !isWorking && !isPreparingResources && !isImportingOldMod {
                 Button {
                     runInspectPreview()
                 } label: {
@@ -412,7 +436,7 @@ struct UpdateModSkinView: View {
     // MARK: - Step 3: Ấn Update & Xuất File Mới
 
     private var step3UpdateActionCard: some View {
-        let canRun = (cachedSnapshot != nil && selectedOldModURL != nil && !isWorking && !isPreparingResources)
+        let canRun = (cachedSnapshot != nil && selectedOldModURL != nil && !isWorking && !isPreparingResources && !isImportingOldMod)
 
         return VStack(alignment: .leading, spacing: 12) {
             stepHeader(
@@ -444,7 +468,7 @@ struct UpdateModSkinView: View {
                         isWorking = false
                         isPreparingResources = false
                     } label: {
-                        Text(language.text("wallpaper.cancel"))
+                        Text(language.text("common.cancel"))
                             .font(.system(size: 12.5, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .frame(height: 36)
@@ -513,7 +537,10 @@ struct UpdateModSkinView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    navCoordinator.navigateToOverwrite(patchURL: output.outputURL)
+                    navCoordinator.navigateToOverwrite(
+                        patchURL: output.outputURL,
+                        bundleID: "com.garena.game.kgvn"
+                    )
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "bolt.fill")
@@ -571,15 +598,69 @@ struct UpdateModSkinView: View {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Actions & Sandbox File Staging
+
+    private static func isTemporaryInboxCopy(_ url: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        let tmpRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        return path.hasPrefix(tmpRoot) || path.contains("-Inbox/")
+    }
+
+    private static func stagePickedFileIntoSandbox(from sourceURL: URL, subfolder: String) throws -> URL {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(subfolder, isDirectory: true)
+        if fm.fileExists(atPath: dir.path) {
+            try? fm.removeItem(at: dir)
+        }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let rawName = sourceURL.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = rawName.isEmpty ? "SelectedMod.zip" : rawName
+        let destURL = dir.appendingPathComponent(safeName, isDirectory: false)
+
+        if isTemporaryInboxCopy(sourceURL), (try? fm.moveItem(at: sourceURL, to: destURL)) != nil {
+            return destURL
+        }
+        if (try? FileIOEngine.shared.copySingleFile(from: sourceURL, to: destURL, syncAfterWrite: false)) != nil {
+            return destURL
+        }
+        if (try? fm.copyItem(at: sourceURL, to: destURL)) != nil {
+            return destURL
+        }
+
+        var coordError: NSError?
+        var copyErr: Error?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(readingItemAt: sourceURL, options: [], error: &coordError) { readableURL in
+            do {
+                try FileIOEngine.shared.copySingleFile(from: readableURL, to: destURL, syncAfterWrite: false)
+            } catch {
+                do {
+                    try fm.copyItem(at: readableURL, to: destURL)
+                } catch let fallbackErr {
+                    copyErr = fallbackErr
+                }
+            }
+        }
+        if let coordError { throw coordError }
+        if let copyErr { throw copyErr }
+        return destURL
+    }
 
     private func handlePickedResources(_ url: URL) {
         activeTask?.cancel()
         isPreparingResources = true
         progressValue = 0.05
         statusMessage = language.text("modupdater.progress.indexing_resources")
+        let hasScope = url.startAccessingSecurityScopedResource()
 
         activeTask = Task {
+            defer {
+                if hasScope { url.stopAccessingSecurityScopedResource() }
+                if Self.isTemporaryInboxCopy(url) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
             do {
                 let snap = try await AovModUpdaterEngine.shared.prepareResourcesSnapshot(from: url) { msg, frac in
                     Task { @MainActor in
@@ -635,21 +716,63 @@ struct UpdateModSkinView: View {
 
     private func handlePickedOldMod(_ url: URL) {
         let hasScope = url.startAccessingSecurityScopedResource()
-        let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        var is3105 = url.pathExtension.lowercased() == "3105"
-        if !is3105, let h = try? FileHandle(forReadingFrom: url) {
-            let head = (try? h.read(upToCount: 10)) ?? Data()
-            try? h.close()
-            is3105 = head.starts(with: Data("3105PATCH\0".utf8))
-        }
-        if hasScope { url.stopAccessingSecurityScopedResource() }
+        let activeLanguage = language
+        isImportingOldMod = true
 
-        selectedOldModURL = url
-        oldModSizeText = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
-        requiresPasswordInput = is3105
-        if !is3105 { inputPassword = "" }
-        inspectionPreview = nil
-        updatedOutput = nil
+        Task.detached(priority: .userInitiated) {
+            defer {
+                if hasScope { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                let stagedURL = try Self.stagePickedFileIntoSandbox(
+                    from: url,
+                    subfolder: "TotoroxSelectedOldMod"
+                )
+                let size = Int64((try? stagedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                guard size > 0 else {
+                    try? FileManager.default.removeItem(at: stagedURL)
+                    throw AovModUpdaterError.invalidOldModArchive(
+                        activeLanguage.text("overwrite.error_invalid_archive")
+                    )
+                }
+
+                var is3105 = stagedURL.pathExtension.lowercased() == "3105"
+                var isZip = false
+                if let h = try? FileHandle(forReadingFrom: stagedURL) {
+                    let head = (try? h.read(upToCount: 10)) ?? Data()
+                    try? h.close()
+                    if head.starts(with: Data("3105PATCH\0".utf8)) {
+                        is3105 = true
+                    } else if head.count >= 4 {
+                        let m4 = head.prefix(4)
+                        isZip = (m4 == Data([0x50, 0x4B, 0x03, 0x04]) || m4 == Data([0x50, 0x4B, 0x05, 0x06]))
+                    }
+                }
+
+                guard is3105 || isZip else {
+                    try? FileManager.default.removeItem(at: stagedURL)
+                    throw AovModUpdaterError.invalidOldModArchive(
+                        activeLanguage.text("overwrite.error_invalid_archive")
+                    )
+                }
+
+                let formattedSize = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+                await MainActor.run {
+                    self.selectedOldModURL = stagedURL
+                    self.oldModSizeText = formattedSize
+                    self.requiresPasswordInput = is3105
+                    if !is3105 { self.inputPassword = "" }
+                    self.inspectionPreview = nil
+                    self.updatedOutput = nil
+                    self.isImportingOldMod = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.isImportingOldMod = false
+                    self.alertMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func runInspectPreview() {
@@ -696,7 +819,7 @@ struct UpdateModSkinView: View {
         statusMessage = language.text("modupdater.progress.checking_server_cache")
         let pw = inputPassword
         let upg = upgradeMissingFeatures
-        let gateAccent = CatalogScreenPalette.oceanBlue.accent(isDark: themeManager.mode == .dark)
+        let gateAccent = updaterAccent
         let gateTitle = language.text("catalog.sub.update_mod")
 
         activeTask = Task {
@@ -735,49 +858,4 @@ struct UpdateModSkinView: View {
             }
         }
     }
-}
-
-// MARK: - Lightweight Document Picker Supporting File or Folder (asCopy = false for 8 GB+ ZIP!)
-
-private struct SingleFileOrFolderDocumentPicker: UIViewControllerRepresentable {
-    let allowDirectories: Bool
-    let onPick: (URL?) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let types: [UTType] = allowDirectories ? [.folder] : [.item, .archive, .zip, .data]
-        // QUAN TRỌNG: `asCopy: false` để mở trực tiếp URL security-scoped thay vì ép iOS copy cả cục Resources 8 GB vào Inbox!
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL?) -> Void
-        init(onPick: @escaping (URL?) -> Void) { self.onPick = onPick }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            onPick(urls.first)
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onPick(nil)
-        }
-    }
-}
-
-private struct ModUpdaterShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

@@ -43,10 +43,8 @@ enum TotoroxTab: Int, CaseIterable, Identifiable {
 struct TotoroxTabBar: View {
     @Binding var selectedTab: TotoroxTab
     @Environment(\.appLanguage) private var language
-    @ObservedObject private var wallpaper = WallpaperManager.shared
 
     var body: some View {
-        let _ = wallpaper.hasWallpaper
         VStack(spacing: 0) {
             Divider()
                 .overlay(TotoroxTheme.dividerColor)

@@ -752,32 +752,40 @@ struct CatalogView: View {
     // MARK: - 3. Embedded Feature Screens (Descriptions & Full Controls Appear Here)
 
     private var aovModSkinContent: some View {
-        VStack(spacing: 0) {
-            compactSubheader(
-                backTitle: CatalogGameID.aov.title(for: language),
-                trailingGame: .aov
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    navCoordinator.catalogRoute = .game(.aov)
-                }
-            }
+        ZStack {
+            CatalogAmbientBackground(palette: .crimsonRed)
 
-            ModStoreView(isEmbedded: true, config: .aovModSkin)
+            VStack(spacing: 0) {
+                compactSubheader(
+                    backTitle: CatalogGameID.aov.title(for: language),
+                    trailingGame: .aov
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        navCoordinator.catalogRoute = .game(.aov)
+                    }
+                }
+
+                ModStoreView(isEmbedded: true, config: .aovModSkin)
+            }
         }
     }
 
     private var aovMergeContent: some View {
-        VStack(spacing: 0) {
-            compactSubheader(
-                backTitle: CatalogGameID.aov.title(for: language),
-                trailingGame: .aov
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    navCoordinator.catalogRoute = .game(.aov)
-                }
-            }
+        ZStack {
+            CatalogAmbientBackground(palette: .blazingGold)
 
-            MergeFileView(isEmbedded: true)
+            VStack(spacing: 0) {
+                compactSubheader(
+                    backTitle: CatalogGameID.aov.title(for: language),
+                    trailingGame: .aov
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        navCoordinator.catalogRoute = .game(.aov)
+                    }
+                }
+
+                MergeFileView(isEmbedded: true)
+            }
         }
     }
 
