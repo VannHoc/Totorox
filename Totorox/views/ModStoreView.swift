@@ -65,6 +65,7 @@ private enum ModDestinationAction {
 // MARK: - ModStoreView (Tab 5: Kho Mod Skin Trực Tuyến)
 
 struct ModStoreView: View {
+    var isEmbedded: Bool = false
     @Environment(\.appLanguage) private var language
     @ObservedObject private var license = LicenseManager.shared
     @ObservedObject private var themeManager = ThemeManager.shared
@@ -164,7 +165,7 @@ struct ModStoreView: View {
                     filterAndCatalogCard
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .padding(.top, isEmbedded ? 6 : 12)
                 .padding(.bottom, showBottomDock ? 16 : 32)
                 .frame(width: proxy.size.width > 0 ? proxy.size.width : nil)
             }
@@ -173,7 +174,7 @@ struct ModStoreView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(TotoroxTheme.pageBackground)
+        .background(isEmbedded ? TotoroxTheme.tabCanvasBackground : TotoroxTheme.pageBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showBottomDock {
                 bottomActionDock

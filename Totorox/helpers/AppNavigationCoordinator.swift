@@ -91,8 +91,8 @@ final class AppNavigationCoordinator: ObservableObject {
             }
             self.selectedTab = .catalog
         case "mods", "store":
-            // Tab Kho Mod đang ở trạng thái nháp trên IPA 3.0
-            self.selectedTab = .overwrite
+            self.catalogRoute = .aovModSkin
+            self.selectedTab = .catalog
         case "patch", "convert":
             self.selectedTab = .patch
         case "folders", "explorer":

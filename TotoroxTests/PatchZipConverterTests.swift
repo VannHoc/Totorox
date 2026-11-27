@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import CryptoKit
 @testable import Totorox
 
@@ -1154,6 +1155,22 @@ final class PatchZipConverterTests: XCTestCase {
         XCTAssertEqual(CatalogGameID.fromQueryValue("pubg"), .pubg)
         XCTAssertEqual(CatalogGameID.fromQueryValue("ff"), .freeFire)
 
+        // Bundled official game logos must resolve from Assets.xcassets
+        XCTAssertEqual(CatalogGameID.aov.assetLogoName, "GameLogoAOV")
+        XCTAssertEqual(CatalogGameID.pubg.assetLogoName, "GameLogoPUBG")
+        XCTAssertEqual(CatalogGameID.freeFire.assetLogoName, "GameLogoFreeFire")
+        for game in CatalogGameID.allCases {
+            XCTAssertNotNil(UIImage(named: game.assetLogoName), "Missing bundled logo for \(game.rawValue)")
+        }
+
+        // Secondary capsule pills hierarchy for Liên Quân Mobile
+        let aovPills = CatalogSubFeatureID.pills(for: .aov)
+        XCTAssertEqual(aovPills, [.hokSkin, .camXa, .modMap, .fixLag])
+        XCTAssertTrue(CatalogSubFeatureID.hokSkin.isSemiHighlighted)
+        XCTAssertFalse(CatalogSubFeatureID.camXa.isSemiHighlighted)
+        XCTAssertFalse(CatalogSubFeatureID.modMap.isSemiHighlighted)
+        XCTAssertFalse(CatalogSubFeatureID.fixLag.isSemiHighlighted)
+
         let nav = AppNavigationCoordinator.shared
         let prevTab = nav.selectedTab
         let prevRoute = nav.catalogRoute
@@ -1177,6 +1194,10 @@ final class PatchZipConverterTests: XCTestCase {
         nav.handleIncomingURL(URL(string: "totorox://merge")!)
         XCTAssertEqual(nav.selectedTab, .catalog)
         XCTAssertEqual(nav.catalogRoute, .aovMerge)
+
+        nav.handleIncomingURL(URL(string: "totorox://mods")!)
+        XCTAssertEqual(nav.selectedTab, .catalog)
+        XCTAssertEqual(nav.catalogRoute, .aovModSkin)
 
         nav.navigateToGameOverwrite(bundleCandidates: CatalogGameID.freeFire.bundleCandidates)
         XCTAssertEqual(nav.selectedTab, .overwrite)
