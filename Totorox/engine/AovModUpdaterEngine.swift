@@ -788,9 +788,9 @@ public final class AovModUpdaterEngine: @unchecked Sendable {
         inputPassword: String?,
         progress: @escaping @Sendable (String, Double) -> Void
     ) async throws -> ModUpdaterInspectionResponse {
-        let token = LicenseManager.shared.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = await LicenseManager.shared.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw AovModUpdaterError.notAuthenticated }
-        let hwid = LicenseManager.shared.deviceIdentifier
+        let hwid = await LicenseManager.shared.deviceIdentifier
 
         let workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("TotoroxUpdInspect_\(UUID().uuidString)", isDirectory: true)
@@ -830,9 +830,9 @@ public final class AovModUpdaterEngine: @unchecked Sendable {
         upgradeMissingFeatures: Bool,
         progress: @escaping @Sendable (String, Double) -> Void
     ) async throws -> UpdatedModOutput {
-        let token = LicenseManager.shared.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = await LicenseManager.shared.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw AovModUpdaterError.notAuthenticated }
-        let hwid = LicenseManager.shared.deviceIdentifier
+        let hwid = await LicenseManager.shared.deviceIdentifier
 
         let workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("TotoroxUpdRun_\(UUID().uuidString)", isDirectory: true)
