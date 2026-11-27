@@ -820,3 +820,14 @@
 "modupdater.error.game_not_found" = "Could not find Arena of Valor Resources on this device. Open the game to download resources first, or pick a Resources.zip file.";
 "modupdater.error.invalid_resources" = "Selected file or folder is not a valid Arena of Valor Resources package.";
 "modupdater.error.missing_heroskin_table" = "Resources source is missing required Databin/Client/Actor/heroSkin.bytes.";
+
+/* --- Link4m Verification Gate --- */
+"gate.sheet.title" = "Complete Link Verification";
+"gate.sheet.subtitle" = "Finish the %@ verification step to unlock direct server processing. Once verified, Totorox will automatically return and start immediately.";
+"gate.sheet.open_btn" = "Open %@ to Verify";
+"gate.sheet.verify_btn" = "I've Finished — Verify Now";
+"gate.hint.waiting_browser" = "Waiting for you to complete verification in the browser...";
+"gate.hint.not_completed_yet" = "Verification is not completed yet. Please finish the shortlink step and tap again.";
+"gate.error.cancelled" = "Link verification was cancelled.";
+"gate.error.create_failed" = "Could not create a verification session. Please try again.";
+"gate.error.expired" = "Verification session expired. Please try again.";

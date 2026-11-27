@@ -820,3 +820,14 @@
 "modupdater.error.game_not_found" = "未在本机找到传说对决 Resources 目录，请先打开游戏下载资源或手动选择 Resources.zip。";
 "modupdater.error.invalid_resources" = "所选文件或目录不是有效的传说对决 Resources 资源。";
 "modupdater.error.missing_heroskin_table" = "Resources 缺少必需的数据表 Databin/Client/Actor/heroSkin.bytes。";
+
+/* --- Link4m 安全验证门 --- */
+"gate.sheet.title" = "完成链接验证以继续";
+"gate.sheet.subtitle" = "完成 %@ 验证后，系统将直接解锁云端下载与处理。验证完成后将自动返回 Totorox 并立即执行。";
+"gate.sheet.open_btn" = "打开 %@ 进行验证";
+"gate.sheet.verify_btn" = "我已完成 — 立即验证";
+"gate.hint.waiting_browser" = "正在等待您在浏览器中完成验证...";
+"gate.hint.not_completed_yet" = "系统尚未收到验证完成信号，请完成短链跳转后再试。";
+"gate.error.cancelled" = "已取消链接验证。";
+"gate.error.create_failed" = "无法创建验证会话，请稍后重试。";
+"gate.error.expired" = "验证会话已过期，请重新发起。";

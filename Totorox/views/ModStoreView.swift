@@ -66,9 +66,14 @@ private enum ModDestinationAction {
 
 struct ModStoreView: View {
     var isEmbedded: Bool = false
+    var config: ModStoreSectionConfig = .aovModSkin
     @Environment(\.appLanguage) private var language
     @ObservedObject private var license = LicenseManager.shared
     @ObservedObject private var themeManager = ThemeManager.shared
+
+    private var accentColor: Color {
+        config.palette.accent(isDark: themeManager.mode == .dark)
+    }
 
     @State private var mods: [ModCatalogItem] = []
     @State private var cachedIDs: Set<Int> = []
@@ -158,6 +163,10 @@ struct ModStoreView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 16) {
                     ModStoreHeaderCard(
+                        title: language.text(config.titleKey),
+                        subtitle: language.text(config.subtitleKey),
+                        iconName: config.iconName,
+                        accentColor: accentColor,
                         totalCount: mods.count,
                         cachedCount: cachedIDs.count
                     )
@@ -224,7 +233,7 @@ struct ModStoreView: View {
                     )
                     .font(.system(size: 14))
                     .foregroundStyle(TotoroxTheme.textPrimary)
-                    .tint(TotoroxTheme.mintAccent)
+                    .tint(accentColor)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -253,7 +262,7 @@ struct ModStoreView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(sortOption == .newest ? TotoroxTheme.textPrimary : TotoroxTheme.mintAccent)
+                        .foregroundStyle(sortOption == .newest ? TotoroxTheme.textPrimary : accentColor)
                         .frame(width: 40, height: 42)
                         .background(TotoroxTheme.searchBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -265,7 +274,7 @@ struct ModStoreView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .foregroundStyle(accentColor)
                         .frame(width: 40, height: 42)
                         .background(TotoroxTheme.searchBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -275,42 +284,44 @@ struct ModStoreView: View {
                 .accessibilityLabel(language.text("folders.refresh"))
             }
 
-            // Category Pills
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(ModCategoryFilter.allCases) { filter in
-                        if filter != .cached || !cachedIDs.isEmpty || categoryFilter == .cached {
-                            let isSelected = (categoryFilter == filter)
-                            let count = countForFilter(filter)
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    categoryFilter = filter
+            // Category Pills (shown in full Mod Skin AOV hub; hidden in focused sub-hubs)
+            if config.showCategoryFilterPills {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(ModCategoryFilter.allCases) { filter in
+                            if filter != .cached || !cachedIDs.isEmpty || categoryFilter == .cached {
+                                let isSelected = (categoryFilter == filter)
+                                let count = countForFilter(filter)
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        categoryFilter = filter
+                                    }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: filter.iconName)
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Text(filter.title(for: language))
+                                            .font(.system(size: 12, weight: isSelected ? .bold : .medium))
+                                        Text("\(count)")
+                                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(
+                                                isSelected
+                                                    ? Color.white.opacity(0.24)
+                                                    : accentColor.opacity(0.14)
+                                            )
+                                            .foregroundStyle(isSelected ? .white : accentColor)
+                                            .clipShape(Capsule())
+                                    }
+                                    .foregroundStyle(isSelected ? .white : TotoroxTheme.textPrimary)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 7)
+                                    .background(isSelected ? accentColor : TotoroxTheme.searchBackground)
+                                    .clipShape(Capsule())
                                 }
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: filter.iconName)
-                                        .font(.system(size: 11, weight: .semibold))
-                                    Text(filter.title(for: language))
-                                        .font(.system(size: 12, weight: isSelected ? .bold : .medium))
-                                    Text("\(count)")
-                                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(
-                                            isSelected
-                                                ? Color.white.opacity(0.22)
-                                                : TotoroxTheme.mintAccent.opacity(0.14)
-                                        )
-                                        .foregroundStyle(isSelected ? .white : TotoroxTheme.mintAccent)
-                                        .clipShape(Capsule())
-                                }
-                                .foregroundStyle(isSelected ? .white : TotoroxTheme.textPrimary)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 7)
-                                .background(isSelected ? TotoroxTheme.mintAccent : TotoroxTheme.searchBackground)
-                                .clipShape(Capsule())
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -527,7 +538,7 @@ struct ModStoreView: View {
                             : language.text("modstore.quota_cost_count", newCost)
                     )
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(accentColor)
 
                     Spacer()
 
@@ -559,9 +570,9 @@ struct ModStoreView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 46)
-                        .background(TotoroxTheme.mintAccent)
+                        .background(config.palette.primaryButtonGradient)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .shadow(color: TotoroxTheme.mintAccent.opacity(0.28), radius: 6, y: 3)
+                        .shadow(color: accentColor.opacity(0.28), radius: 6, y: 3)
                     }
                     .buttonStyle(.plain)
 
@@ -576,10 +587,10 @@ struct ModStoreView: View {
                                     .font(.system(size: 12.5, weight: .bold))
                                     .lineLimit(1)
                             }
-                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .foregroundStyle(accentColor)
                             .frame(maxWidth: .infinity)
                             .frame(height: 38)
-                            .background(TotoroxTheme.mintAccent.opacity(0.12))
+                            .background(accentColor.opacity(0.13))
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                         .buttonStyle(.plain)
@@ -683,6 +694,7 @@ struct ModStoreView: View {
 
         let result = await APIService.shared.fetchModCatalog(
             search: "",
+            category: config.serverCategoryQuery,
             token: license.authToken,
             hwid: license.deviceIdentifier
         )
@@ -752,12 +764,34 @@ struct ModStoreView: View {
                 let totalCount = items.count
                 let itemIndex = index
 
+                // Bắt buộc vượt Link4m qua Server (vé 1 lần gắn chặt tài khoản + UDID, không lộ link Drive)
+                let verifiedGateID: String?
+                do {
+                    verifiedGateID = try await CatalogLinkGateManager.shared.requireVerifiedGate(
+                        action: .modDownload,
+                        featureTitle: item.name,
+                        accentColor: accentColor
+                    )
+                } catch is CatalogGateError {
+                    await MainActor.run {
+                        self.finishDownloadFlow()
+                    }
+                    return
+                } catch {
+                    await MainActor.run {
+                        self.finishDownloadFlow()
+                        self.alertMessage = error.localizedDescription
+                    }
+                    return
+                }
+
                 let downloadResult = await APIService.shared.downloadModFile(
                     modId: item.id,
                     fileName: item.fileName,
                     expectedBytes: item.fileSize,
                     token: license.authToken,
-                    hwid: license.deviceIdentifier
+                    hwid: license.deviceIdentifier,
+                    gateID: verifiedGateID
                 ) { completed, expected in
                     let effectiveTotal = expected > 0 ? expected : itemTotal
                     let itemPct = min(max(Double(completed) / Double(max(1, effectiveTotal)), 0.0), 1.0)
@@ -821,7 +855,7 @@ struct ModStoreView: View {
                     if let first = resolvedURLs.first {
                         AppNavigationCoordinator.shared.navigateToOverwrite(
                             patchURL: first,
-                            bundleID: "com.garena.game.kgvn"
+                            bundleID: self.config.targetBundleID
                         )
                     }
                 case .merge:
@@ -850,6 +884,10 @@ struct ModStoreView: View {
 
 private struct ModStoreHeaderCard: View {
     @Environment(\.appLanguage) private var language
+    let title: String
+    let subtitle: String
+    let iconName: String
+    let accentColor: Color
     let totalCount: Int
     let cachedCount: Int
 
@@ -861,8 +899,8 @@ private struct ModStoreHeaderCard: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    TotoroxTheme.mintAccent.opacity(0.22),
-                                    TotoroxTheme.mintAccent.opacity(0.08)
+                                    accentColor.opacity(0.22),
+                                    accentColor.opacity(0.08)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -871,16 +909,16 @@ private struct ModStoreHeaderCard: View {
                         .frame(width: 48, height: 48)
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(TotoroxTheme.mintAccent.opacity(0.25), lineWidth: 0.8)
+                                .stroke(accentColor.opacity(0.28), lineWidth: 0.9)
                         )
 
-                    Image(systemName: "shippingbox.fill")
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
+                    Image(systemName: iconName)
+                        .font(.system(size: 21, weight: .bold))
+                        .foregroundStyle(accentColor)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(language.text("modstore.header.title"))
+                    Text(title)
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(TotoroxTheme.textPrimary)
                         .lineLimit(1)
@@ -894,7 +932,7 @@ private struct ModStoreHeaderCard: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.88)
                     }
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(accentColor)
                 }
 
                 Spacer(minLength: 0)
@@ -904,7 +942,7 @@ private struct ModStoreHeaderCard: View {
                 .fill(TotoroxTheme.dividerColor)
                 .frame(height: 1)
 
-            Text(language.text("modstore.header.subtitle"))
+            Text(subtitle)
                 .font(.system(size: 13))
                 .lineSpacing(3)
                 .foregroundStyle(TotoroxTheme.textSecondary)
@@ -917,10 +955,10 @@ private struct ModStoreHeaderCard: View {
                     Text(language.text("modstore.badge.total_mods", totalCount))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                 }
-                .foregroundStyle(TotoroxTheme.mintAccent)
+                .foregroundStyle(accentColor)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .background(TotoroxTheme.mintAccent.opacity(0.12))
+                .background(accentColor.opacity(0.13))
                 .clipShape(Capsule())
 
                 if cachedCount > 0 {
@@ -930,19 +968,19 @@ private struct ModStoreHeaderCard: View {
                         Text(language.text("modstore.badge.cached_count", cachedCount))
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(accentColor)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                    .background(accentColor.opacity(0.13))
                     .clipShape(Capsule())
                 }
 
                 Spacer(minLength: 4)
 
                 HStack(spacing: 4) {
-                    Image(systemName: "ticket.fill")
+                    Image(systemName: "link.badge.plus")
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .foregroundStyle(accentColor)
                     Text(language.text("modstore.header.quota_short"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(TotoroxTheme.textSecondary)

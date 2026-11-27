@@ -34,6 +34,11 @@ struct MergeFileView: View {
     @Environment(\.appLanguage) private var language
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var themeManager = ThemeManager.shared
+
+    private var mergePalette: CatalogScreenPalette { .blazingGold }
+    private var mergeAccent: Color {
+        mergePalette.accent(isDark: themeManager.mode == .dark)
+    }
     @State private var selectedMods: [AovModSummary] = []
     @State private var modContentHashes: [URL: String] = [:]
 
@@ -121,8 +126,8 @@ struct MergeFileView: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    TotoroxTheme.mintAccent.opacity(0.20),
-                                    TotoroxTheme.mintAccent.opacity(0.08)
+                                    mergeAccent.opacity(0.22),
+                                    mergeAccent.opacity(0.08)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -131,12 +136,12 @@ struct MergeFileView: View {
                         .frame(width: 48, height: 48)
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(TotoroxTheme.mintAccent.opacity(0.22), lineWidth: 0.75)
+                                .stroke(mergeAccent.opacity(0.28), lineWidth: 0.9)
                         )
 
                     Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
+                        .font(.system(size: 21, weight: .bold))
+                        .foregroundStyle(mergeAccent)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -155,7 +160,7 @@ struct MergeFileView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.88)
                     }
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(mergeAccent)
                 }
 
                 Spacer(minLength: 0)
@@ -172,34 +177,34 @@ struct MergeFileView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.zipper")
-                        .font(.system(size: 10.5, weight: .bold))
-                    Text(".ZIP")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                }
-                .foregroundStyle(TotoroxTheme.mintAccent)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(TotoroxTheme.mintAccent.opacity(0.12))
-                .clipShape(Capsule())
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.zipper")
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(".ZIP")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(mergeAccent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(mergeAccent.opacity(0.13))
+                    .clipShape(Capsule())
 
-                Spacer(minLength: 6)
+                    Spacer(minLength: 6)
 
-                HStack(spacing: 5) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.mintAccent)
-                    Text(language.text("merge.header.subcredit"))
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(TotoroxTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(TotoroxTheme.searchBackground.opacity(0.9))
-                .clipShape(Capsule())
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(mergeAccent)
+                        Text(language.text("merge.header.subcredit"))
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(TotoroxTheme.textSecondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(TotoroxTheme.searchBackground.opacity(0.9))
+                    .clipShape(Capsule())
             }
         }
         .modifier(TotoroxCardModifier(cornerRadius: 16, padding: 16))
@@ -212,7 +217,7 @@ struct MergeFileView: View {
             HStack {
                 Image(systemName: "doc.zipper")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(mergeAccent)
 
                 Text(language.text("merge.list.title"))
                     .font(.system(size: 15, weight: .bold))
@@ -222,10 +227,10 @@ struct MergeFileView: View {
 
                 Text(language.text("merge.list.file_count", selectedMods.count))
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(mergeAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                    .background(mergeAccent.opacity(0.13))
                     .clipShape(Capsule())
             }
 
@@ -314,10 +319,10 @@ struct MergeFileView: View {
                         }
                     }
                     .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(mergeAccent)
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
-                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                    .background(mergeAccent.opacity(0.13))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .disabled(isMerging || isImportingMods)
@@ -357,7 +362,7 @@ struct MergeFileView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         ProgressView()
-                            .tint(TotoroxTheme.mintAccent)
+                            .tint(mergeAccent)
                             .scaleEffect(0.85)
                         Text(progressStatus)
                             .font(.system(size: 12.5, weight: .medium))
@@ -366,11 +371,11 @@ struct MergeFileView: View {
                         Spacer()
                         Text("\(Int(progressValue * 100))%")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(TotoroxTheme.mintAccent)
+                            .foregroundStyle(mergeAccent)
                     }
 
                     ProgressView(value: progressValue, total: 1.0)
-                        .tint(TotoroxTheme.mintAccent)
+                        .tint(mergeAccent)
                 }
                 .padding(12)
                 .background(TotoroxTheme.cardBackground)
@@ -397,9 +402,15 @@ struct MergeFileView: View {
                 .foregroundStyle((canMerge || isMerging) ? .white : TotoroxTheme.disabledText)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background((canMerge || isMerging) ? TotoroxTheme.mintAccent : TotoroxTheme.disabledBackground)
+                .background {
+                    if canMerge || isMerging {
+                        mergePalette.primaryButtonGradient
+                    } else {
+                        TotoroxTheme.disabledBackground
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: canMerge ? TotoroxTheme.mintAccent.opacity(0.3) : Color.clear, radius: 8, y: 4)
+                .shadow(color: canMerge ? mergeAccent.opacity(0.32) : Color.clear, radius: 8, y: 4)
             }
             .disabled(!canMerge)
         }
@@ -493,10 +504,10 @@ struct MergeFileView: View {
                         Text(language.text("merge.result.share_output"))
                     }
                     .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(TotoroxTheme.mintAccent)
+                    .foregroundStyle(mergeAccent)
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
-                    .background(TotoroxTheme.mintAccent.opacity(0.12))
+                    .background(mergeAccent.opacity(0.13))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
@@ -843,7 +854,15 @@ struct MergeFileView: View {
 
         Task {
             do {
-                let res = try await AovModMergerEngine.shared.mergeModArchives(inputURLs: urls) { status, pct in
+                let verifiedGateID = try await CatalogLinkGateManager.shared.requireVerifiedGate(
+                    action: .mergePlan,
+                    featureTitle: activeLanguage.text("catalog.aov.hero.merge"),
+                    accentColor: mergeAccent
+                )
+                let res = try await AovModMergerEngine.shared.mergeModArchives(
+                    inputURLs: urls,
+                    gateID: verifiedGateID
+                ) { status, pct in
                     Task { @MainActor in
                         self.progressStatus = status
                         self.progressValue = pct

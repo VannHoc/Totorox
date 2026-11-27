@@ -480,6 +480,7 @@ final class APIService {
         configJSON: String?,
         token: String,
         hwid: String,
+        gateID: String? = nil,
         onStage: @escaping @Sendable (MergeQueueStage) -> Void
     ) async -> Result<MergePlanExecutionResult, APIServiceError> {
         let submitPath = ObfuscatedStrings.mergePlanJobs
@@ -535,6 +536,9 @@ final class APIService {
                 forHTTPHeaderField: "Content-Type"
             )
             applyAuthHeaders(to: &submitReq, token: token, hwid: hwid)
+            if let cleanGate = gateID?.trimmingCharacters(in: .whitespacesAndNewlines), !cleanGate.isEmpty {
+                submitReq.setValue(cleanGate, forHTTPHeaderField: "X-Catalog-Gate")
+            }
             submitReq.timeoutInterval = APIService.mergeTimeout
             signRequest(&submitReq)
 
@@ -1074,6 +1078,7 @@ final class APIService {
 
     func fetchModCatalog(
         search: String = "",
+        category: String = "",
         token: String,
         hwid: String
     ) async -> Result<[ModCatalogItem], APIServiceError> {
@@ -1083,9 +1088,17 @@ final class APIService {
         ) else {
             return .failure(.invalidConfiguration)
         }
+        var queryItems: [URLQueryItem] = []
         let trimmedSearch = search.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedSearch.isEmpty {
-            components.queryItems = [URLQueryItem(name: "search", value: trimmedSearch)]
+            queryItems.append(URLQueryItem(name: "search", value: trimmedSearch))
+        }
+        let trimmedCategory = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCategory.isEmpty {
+            queryItems.append(URLQueryItem(name: "category", value: trimmedCategory))
+        }
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
         }
         guard let url = components.url else {
             return .failure(.invalidConfiguration)
@@ -1162,6 +1175,7 @@ final class APIService {
         expectedBytes: Int64 = 0,
         token: String,
         hwid: String,
+        gateID: String? = nil,
         onProgress: (@Sendable (Int64, Int64) -> Void)? = nil
     ) async -> Result<URL, APIServiceError> {
         var request = URLRequest(url: baseURL.appendingPathComponent(ObfuscatedStrings.modsDownload))
@@ -1169,6 +1183,9 @@ final class APIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/zip, application/json", forHTTPHeaderField: "Accept")
         applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        if let cleanGate = gateID?.trimmingCharacters(in: .whitespacesAndNewlines), !cleanGate.isEmpty {
+            request.setValue(cleanGate, forHTTPHeaderField: "X-Catalog-Gate")
+        }
         request.timeoutInterval = APIService.mergeTimeout
         signRequest(&request)
 
@@ -2351,6 +2368,7 @@ extension APIService {
         destinationURL: URL,
         token: String,
         hwid: String,
+        gateID: String? = nil,
         onChunkProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> Result<ModUpdaterUpdateResponse, APIServiceError> {
         let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
@@ -2397,6 +2415,9 @@ extension APIService {
             request.httpMethod = "POST"
             request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             applyAuthHeaders(to: &request, token: token, hwid: hwid)
+            if let cleanGate = gateID?.trimmingCharacters(in: .whitespacesAndNewlines), !cleanGate.isEmpty {
+                request.setValue(cleanGate, forHTTPHeaderField: "X-Catalog-Gate")
+            }
             request.timeoutInterval = APIService.mergeTimeout
             signRequest(&request)
 
@@ -2466,5 +2487,94 @@ extension APIService {
             hasher.update(data: chunk)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Catalog Link4m Gate (Server-Verified One-Time Action Ticket)
+
+struct CatalogGateStartResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let required: Bool
+    let gateID: String?
+    let shortURL: String?
+    let provider: String?
+    let minWaitSeconds: Int?
+    let expiresAt: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, required, provider
+        case gateID = "gate_id"
+        case shortURL = "short_url"
+        case minWaitSeconds = "min_wait_seconds"
+        case expiresAt = "expires_at"
+    }
+}
+
+struct CatalogGateStatusResponse: Decodable, Equatable, Sendable {
+    let ok: Bool
+    let gateID: String
+    let action: String
+    let status: String
+    let provider: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, action, status, provider
+        case gateID = "gate_id"
+    }
+}
+
+extension APIService {
+    func startCatalogGate(
+        action: String,
+        token: String,
+        hwid: String
+    ) async -> Result<CatalogGateStartResponse, APIServiceError> {
+        struct StartBody: Encodable {
+            let action: String
+            let udid: String?
+        }
+        let body = StartBody(action: action, udid: hwid.isEmpty ? nil : hwid)
+        return await postJSON(
+            "api/v1/catalog-gate/start",
+            body: body,
+            token: token,
+            hwid: hwid
+        )
+    }
+
+    func checkCatalogGateStatus(
+        gateID: String,
+        token: String,
+        hwid: String
+    ) async -> Result<CatalogGateStatusResponse, APIServiceError> {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/v1/catalog-gate/status"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            return .failure(.invalidConfiguration)
+        }
+        components.queryItems = [URLQueryItem(name: "gate_id", value: gateID)]
+        guard let url = components.url else { return .failure(.invalidConfiguration) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthHeaders(to: &request, token: token, hwid: hwid)
+        signRequest(&request)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = Self.errorMessage(from: data)
+                if http.statusCode == 401 { notifyUnauthorized(msg) }
+                return .failure(.serverRejected(status: http.statusCode, message: msg))
+            }
+            return .success(try parseJSON(CatalogGateStatusResponse.self, from: data))
+        } catch {
+            return .failure(Self.failure(from: error))
+        }
     }
 }

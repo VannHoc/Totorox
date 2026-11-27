@@ -820,3 +820,14 @@
 "modupdater.error.game_not_found" = "Không tìm thấy dữ liệu Resources trong ứng dụng Liên Quân Mobile trên máy. Hãy vào game tải gói tài nguyên trước hoặc chọn tệp Resources.zip từ Tệp.";
 "modupdater.error.invalid_resources" = "Tệp hoặc thư mục đã chọn không phải nguồn Resources hợp lệ của Liên Quân Mobile.";
 "modupdater.error.missing_heroskin_table" = "Nguồn Resources thiếu bảng dữ liệu bắt buộc (Databin/Client/Actor/heroSkin.bytes).";
+
+/* --- Cổng vượt Link4m bảo mật (Anti-Leak) --- */
+"gate.sheet.title" = "Xác minh vượt Link để tiếp tục";
+"gate.sheet.subtitle" = "Hoàn thành vượt %@ để hệ thống mở khóa lượt xử lý trực tiếp trên máy chủ Totorox. Sau khi vượt xong, ứng dụng sẽ tự động quay lại và tải/xử lý tệp ngay.";
+"gate.sheet.open_btn" = "Mở %@ để xác minh";
+"gate.sheet.verify_btn" = "Tôi đã vượt xong — Kiểm tra ngay";
+"gate.hint.waiting_browser" = "Đang chờ bạn hoàn thành vượt link trên trình duyệt...";
+"gate.hint.not_completed_yet" = "Hệ thống chưa ghi nhận hoàn thành vượt link. Vui lòng hoàn tất bước vượt link rồi thử lại.";
+"gate.error.cancelled" = "Bạn đã hủy bước xác minh vượt link.";
+"gate.error.create_failed" = "Không thể khởi tạo phiên vượt link. Vui lòng thử lại.";
+"gate.error.expired" = "Phiên vượt link đã hết hạn. Vui lòng thực hiện lại.";

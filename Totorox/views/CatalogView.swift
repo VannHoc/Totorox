@@ -130,7 +130,8 @@ enum CatalogSubFeatureID: String, CaseIterable, Identifiable, Hashable, Sendable
     var accentColor: Color {
         switch self {
         case .hokSkin:
-            return Color(red: 0.92, green: 0.66, blue: 0.14)
+            // Tím Hoàng Gia riêng biệt hoàn toàn với 2 tab chính Đỏ (Mod Skin AOV) & Vàng (Gộp File)
+            return Color(red: 0.56, green: 0.30, blue: 0.94)
         case .updateModSkin:
             return Color(red: 0.16, green: 0.56, blue: 0.96)
         case .camXa:
@@ -442,6 +443,7 @@ struct CatalogView: View {
     @Environment(\.appLanguage) private var language
     @ObservedObject private var navCoordinator = AppNavigationCoordinator.shared
     @ObservedObject private var themeManager = ThemeManager.shared
+    @ObservedObject private var gateManager = CatalogLinkGateManager.shared
     @State private var selectedGenre: CatalogGenre = .all
 
     private let twoColumnPillGrid: [GridItem] = [
@@ -484,6 +486,16 @@ struct CatalogView: View {
                 navCoordinator.catalogRoute = .aovMerge
                 navCoordinator.selectedTab = .catalog
             }
+        }
+        .sheet(item: $gateManager.activePrompt, onDismiss: {
+            if gateManager.activePrompt != nil {
+                gateManager.cancelActiveGate()
+            }
+        }) { prompt in
+            CatalogLinkGateSheetView(prompt: prompt)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.hidden)
+                .preferredColorScheme(themeManager.mode.colorScheme)
         }
     }
 
@@ -659,12 +671,12 @@ struct CatalogView: View {
         let royalFill = LinearGradient(
             colors: isDark
                 ? [
-                    Color(red: 0.22, green: 0.16, blue: 0.07).opacity(0.95),
-                    Color(red: 0.16, green: 0.12, blue: 0.08).opacity(0.95)
+                    Color(red: 0.21, green: 0.12, blue: 0.34).opacity(0.95),
+                    Color(red: 0.14, green: 0.10, blue: 0.24).opacity(0.95)
                 ]
                 : [
-                    Color(red: 1.00, green: 0.97, blue: 0.89).opacity(0.96),
-                    Color(red: 1.00, green: 0.94, blue: 0.80).opacity(0.96)
+                    Color(red: 0.96, green: 0.93, blue: 1.00).opacity(0.96),
+                    Color(red: 0.91, green: 0.87, blue: 1.00).opacity(0.96)
                 ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -676,7 +688,7 @@ struct CatalogView: View {
                     Circle()
                         .fill(
                             isHighlighted
-                                ? item.accentColor.opacity(isDark ? 0.26 : 0.20)
+                                ? item.accentColor.opacity(isDark ? 0.28 : 0.18)
                                 : item.accentColor.opacity(0.13)
                         )
                         .frame(width: 30, height: 30)
@@ -690,7 +702,7 @@ struct CatalogView: View {
                     .font(.system(size: 13.5, weight: isHighlighted ? .bold : .semibold))
                     .foregroundStyle(
                         isHighlighted
-                            ? (isDark ? Color(red: 1.0, green: 0.88, blue: 0.55) : Color(red: 0.55, green: 0.34, blue: 0.02))
+                            ? (isDark ? Color(red: 0.86, green: 0.77, blue: 1.00) : Color(red: 0.36, green: 0.14, blue: 0.68))
                             : TotoroxTheme.textPrimary
                     )
                     .lineLimit(1)
@@ -750,7 +762,7 @@ struct CatalogView: View {
                 }
             }
 
-            ModStoreView(isEmbedded: true)
+            ModStoreView(isEmbedded: true, config: .aovModSkin)
         }
     }
 
@@ -788,7 +800,20 @@ struct CatalogView: View {
         game: CatalogGameID,
         feature: CatalogSubFeatureID
     ) -> some View {
-        VStack(spacing: 0) {
+        let storeConfig: ModStoreSectionConfig = {
+            if game == .aov {
+                switch feature {
+                case .hokSkin: return .hokSkin
+                case .camXa: return .camXa
+                case .modMap: return .modMap
+                case .fixLag: return .fixLag
+                default: return .aovModSkin
+                }
+            }
+            return .battleRoyale(game: game, feature: feature)
+        }()
+
+        return VStack(spacing: 0) {
             compactSubheader(
                 backTitle: game.title(for: language),
                 trailingGame: game
@@ -798,111 +823,8 @@ struct CatalogView: View {
                 }
             }
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    // Feature Header Card WITH full description (shown only inside the feature screen)
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(feature.accentColor.opacity(0.16))
-                                    .frame(width: 50, height: 50)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .stroke(feature.accentColor.opacity(0.32), lineWidth: 1)
-                                    )
-
-                                Image(systemName: feature.iconName)
-                                    .font(.system(size: 22, weight: .bold))
-                                    .foregroundStyle(feature.accentColor)
-                            }
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(feature.title(for: language))
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundStyle(TotoroxTheme.textPrimary)
-
-                                Text(game.title(for: language))
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(feature.accentColor)
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-
-                        Divider()
-                            .overlay(TotoroxTheme.dividerColor)
-
-                        Text(feature.detailSubtitle(for: language))
-                            .font(.system(size: 13.5))
-                            .lineSpacing(3.5)
-                            .foregroundStyle(TotoroxTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack(spacing: 8) {
-                            Image(systemName: "clock.badge.checkmark.fill")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(feature.accentColor)
-                            Text(language.text("catalog.sub.updating_packs"))
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(TotoroxTheme.textPrimary)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(TotoroxTheme.searchBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                        if game == .aov {
-                            HStack(spacing: 10) {
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        navCoordinator.catalogRoute = .aovModSkin
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "flame.fill")
-                                            .font(.system(size: 13, weight: .bold))
-                                        Text(language.text("catalog.aov.hero.mod_skin"))
-                                            .font(.system(size: 13, weight: .bold))
-                                            .lineLimit(1)
-                                    }
-                                    .foregroundStyle(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 42)
-                                    .background(Color(red: 0.84, green: 0.18, blue: 0.16))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        navCoordinator.catalogRoute = .aovMerge
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "square.stack.3d.up.fill")
-                                            .font(.system(size: 13, weight: .bold))
-                                        Text(language.text("catalog.aov.hero.merge"))
-                                            .font(.system(size: 13, weight: .bold))
-                                            .lineLimit(1)
-                                    }
-                                    .foregroundStyle(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 42)
-                                    .background(Color(red: 0.84, green: 0.48, blue: 0.06))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .totoroxCard(cornerRadius: 18, padding: 16)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
-            }
+            // Mọi mục phụ trong Tab Danh mục đều kết nối trực tiếp kho Server + vượt Link4m
+            ModStoreView(isEmbedded: true, config: storeConfig)
         }
     }
 

@@ -311,6 +311,7 @@ public final class AovModMergerEngine: @unchecked Sendable {
     ///   trực tiếp từ file mod gốc sang file zip kết quả mà KHÔNG cần giải nén hay nén lại.
     public func mergeModArchives(
         inputURLs: [URL],
+        gateID: String? = nil,
         progress: @escaping @Sendable (String, Double) -> Void
     ) async throws -> AovMergeResult {
         guard inputURLs.count >= 2 else {
@@ -524,7 +525,8 @@ public final class AovModMergerEngine: @unchecked Sendable {
             fileURL: configBundleURL,
             configJSON: configJSON,
             token: LicenseManager.shared.authToken,
-            hwid: LicenseManager.shared.deviceIdentifier
+            hwid: LicenseManager.shared.deviceIdentifier,
+            gateID: gateID
         ) { stage in
             switch stage {
             case .uploadingChunk(let index, let total):

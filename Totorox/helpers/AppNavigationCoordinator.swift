@@ -106,6 +106,9 @@ final class AppNavigationCoordinator: ObservableObject {
             Task {
                 await LicenseManager.shared.handleUDIDVerificationCallback(udid: udid, status: status)
             }
+        case "gate-verified":
+            let gateID = components?.queryItems?.first(where: { $0.name == "gate_id" })?.value
+            CatalogLinkGateManager.shared.handleDeepLinkVerified(gateID: gateID)
         default:
             self.selectedTab = .overwrite
         }

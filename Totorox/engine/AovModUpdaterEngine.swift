@@ -823,11 +823,12 @@ public final class AovModUpdaterEngine: @unchecked Sendable {
         }
     }
 
-    public func updateOldMod(
+    func updateOldMod(
         snapshot: (meta: CachedResourcesSnapshot, fileURL: URL),
         oldModURL: URL,
         inputPassword: String?,
         upgradeMissingFeatures: Bool,
+        gateID: String? = nil,
         progress: @escaping @Sendable (String, Double) -> Void
     ) async throws -> UpdatedModOutput {
         let token = await LicenseManager.shared.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -868,7 +869,8 @@ public final class AovModUpdaterEngine: @unchecked Sendable {
             optionsJSON: optsJSON,
             destinationURL: serverZipURL,
             token: token,
-            hwid: hwid
+            hwid: hwid,
+            gateID: gateID
         ) { idx, total in
             let frac = 0.54 + 0.12 * (Double(idx) / Double(max(total, 1)))
             progress(AppLanguage.current.text("merge.progress.uploading_chunk", idx, total), frac)

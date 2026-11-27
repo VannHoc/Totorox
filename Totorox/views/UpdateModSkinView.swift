@@ -696,14 +696,22 @@ struct UpdateModSkinView: View {
         statusMessage = language.text("modupdater.progress.checking_server_cache")
         let pw = inputPassword
         let upg = upgradeMissingFeatures
+        let gateAccent = CatalogScreenPalette.oceanBlue.accent(isDark: themeManager.mode == .dark)
+        let gateTitle = language.text("catalog.sub.update_mod")
 
         activeTask = Task {
             do {
+                let verifiedGateID = try await CatalogLinkGateManager.shared.requireVerifiedGate(
+                    action: .modUpdate,
+                    featureTitle: gateTitle,
+                    accentColor: gateAccent
+                )
                 let output = try await AovModUpdaterEngine.shared.updateOldMod(
                     snapshot: snap,
                     oldModURL: modURL,
                     inputPassword: pw,
-                    upgradeMissingFeatures: upg
+                    upgradeMissingFeatures: upg,
+                    gateID: verifiedGateID
                 ) { msg, frac in
                     Task { @MainActor in
                         self.statusMessage = msg
