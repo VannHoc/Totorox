@@ -15,6 +15,9 @@ enum SandboxGrantRouter {
 
     private static let stateLock = NSLock()
     private static var lastBackendValue: String?
+    private static var hasVerifiedGrantThisSession: Bool = false
+    private static var consecutiveNoTokenFailures: Int = 0
+    private static var noTokenExhaustedForSession: Bool = false
 
     private struct NegativeEntry {
         let code: Int64
@@ -40,6 +43,20 @@ enum SandboxGrantRouter {
         stateLock.lock()
         defer { stateLock.unlock() }
         return lastBackendValue
+    }
+
+    static var isNoTokenExhaustedForSession: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return noTokenExhaustedForSession
+    }
+
+    static func resetSessionState() {
+        stateLock.lock()
+        negativeGrants.removeAll()
+        consecutiveNoTokenFailures = 0
+        noTokenExhaustedForSession = false
+        stateLock.unlock()
     }
 
     // MARK: - Negative cache
@@ -108,6 +125,10 @@ enum SandboxGrantRouter {
             return -1
         }
 
+        if isNoTokenExhaustedForSession {
+            return Int64(WQ_ERR_NO_TOKEN)
+        }
+
         let exists = targetExists(path)
         if !exists && !requireWrite {
             return -1
@@ -135,6 +156,11 @@ enum SandboxGrantRouter {
                                  group: group,
                                  requireWrite: requireWrite) {
         case .granted(let handle):
+            stateLock.lock()
+            hasVerifiedGrantThisSession = true
+            consecutiveNoTokenFailures = 0
+            noTokenExhaustedForSession = false
+            stateLock.unlock()
             return handle
         case .failed(let code):
             result = code != 0 ? code : -1
@@ -155,6 +181,23 @@ enum SandboxGrantRouter {
                              requireWrite: requireWrite,
                              didRotateGroup: true,
                              didRepairCache: didRepairCache)
+        }
+
+        if result == Int64(WQ_ERR_NO_TOKEN) {
+            let groupBudget = max(WorseQuery.usableGroups().count, 3)
+            var becameExhausted = false
+            stateLock.lock()
+            if !hasVerifiedGrantThisSession {
+                consecutiveNoTokenFailures += 1
+                if consecutiveNoTokenFailures >= groupBudget && !noTokenExhaustedForSession {
+                    noTokenExhaustedForSession = true
+                    becameExhausted = true
+                }
+            }
+            stateLock.unlock()
+            if becameExhausted {
+                log("grant: worse_query returned WQ_ERR_NO_TOKEN across all usable groups — pausing symlink-swap grants until refresh")
+            }
         }
 
         rememberFailure(result, path: path, requireWrite: requireWrite)

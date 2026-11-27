@@ -152,6 +152,9 @@ struct CachedAppEntry: Codable {
 }
 
 struct AppScanSnapshot: Codable {
+    static let currentSchemaVersion: Int = 2
+
+    let schemaVersion: Int
     let apps: [CachedAppEntry]
     let finishedAt: Date
     /// Bundle IDs recorded from csstore when the snapshot was saved. Compared
@@ -163,9 +166,16 @@ struct AppScanSnapshot: Codable {
     /// even when csstore is unavailable.
     let containerUUIDs: [String]
 
-    enum CodingKeys: String, CodingKey { case apps, finishedAt, bundleIDs, containerUUIDs }
+    enum CodingKeys: String, CodingKey { case schemaVersion, apps, finishedAt, bundleIDs, containerUUIDs }
 
-    init(apps: [CachedAppEntry], finishedAt: Date, bundleIDs: [String], containerUUIDs: [String] = []) {
+    init(
+        schemaVersion: Int = AppScanSnapshot.currentSchemaVersion,
+        apps: [CachedAppEntry],
+        finishedAt: Date,
+        bundleIDs: [String],
+        containerUUIDs: [String] = []
+    ) {
+        self.schemaVersion = schemaVersion
         self.apps = apps
         self.finishedAt = finishedAt
         self.bundleIDs = bundleIDs
@@ -174,6 +184,7 @@ struct AppScanSnapshot: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         apps = try c.decode([CachedAppEntry].self, forKey: .apps)
         finishedAt = try c.decode(Date.self, forKey: .finishedAt)
         bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
@@ -189,6 +200,13 @@ enum AppScanCache {
     /// (`bundleIDs` / `containerUUIDs` diff) or manual refresh rather than a short timer.
     static let ttl: TimeInterval = 30 * 24 * 3600
 
+    /// Rejects partial fallback-only scans (e.g. when both csstore and MCM enumeration
+    /// were empty so only the ~24 built-in research identifiers resolved).
+    static func isCompleteSnapshot(appCount: Int, bundleIDCount: Int, containerUUIDCount: Int) -> Bool {
+        guard appCount > 2 else { return false }
+        return bundleIDCount > 0 || containerUUIDCount >= 5 || appCount >= 40
+    }
+
     private static var fileURL: URL? {
         guard let base = try? FileManager.default.url(
             for: .applicationSupportDirectory,
@@ -202,14 +220,29 @@ enum AppScanCache {
     static func load() -> AppScanSnapshot? {
         guard let url = fileURL,
               let data = try? Data(contentsOf: url),
-              let snapshot = try? JSONDecoder().decode(AppScanSnapshot.self, from: data),
-              !snapshot.apps.isEmpty,
-              Date().timeIntervalSince(snapshot.finishedAt) < ttl else { return nil }
+              let snapshot = try? JSONDecoder().decode(AppScanSnapshot.self, from: data) else { return nil }
+        guard snapshot.schemaVersion == AppScanSnapshot.currentSchemaVersion,
+              Date().timeIntervalSince(snapshot.finishedAt) < ttl,
+              isCompleteSnapshot(
+                  appCount: snapshot.apps.count,
+                  bundleIDCount: snapshot.bundleIDs.count,
+                  containerUUIDCount: snapshot.containerUUIDs.count
+              ) else {
+            invalidate()
+            return nil
+        }
         return snapshot
     }
 
     static func store(_ apps: [AppContainerInfo], bundleIDs: [String], containerUUIDs: [String] = []) {
-        guard let url = fileURL, apps.count > 2 else { return }
+        let uniqueBundleIDs = Array(Set(bundleIDs)).sorted()
+        let uniqueUUIDs = Array(Set(containerUUIDs.map { $0.uppercased() })).sorted()
+        guard let url = fileURL,
+              isCompleteSnapshot(
+                  appCount: apps.count,
+                  bundleIDCount: uniqueBundleIDs.count,
+                  containerUUIDCount: uniqueUUIDs.count
+              ) else { return }
         let entries = apps.map {
             CachedAppEntry(appName: $0.appName,
                            bundleID: $0.bundleID,
@@ -219,8 +252,8 @@ enum AppScanCache {
         }
         let snapshot = AppScanSnapshot(apps: entries,
                                        finishedAt: Date(),
-                                       bundleIDs: Array(Set(bundleIDs)).sorted(),
-                                       containerUUIDs: Array(Set(containerUUIDs.map { $0.uppercased() })).sorted())
+                                       bundleIDs: uniqueBundleIDs,
+                                       containerUUIDs: uniqueUUIDs)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: url, options: .atomic)
     }
@@ -268,9 +301,17 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
     /// snapshot đã lưu; nếu có app mới cài hoặc vừa gỡ thì tự invalidate cache và
     /// quét full lại ở nền, trong khi danh sách cũ vẫn hiển thị ngay lập tức.
     private func validateSnapshotAndRescanIfNeeded(_ snapshot: AppScanSnapshot) {
-        guard !snapshot.bundleIDs.isEmpty || !snapshot.containerUUIDs.isEmpty else { return }
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
+            if !AppScanCache.isCompleteSnapshot(
+                appCount: snapshot.apps.count,
+                bundleIDCount: snapshot.bundleIDs.count,
+                containerUUIDCount: snapshot.containerUUIDs.count
+            ) {
+                AppScanCache.invalidate()
+                _ = await self.scanAllContainers(forceRefresh: true)
+                return
+            }
             await self.waitForPrivilegesIfNeeded()
 
             // 1. Primary check: LaunchServices csstore bundle ID set
@@ -615,7 +656,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             if let path = MCMActivateContainerPath(2, candidateID, false, &actError),
                ContainerStore.isApplicationContainerPath(path) {
                 ContainerMetadataCache.shared.markBundleActivated(candidateID)
-                let meta = ContainerStore.readContainerMetadata(containerPath: path)
+                let meta = ContainerStore.readDirectMetadataIfAvailable(containerPath: path)
                 _ = registerResolvedApp(
                     bundleID: meta?.bundleID ?? candidateID,
                     containerPath: path,
@@ -690,6 +731,7 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
             ContainerMetadataCache.shared.cachedLSStore = nil
             // Bỏ checkpoint + slot scan của lần trước (port WQFiles enumerate_invalidate).
             ContainerScanCoordinator.invalidate()
+            SandboxGrantRouter.resetSessionState()
             AppScanCache.invalidate()
         }
 
@@ -733,19 +775,32 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 if self.getCachedInfo(forBundleID: candidateID) != nil { continue }
 
                 // WQFiles csstore map: UUID/identifier → path trực tiếp. Chỉ gọi
-                // MCM activate cho candidate mà csstore không trả đường dẫn.
+                // MCM activate cho candidate mà csstore không trả đường dẫn, hoặc
+                // khi csstore ghi nhận nhiều UUID lịch sử (app từng gỡ rồi cài lại).
                 var resolvedPath: String?
                 var cameFromCsstore = false
+                var didActivateViaMCM = false
                 let csstorePaths = ContainerStore.launchServicesContainerPaths(for: candidateID)
-                if let direct = ContainerStore.launchServicesExistingContainerPath(for: candidateID),
-                   ContainerStore.isApplicationContainerPath(direct) {
-                    resolvedPath = direct
-                    cameFromCsstore = true
-                } else {
+                if csstorePaths.count > 1 {
                     var actError: NSString? = nil
                     if let activated = MCMActivateContainerPath(2, candidateID, false, &actError),
                        ContainerStore.isApplicationContainerPath(activated) {
                         resolvedPath = activated
+                        didActivateViaMCM = true
+                    }
+                }
+                if resolvedPath == nil,
+                   let direct = ContainerStore.launchServicesExistingContainerPath(for: candidateID),
+                   ContainerStore.isApplicationContainerPath(direct) {
+                    resolvedPath = direct
+                    cameFromCsstore = true
+                }
+                if resolvedPath == nil {
+                    var actError: NSString? = nil
+                    if let activated = MCMActivateContainerPath(2, candidateID, false, &actError),
+                       ContainerStore.isApplicationContainerPath(activated) {
+                        resolvedPath = activated
+                        didActivateViaMCM = true
                     }
                     // Chỉ bỏ entry csstore khi MỌI path của bundle này đã biến mất
                     // và MCM activate cũng không cứu được — tránh mất app vì trúng
@@ -758,8 +813,10 @@ final class AppContainerScanner: ObservableObject, @unchecked Sendable {
                 }
 
                 if let path = resolvedPath {
-                    ContainerMetadataCache.shared.markBundleActivated(candidateID)
-                    let meta = ContainerStore.readContainerMetadata(containerPath: path)
+                    if didActivateViaMCM {
+                        ContainerMetadataCache.shared.markBundleActivated(candidateID)
+                    }
+                    let meta = ContainerStore.readDirectMetadataIfAvailable(containerPath: path)
                     let actualBundleID = (meta != nil && ContainerStore.isValidAppBundleID(meta!.bundleID))
                         ? meta!.bundleID
                         : candidateID

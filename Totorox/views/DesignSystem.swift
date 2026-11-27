@@ -220,7 +220,102 @@ enum TotoroxTheme {
     }
 }
 
-// MARK: - Custom App Wallpaper Manager (Downsampled, Zero-Permission PhotosPicker)
+// MARK: - Wallpaper Crop Geometry & Custom App Wallpaper Manager
+
+enum WallpaperCropGeometry {
+    static let minZoom: CGFloat = 1.0
+    static let maxZoom: CGFloat = 5.0
+
+    static func baseFillScale(imageSize: CGSize, viewportSize: CGSize) -> CGFloat {
+        guard imageSize.width > 0, imageSize.height > 0,
+              viewportSize.width > 0, viewportSize.height > 0 else {
+            return 1.0
+        }
+        return max(viewportSize.width / imageSize.width, viewportSize.height / imageSize.height)
+    }
+
+    static func clampedZoom(_ rawZoom: CGFloat) -> CGFloat {
+        min(max(rawZoom, minZoom), maxZoom)
+    }
+
+    static func clampedOffset(
+        _ rawOffset: CGSize,
+        imageSize: CGSize,
+        viewportSize: CGSize,
+        zoomScale: CGFloat
+    ) -> CGSize {
+        let zoom = clampedZoom(zoomScale)
+        let fill = baseFillScale(imageSize: imageSize, viewportSize: viewportSize)
+        let dispW = imageSize.width * fill * zoom
+        let dispH = imageSize.height * fill * zoom
+        let maxOffsetX = max(0, (dispW - viewportSize.width) * 0.5)
+        let maxOffsetY = max(0, (dispH - viewportSize.height) * 0.5)
+        return CGSize(
+            width: min(max(rawOffset.width, -maxOffsetX), maxOffsetX),
+            height: min(max(rawOffset.height, -maxOffsetY), maxOffsetY)
+        )
+    }
+
+    static func outputPixelSize(
+        for viewportSize: CGSize,
+        screenScale: CGFloat,
+        maxDimension: CGFloat = 2160
+    ) -> CGSize {
+        guard viewportSize.width > 0, viewportSize.height > 0 else {
+            return CGSize(width: 1170, height: 2532)
+        }
+        let scale = max(screenScale, 1.0)
+        var outW = viewportSize.width * scale
+        var outH = viewportSize.height * scale
+        let longest = max(outW, outH)
+        if longest > maxDimension {
+            let factor = maxDimension / longest
+            outW *= factor
+            outH *= factor
+        }
+        return CGSize(width: max(1, round(outW)), height: max(1, round(outH)))
+    }
+
+    static func drawRect(
+        imageSize: CGSize,
+        viewportSize: CGSize,
+        outputSize: CGSize,
+        zoomScale: CGFloat,
+        offset: CGSize
+    ) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0,
+              viewportSize.width > 0, viewportSize.height > 0,
+              outputSize.width > 0, outputSize.height > 0 else {
+            return CGRect(origin: .zero, size: outputSize)
+        }
+        let zoom = clampedZoom(zoomScale)
+        let safeOffset = clampedOffset(
+            offset,
+            imageSize: imageSize,
+            viewportSize: viewportSize,
+            zoomScale: zoom
+        )
+        let fill = baseFillScale(imageSize: imageSize, viewportSize: viewportSize)
+        let dispW = imageSize.width * fill * zoom
+        let dispH = imageSize.height * fill * zoom
+        let originX = (viewportSize.width - dispW) * 0.5 + safeOffset.width
+        let originY = (viewportSize.height - dispH) * 0.5 + safeOffset.height
+        let ratioX = outputSize.width / viewportSize.width
+        let ratioY = outputSize.height / viewportSize.height
+        return CGRect(
+            x: originX * ratioX,
+            y: originY * ratioY,
+            width: dispW * ratioX,
+            height: dispH * ratioY
+        )
+    }
+}
+
+struct WallpaperCropDraft: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let rawSourceData: Data?
+}
 
 @MainActor
 final class WallpaperManager: ObservableObject {
@@ -236,6 +331,7 @@ final class WallpaperManager: ObservableObject {
     var hasWallpaper: Bool { image != nil }
 
     private let fileURL: URL
+    private let originalFileURL: URL
 
     private init() {
         let fm = FileManager.default
@@ -247,6 +343,7 @@ final class WallpaperManager: ObservableObject {
         rv.isExcludedFromBackup = true
         try? dir.setResourceValues(rv)
         self.fileURL = dir.appendingPathComponent("custom_wallpaper.jpg", isDirectory: false)
+        self.originalFileURL = dir.appendingPathComponent("original_wallpaper.jpg", isDirectory: false)
 
         if let data = try? Data(contentsOf: fileURL),
            let loaded = UIImage(data: data) {
@@ -255,15 +352,72 @@ final class WallpaperManager: ObservableObject {
         }
     }
 
-    func applyPickedData(_ rawData: Data) async {
+    /// Decodes a picked photo off the main thread into a normalized `.up` `UIImage`
+    /// (`<= 2560px`) suitable for interactive pan/zoom framing without spiking RAM.
+    func prepareDraftImage(from rawData: Data) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            Self.downsampleImage(data: rawData, maxPixelSize: 2560)
+        }.value
+    }
+
+    /// Loads the stored full-frame source photo so the user can re-adjust position
+    /// and crop later without picking from Photos again.
+    func loadOriginalForRecrop() async -> UIImage? {
+        let origURL = originalFileURL
+        let fallback = image
+        return await Task.detached(priority: .userInitiated) {
+            if let data = try? Data(contentsOf: origURL),
+               let decoded = Self.downsampleImage(data: data, maxPixelSize: 2560) {
+                return decoded
+            }
+            return fallback
+        }.value
+    }
+
+    /// Renders the exact user-chosen viewport crop at high resolution off the main
+    /// thread and persists both the cropped wallpaper and the full source image.
+    func saveCroppedWallpaper(
+        sourceImage: UIImage,
+        isNewSource: Bool,
+        viewportSize: CGSize,
+        zoomScale: CGFloat,
+        offset: CGSize,
+        screenScale: CGFloat
+    ) async {
         let destURL = fileURL
+        let origURL = originalFileURL
         let processed: UIImage? = await Task.detached(priority: .userInitiated) {
-            guard let downsampled = Self.downsampleImage(data: rawData, maxPixelSize: 2048),
-                  let jpegData = downsampled.jpegData(compressionQuality: 0.85) else {
+            let outSize = WallpaperCropGeometry.outputPixelSize(
+                for: viewportSize,
+                screenScale: screenScale,
+                maxDimension: 2160
+            )
+            let drawRect = WallpaperCropGeometry.drawRect(
+                imageSize: sourceImage.size,
+                viewportSize: viewportSize,
+                outputSize: outSize,
+                zoomScale: zoomScale,
+                offset: offset
+            )
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1.0
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: outSize, format: format)
+            let cropped = renderer.image { ctx in
+                UIColor.black.setFill()
+                ctx.fill(CGRect(origin: .zero, size: outSize))
+                sourceImage.draw(in: drawRect)
+            }
+            guard let jpegData = cropped.jpegData(compressionQuality: 0.88) else {
                 return nil
             }
             try? jpegData.write(to: destURL, options: .atomic)
-            return UIImage(data: jpegData) ?? downsampled
+            if isNewSource || !FileManager.default.fileExists(atPath: origURL.path) {
+                if let origJPEG = sourceImage.jpegData(compressionQuality: 0.88) {
+                    try? origJPEG.write(to: origURL, options: .atomic)
+                }
+            }
+            return UIImage(data: jpegData) ?? cropped
         }.value
 
         guard let processed else { return }
@@ -274,28 +428,34 @@ final class WallpaperManager: ObservableObject {
 
     func resetToDefault() {
         try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: originalFileURL)
         withAnimation(.easeInOut(duration: 0.22)) {
             self.image = nil
         }
     }
 
-    /// Uses ImageIO thumbnailing so even a 48MP photo is decoded directly at <= 2048px
-    /// without spiking full uncompressed bitmap memory.
+    /// Uses ImageIO thumbnailing (`kCGImageSourceCreateThumbnailWithTransform`) so even
+    /// a 48MP photo is decoded directly at `<= maxPixelSize` with `.up` orientation.
     nonisolated private static func downsampleImage(data: Data, maxPixelSize: Int) -> UIImage? {
         let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) else {
-            return UIImage(data: data)
+        if let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) {
+            let thumbOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ]
+            if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) {
+                return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+            }
         }
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else {
-            return UIImage(data: data)
+        guard let fallback = UIImage(data: data) else { return nil }
+        if fallback.imageOrientation == .up { return fallback }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1.0
+        return UIGraphicsImageRenderer(size: fallback.size, format: format).image { _ in
+            fallback.draw(in: CGRect(origin: .zero, size: fallback.size))
         }
-        return UIImage(cgImage: cgImage)
     }
 }
 
@@ -317,12 +477,402 @@ struct TotoroxWallpaperLayer: View {
 
                     // Subtle adaptive contrast veil so header & text stay legible on any photo
                     (themeManager.mode == .dark
-                        ? Color.black.opacity(0.34)
-                        : Color.white.opacity(0.18))
+                        ? Color.black.opacity(0.32)
+                        : Color.white.opacity(0.14))
                 }
             }
         }
         .ignoresSafeArea(.all)
+    }
+}
+
+// MARK: - Interactive Facebook-Style Wallpaper Position & Crop Editor
+
+struct WallpaperCropEditorView: View {
+    let draft: WallpaperCropDraft
+    let onCancel: () -> Void
+    let onConfirm: (_ viewportSize: CGSize, _ zoomScale: CGFloat, _ offset: CGSize) async -> Void
+
+    @Environment(\.appLanguage) private var language
+    @ObservedObject private var themeManager = ThemeManager.shared
+
+    @State private var steadyScale: CGFloat = 1.0
+    @State private var gestureScale: CGFloat = 1.0
+    @State private var steadyOffset: CGSize = .zero
+    @State private var gestureOffset: CGSize = .zero
+    @State private var isInteracting: Bool = false
+    @State private var showAppFramePreview: Bool = true
+    @State private var isSaving: Bool = false
+
+    private var windowSafeAreaInsets: UIEdgeInsets {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            if let key = ws.windows.first(where: \.isKeyWindow) ?? ws.windows.first {
+                return key.safeAreaInsets
+            }
+        }
+        return UIEdgeInsets(top: 50, left: 0, bottom: 34, right: 0)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let viewportSize = geo.size
+            let insets = windowSafeAreaInsets
+            let liveZoom = WallpaperCropGeometry.clampedZoom(steadyScale * gestureScale)
+            let scaledSteadyOffset = CGSize(
+                width: steadyOffset.width * (liveZoom / max(steadyScale, 1.0)),
+                height: steadyOffset.height * (liveZoom / max(steadyScale, 1.0))
+            )
+            let rawOffset = CGSize(
+                width: scaledSteadyOffset.width + gestureOffset.width,
+                height: scaledSteadyOffset.height + gestureOffset.height
+            )
+            let liveOffset = WallpaperCropGeometry.clampedOffset(
+                rawOffset,
+                imageSize: draft.image.size,
+                viewportSize: viewportSize,
+                zoomScale: liveZoom
+            )
+            let fillScale = WallpaperCropGeometry.baseFillScale(
+                imageSize: draft.image.size,
+                viewportSize: viewportSize
+            )
+            let dispW = draft.image.size.width * fillScale * liveZoom
+            let dispH = draft.image.size.height * fillScale * liveZoom
+
+            ZStack {
+                Color.black
+
+                // Interactive Pan + Pinch-to-Zoom Photo Layer
+                Image(uiImage: draft.image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: dispW, height: dispH)
+                    .position(
+                        x: viewportSize.width * 0.5 + liveOffset.width,
+                        y: viewportSize.height * 0.5 + liveOffset.height
+                    )
+                    .clipped()
+
+                // Same subtle contrast veil used in the live app when previewing App Frame
+                if showAppFramePreview {
+                    (themeManager.mode == .dark
+                        ? Color.black.opacity(0.32)
+                        : Color.white.opacity(0.14))
+                        .allowsHitTesting(false)
+                }
+
+                // Rule-of-thirds crop grid (brightens smoothly during pan/zoom)
+                cropGridOverlay(size: viewportSize)
+                    .opacity(isInteracting ? 0.65 : 0.22)
+                    .animation(.easeOut(duration: 0.18), value: isInteracting)
+                    .allowsHitTesting(false)
+
+                // Live translucent Totorox UI silhouette so user can frame faces cleanly
+                if showAppFramePreview {
+                    appSilhouetteOverlay(insets: insets)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+
+                // Gesture capture surface
+                Color.white.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .gesture(panAndZoomGesture(viewportSize: viewportSize))
+                    .onTapGesture(count: 2) {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            steadyScale = 1.0
+                            gestureScale = 1.0
+                            steadyOffset = .zero
+                            gestureOffset = .zero
+                        }
+                    }
+
+                // Top & Bottom Control Bars
+                VStack(spacing: 0) {
+                    topControlBar(
+                        insets: insets,
+                        canReset: liveZoom > 1.005 || abs(liveOffset.width) > 1 || abs(liveOffset.height) > 1
+                    )
+
+                    Spacer()
+
+                    bottomActionBar(
+                        insets: insets,
+                        viewportSize: viewportSize,
+                        liveZoom: liveZoom,
+                        liveOffset: liveOffset
+                    )
+                }
+            }
+            .frame(width: viewportSize.width, height: viewportSize.height)
+            .clipped()
+        }
+        .ignoresSafeArea(.all)
+        .statusBarHidden(false)
+    }
+
+    private func panAndZoomGesture(viewportSize: CGSize) -> some Gesture {
+        let drag = DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if !isInteracting { isInteracting = true }
+                gestureOffset = value.translation
+            }
+            .onEnded { value in
+                let finalZoom = WallpaperCropGeometry.clampedZoom(steadyScale * gestureScale)
+                let scaledBase = CGSize(
+                    width: steadyOffset.width * (finalZoom / max(steadyScale, 1.0)),
+                    height: steadyOffset.height * (finalZoom / max(steadyScale, 1.0))
+                )
+                let combined = CGSize(
+                    width: scaledBase.width + value.translation.width,
+                    height: scaledBase.height + value.translation.height
+                )
+                steadyScale = finalZoom
+                gestureScale = 1.0
+                steadyOffset = WallpaperCropGeometry.clampedOffset(
+                    combined,
+                    imageSize: draft.image.size,
+                    viewportSize: viewportSize,
+                    zoomScale: finalZoom
+                )
+                gestureOffset = .zero
+                isInteracting = false
+            }
+
+        let magnify = MagnificationGesture()
+            .onChanged { value in
+                if !isInteracting { isInteracting = true }
+                gestureScale = value
+            }
+            .onEnded { value in
+                let finalZoom = WallpaperCropGeometry.clampedZoom(steadyScale * value)
+                let scaledBase = CGSize(
+                    width: steadyOffset.width * (finalZoom / max(steadyScale, 1.0)),
+                    height: steadyOffset.height * (finalZoom / max(steadyScale, 1.0))
+                )
+                let combined = CGSize(
+                    width: scaledBase.width + gestureOffset.width,
+                    height: scaledBase.height + gestureOffset.height
+                )
+                withAnimation(.easeOut(duration: 0.16)) {
+                    steadyScale = finalZoom
+                    gestureScale = 1.0
+                    steadyOffset = WallpaperCropGeometry.clampedOffset(
+                        combined,
+                        imageSize: draft.image.size,
+                        viewportSize: viewportSize,
+                        zoomScale: finalZoom
+                    )
+                    gestureOffset = .zero
+                }
+                isInteracting = false
+            }
+
+        return SimultaneousGesture(drag, magnify)
+    }
+
+    private func cropGridOverlay(size: CGSize) -> some View {
+        Path { path in
+            let thirdW = size.width / 3.0
+            let thirdH = size.height / 3.0
+            for i in 1...2 {
+                let x = thirdW * CGFloat(i)
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                let y = thirdH * CGFloat(i)
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+            }
+        }
+        .stroke(Color.white.opacity(0.75), lineWidth: 0.7)
+        .shadow(color: Color.black.opacity(0.45), radius: 1, x: 0, y: 0.5)
+    }
+
+    private func appSilhouetteOverlay(insets: UIEdgeInsets) -> some View {
+        VStack(spacing: 12) {
+            // Simulated Header area
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.28))
+                    .frame(width: 40, height: 40)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(0.28))
+                    .frame(width: 96, height: 20)
+                Spacer()
+                Circle()
+                    .fill(Color.white.opacity(0.24))
+                    .frame(width: 38, height: 38)
+                Circle()
+                    .fill(Color.white.opacity(0.24))
+                    .frame(width: 38, height: 38)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, max(insets.top, 44) + 54)
+
+            // Simulated Cards outline so user sees where cards sit without hiding photo
+            VStack(spacing: 12) {
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.10))
+                        .frame(height: 74)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(
+                                    Color.white.opacity(0.38),
+                                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                                )
+                        )
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 28)
+
+            Spacer()
+        }
+    }
+
+    private func topControlBar(insets: UIEdgeInsets, canReset: Bool) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Text(language.text("wallpaper.crop_title"))
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.black.opacity(0.52))
+                    .clipShape(Capsule())
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAppFramePreview.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: showAppFramePreview ? "eye.fill" : "eye.slash")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(language.text("wallpaper.preview_ui"))
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(
+                        showAppFramePreview
+                            ? TotoroxTheme.mintAccent.opacity(0.88)
+                            : Color.black.opacity(0.52)
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                if canReset {
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            steadyScale = 1.0
+                            gestureScale = 1.0
+                            steadyOffset = .zero
+                            gestureOffset = .zero
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(language.text("wallpaper.crop_reset"))
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(Color.black.opacity(0.52))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            Text(language.text("wallpaper.crop_hint"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.45))
+                .clipShape(Capsule())
+        }
+        .padding(.top, max(insets.top, 44) + 6)
+    }
+
+    private func bottomActionBar(
+        insets: UIEdgeInsets,
+        viewportSize: CGSize,
+        liveZoom: CGFloat,
+        liveOffset: CGSize
+    ) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                guard !isSaving else { return }
+                onCancel()
+            } label: {
+                Text(language.text("wallpaper.cancel"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color.black.opacity(0.60))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSaving)
+
+            Button {
+                guard !isSaving else { return }
+                isSaving = true
+                Task {
+                    await onConfirm(viewportSize, liveZoom, liveOffset)
+                    await MainActor.run {
+                        isSaving = false
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isSaving {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.85)
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    Text(language.text(isSaving ? "wallpaper.saving" : "wallpaper.confirm"))
+                        .font(.system(size: 15, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(TotoroxTheme.mintAccent)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: TotoroxTheme.mintAccent.opacity(0.38), radius: 8, x: 0, y: 3)
+            }
+            .buttonStyle(.plain)
+            .disabled(isSaving)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, max(insets.bottom, 20) + 8)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.0), Color.black.opacity(0.68)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }
 
@@ -359,8 +909,10 @@ struct TotoroxTopHeader: View {
     var onSettingsTapped: () -> Void
     @ObservedObject private var wallpaper = WallpaperManager.shared
     @Environment(\.appLanguage) private var language
+    @Environment(\.displayScale) private var displayScale
     @State private var showPhotoPicker: Bool = false
     @State private var pickedPhotoItem: PhotosPickerItem? = nil
+    @State private var cropDraft: WallpaperCropDraft? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -382,9 +934,21 @@ struct TotoroxTopHeader: View {
             Spacer()
 
             HStack(spacing: 10) {
-                // Wallpaper Edit / Reset Button (right next to Settings gear)
+                // Wallpaper Edit / Reposition / Reset Button (right next to Settings gear)
                 if wallpaper.hasWallpaper {
                     Menu {
+                        Button {
+                            Task {
+                                if let orig = await wallpaper.loadOriginalForRecrop() {
+                                    await MainActor.run {
+                                        cropDraft = WallpaperCropDraft(image: orig, rawSourceData: nil)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(language.text("wallpaper.reposition"), systemImage: "crop")
+                        }
+
                         Button {
                             showPhotoPicker = true
                         } label: {
@@ -435,13 +999,40 @@ struct TotoroxTopHeader: View {
         .onChange(of: pickedPhotoItem) { newItem in
             guard let newItem else { return }
             Task {
+                var prepared: UIImage? = nil
+                var rawBytes: Data? = nil
                 if let data = try? await newItem.loadTransferable(type: Data.self) {
-                    await wallpaper.applyPickedData(data)
+                    rawBytes = data
+                    prepared = await wallpaper.prepareDraftImage(from: data)
                 }
                 await MainActor.run {
                     pickedPhotoItem = nil
+                    if let prepared {
+                        cropDraft = WallpaperCropDraft(image: prepared, rawSourceData: rawBytes)
+                    }
                 }
             }
+        }
+        .fullScreenCover(item: $cropDraft) { draft in
+            WallpaperCropEditorView(
+                draft: draft,
+                onCancel: {
+                    cropDraft = nil
+                },
+                onConfirm: { viewportSize, zoomScale, offset in
+                    await wallpaper.saveCroppedWallpaper(
+                        sourceImage: draft.image,
+                        isNewSource: draft.rawSourceData != nil,
+                        viewportSize: viewportSize,
+                        zoomScale: zoomScale,
+                        offset: offset,
+                        screenScale: displayScale
+                    )
+                    await MainActor.run {
+                        cropDraft = nil
+                    }
+                }
+            )
         }
     }
 

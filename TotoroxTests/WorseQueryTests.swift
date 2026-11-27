@@ -326,4 +326,58 @@ final class WorseQueryTests: XCTestCase {
         XCTAssertTrue(ContainerScanCoordinator.slotIsFresh(at: now - 10, now: now))
         XCTAssertFalse(ContainerScanCoordinator.slotIsFresh(at: now - 601, now: now))
     }
+
+    // MARK: - AppScanCache completeness & schema migration
+
+    func testAppScanCacheRejectsDegradedFallbackSnapshots() throws {
+        // Degraded 24-app fallback scan when csstore=0 and MCM=1 must NEVER be cached
+        XCTAssertFalse(AppScanCache.isCompleteSnapshot(appCount: 24, bundleIDCount: 0, containerUUIDCount: 1))
+        XCTAssertFalse(AppScanCache.isCompleteSnapshot(appCount: 2, bundleIDCount: 10, containerUUIDCount: 10))
+
+        // Valid scans via csstore, MCM enumeration, or direct container discovery
+        XCTAssertTrue(AppScanCache.isCompleteSnapshot(appCount: 24, bundleIDCount: 120, containerUUIDCount: 1))
+        XCTAssertTrue(AppScanCache.isCompleteSnapshot(appCount: 18, bundleIDCount: 0, containerUUIDCount: 18))
+        XCTAssertTrue(AppScanCache.isCompleteSnapshot(appCount: 85, bundleIDCount: 0, containerUUIDCount: 0))
+
+        // Legacy v1 JSON without `schemaVersion` decodes as version 1 (< currentSchemaVersion 2)
+        let legacyJSON = #"{"apps":[{"appName":"AOV","bundleID":"com.garena.game.kgvn","udid":"DC0C004D-BA0F-4999-9789-B819AE5D3417","dataPath":"/private/var/mobile/Containers/Data/Application/DC0C004D-BA0F-4999-9789-B819AE5D3417"}],"finishedAt":0,"bundleIDs":[]}"#
+        let decoded = try JSONDecoder().decode(AppScanSnapshot.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertNotEqual(decoded.schemaVersion, AppScanSnapshot.currentSchemaVersion)
+    }
+
+    // MARK: - Wallpaper crop & position geometry
+
+    func testWallpaperCropGeometryClampsEdgesAndCoversViewport() {
+        let viewport = CGSize(width: 390, height: 844)
+        let landscapePhoto = CGSize(width: 1920, height: 1080)
+
+        // At 1.0x zoom on a 16:9 photo inside a tall phone screen, verticalpanning is locked (0), horizontal has room
+        let clampedAt1x = WallpaperCropGeometry.clampedOffset(
+            CGSize(width: 5000, height: 5000),
+            imageSize: landscapePhoto,
+            viewportSize: viewport,
+            zoomScale: 1.0
+        )
+        XCTAssertEqual(clampedAt1x.height, 0, accuracy: 0.01)
+        XCTAssertGreaterThan(clampedAt1x.width, 100)
+
+        // Output bitmap preserves viewport aspect ratio while capping max dimension <= 2160
+        let outSize = WallpaperCropGeometry.outputPixelSize(for: viewport, screenScale: 3.0, maxDimension: 2160)
+        XCTAssertEqual(outSize.height, 2160, accuracy: 1.0)
+        XCTAssertEqual(outSize.width / outSize.height, viewport.width / viewport.height, accuracy: 0.003)
+
+        // Draw rect always covers the entire output canvas without leaving black borders
+        let rect = WallpaperCropGeometry.drawRect(
+            imageSize: landscapePhoto,
+            viewportSize: viewport,
+            outputSize: outSize,
+            zoomScale: 2.2,
+            offset: CGSize(width: -9999, height: 9999)
+        )
+        XCTAssertLessThanOrEqual(rect.minX, 0.01)
+        XCTAssertLessThanOrEqual(rect.minY, 0.01)
+        XCTAssertGreaterThanOrEqual(rect.maxX, outSize.width - 0.01)
+        XCTAssertGreaterThanOrEqual(rect.maxY, outSize.height - 0.01)
+    }
 }

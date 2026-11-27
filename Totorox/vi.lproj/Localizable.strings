@@ -758,5 +758,13 @@
 "catalog.tool.upcoming" = "Sắp cập nhật thêm";
 
 "wallpaper.edit_a11y" = "Tùy chỉnh hình nền";
-"wallpaper.change" = "Đổi hình nền";
+"wallpaper.reposition" = "Chỉnh vị trí & cắt ảnh";
+"wallpaper.change" = "Đổi hình nền khác";
 "wallpaper.reset_default" = "Xóa hình nền (Về mặc định)";
+"wallpaper.crop_title" = "Căn chỉnh hình nền";
+"wallpaper.crop_hint" = "Kéo để chọn vị trí • Chụm 2 ngón để phóng to";
+"wallpaper.crop_reset" = "Đặt lại";
+"wallpaper.preview_ui" = "Khung App";
+"wallpaper.cancel" = "Hủy";
+"wallpaper.confirm" = "Xác nhận";
+"wallpaper.saving" = "Đang lưu...";

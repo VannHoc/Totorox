@@ -679,22 +679,20 @@ enum ContainerStore {
 
         var leasedCachePaths = Set<String>()
         var serviceLookupError: NSString?
-        // WQFiles gets this path with a metadata-only query (flags 0, no part):
-        // activation consumes a sandbox token and returns "MCM object contained
-        // no sandbox token" on iOS 27, which used to starve the csstore parser
-        // (total candidates=0). Activation stays as a fallback for older builds.
-        var servicePath = MCMContainerPathForIdentifier(10, "com.apple.lsd", false, &serviceLookupError)
-        var hasLease = false
+        // Activate `com.apple.lsd` (class 10) first so builds where MCM issues real
+        // container leases (e.g. iOS 26.x MHA-C2) unlock the LaunchServices store
+        // immediately without relying on symlink-swap tokens. On builds where MCM
+        // activation returns no token (e.g. iOS 27), fall back to metadata-only
+        // path lookup and unlock `Library/Caches` in the loop below.
+        var servicePath = MCMActivateContainerPath(10, "com.apple.lsd", false, &serviceLookupError)
+        let hasServiceLease = (servicePath != nil)
         if servicePath == nil {
-            servicePath = MCMActivateContainerPath(10, "com.apple.lsd", false, &serviceLookupError)
-            hasLease = servicePath != nil
+            servicePath = MCMContainerPathForIdentifier(10, "com.apple.lsd", false, &serviceLookupError)
         }
         if let servicePath = servicePath {
             let cachePath = (servicePath as NSString).appendingPathComponent("Library/Caches")
             addCachePath(cachePath)
-            // A metadata-only path carries NO token, so the loop below must still
-            // grant it; only a real activation counts as a lease.
-            if hasLease {
+            if hasServiceLease {
                 leasedCachePaths.insert(ContainerDiscoveryMerger.canonicalPath(cachePath))
             }
         } else if shouldUseWorseQuery {
@@ -747,9 +745,9 @@ enum ContainerStore {
             let hasLease = leasedCachePaths.contains(
                 ContainerDiscoveryMerger.canonicalPath(cachePath)
             )
-            if !hasLease && access(cachePath, R_OK) != 0 {
+            if access(cachePath, R_OK) != 0 {
                 let handle = shouldUseWorseQuery ? grantContainerAccess(cachePath) : -1
-                if handle < 0 && access(cachePath, R_OK) != 0 {
+                if handle < 0 && !hasLease && access(cachePath, R_OK) != 0 {
                     continue
                 }
             }
@@ -1016,12 +1014,12 @@ enum ContainerStore {
         if !isAppDataRoot,
            (clean.hasPrefix("/var/mobile/Containers/")
             || clean.hasPrefix("/private/var/mobile/Containers/")) {
-            _ = ensureContainerAccess(for: clean)
-            if let subdirs = posixSubdirectories(at: clean), !subdirs.isEmpty {
+            let effectiveClean = ensureContainerAccess(for: clean)
+            if let subdirs = posixSubdirectories(at: effectiveClean), !subdirs.isEmpty {
                 return subdirs
             }
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: clean), !names.isEmpty {
-                return names.map { (clean as NSString).appendingPathComponent($0) }
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: effectiveClean), !names.isEmpty {
+                return names.map { (effectiveClean as NSString).appendingPathComponent($0) }
             }
         }
 
@@ -1121,6 +1119,54 @@ enum ContainerStore {
             }
         }
         return nil
+    }
+
+    /// Fast zero-grant metadata check for callers that ALREADY know the target
+    /// `bundleID` (such as Stage 1 research activation and Stage 2 `.csstore`
+    /// discovery). Reads `.com.apple.mobile_container_manager.metadata.plist`
+    /// only if directly accessible via POSIX without triggering XPC grants or
+    /// `/Applications` bundle scans.
+    static func readDirectMetadataIfAvailable(containerPath: String) -> ContainerMetadata? {
+        let cleanContainer = (containerPath.hasSuffix("/") && containerPath.count > 1)
+            ? String(containerPath.dropLast())
+            : containerPath
+        guard !cleanContainer.isEmpty else { return nil }
+
+        let uuid = (cleanContainer as NSString).lastPathComponent
+        if UUID(uuidString: uuid) != nil,
+           let cached = ContainerMetadataCache.shared.cachedApp(forUUID: uuid) {
+            return ContainerMetadata(bundleID: cached.bundleID, displayName: cached.appName)
+        }
+
+        let metaPath = metadataPath(for: cleanContainer)
+        guard let data = readDataDirectly(atPath: metaPath),
+              !data.isEmpty,
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            return nil
+        }
+
+        let rawBundleID = (plist["MCMMetadataIdentifier"] as? String)
+            ?? (plist["CFBundleIdentifier"] as? String)
+            ?? (plist["BundleIdentifier"] as? String)
+            ?? ""
+        let cleanBundleID = rawBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isValidAppBundleID(cleanBundleID, uuid: uuid) else { return nil }
+
+        var displayName = ""
+        if let info = plist["MCMMetadataInfo"] as? [String: Any] {
+            displayName = (info["CFBundleDisplayName"] as? String)
+                ?? (info["CFBundleName"] as? String)
+                ?? ""
+        }
+        if displayName.isEmpty {
+            displayName = (plist["CFBundleDisplayName"] as? String)
+                ?? (plist["CFBundleName"] as? String)
+                ?? ""
+        }
+        if UUID(uuidString: uuid) != nil {
+            setCachedMapping(uuid: uuid, bundleID: cleanBundleID)
+        }
+        return ContainerMetadata(bundleID: cleanBundleID, displayName: displayName)
     }
 
     static func readContainerMetadata(containerPath: String) -> ContainerMetadata? {
@@ -1573,8 +1619,27 @@ enum ContainerStore {
                         if !ContainerMetadataCache.shared.isBundleActivated(bid) ||
                             SandboxGrantRouter.verifyAccess(path: info.rootPath, requireWrite: requireWrite) != 0 {
                             var actErr: NSString?
-                            _ = MCMActivateContainerPath(2, bid, false, &actErr)
-                            ContainerMetadataCache.shared.markBundleActivated(bid)
+                            if let activatedRoot = MCMActivateContainerPath(2, bid, false, &actErr) {
+                                ContainerMetadataCache.shared.markBundleActivated(bid)
+                                let canonicalActivated = ContainerDiscoveryMerger.canonicalPath(activatedRoot)
+                                if !canonicalActivated.isEmpty && canonicalActivated != info.rootPath {
+                                    let activatedUUID = (canonicalActivated as NSString).lastPathComponent
+                                    if UUID(uuidString: activatedUUID) != nil {
+                                        setCachedMapping(uuid: activatedUUID, bundleID: bid)
+                                    }
+                                    if SandboxGrantRouter.verifyAccess(path: canonicalActivated, requireWrite: requireWrite) == 0 {
+                                        grantHandlesLock.lock()
+                                        grantedAccessMask[canonicalActivated] = (grantedAccessMask[canonicalActivated] ?? 0) | desiredMask
+                                        grantHandlesLock.unlock()
+                                    }
+                                    if targetPath == info.rootPath {
+                                        return canonicalActivated
+                                    } else if targetPath.hasPrefix(info.rootPath + "/") {
+                                        let suffix = String(targetPath.dropFirst(info.rootPath.count))
+                                        return canonicalActivated + suffix
+                                    }
+                                }
+                            }
                         }
                     }
                 }
